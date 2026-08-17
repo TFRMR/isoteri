@@ -1,0 +1,30 @@
+catatan: Contoh JIT - fungsi dengan parameter bertipe Angka otomatis dikompilasi
+catatan: ke kode mesin asli (Cranelift), jauh lebih cepat dari bytecode biasa.
+catatan: Syarat: 1 parameter Angka, isi cuma aritmatika (+,-,*), perbandingan,
+catatan: jika/kalau, ulang, dan rekursi ke diri sendiri. Tanpa pembagian,
+catatan: tanpa panggil fungsi lain, tanpa Teks/Desimal/Daftar/Peta.
+fungsi fib(n: Angka) {
+    kalau (n <= 1) {
+        kembalikan n
+    }
+    kembalikan fib(n - 1) + fib(n - 2)
+}
+fungsi faktorial(n: Angka) {
+    kalau (n <= 1) {
+        kembalikan 1
+    }
+    kembalikan n * faktorial(n - 1)
+}
+tampilkan "fib(10) = " + fib(10)
+tampilkan "fib(30) = " + fib(30)
+tampilkan "faktorial(10) = " + faktorial(10)
+catatan: Fungsi tanpa tipe (atau yang pakai fitur di luar syarat JIT) tetap
+catatan: jalan normal lewat bytecode VM -- tidak ada yang rusak, cuma tidak
+catatan: sekencang versi bertipe.
+fungsi fib_dinamis(n) {
+    kalau (n <= 1) {
+        kembalikan n
+    }
+    kembalikan fib_dinamis(n - 1) + fib_dinamis(n - 2)
+}
+tampilkan "fib_dinamis(20) = " + fib_dinamis(20)

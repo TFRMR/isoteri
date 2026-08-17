@@ -1,0 +1,670 @@
+{
+  "format": "isoteri-web-bytecode-v1",
+  "fungsi": [
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          13
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 2,
+      "nama": "tambah",
+      "param_count": 2,
+      "param_flat": [
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          17
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "PushK",
+          30
+        ],
+        [
+          "BinOp",
+          "LebihKecilSama"
+        ],
+        [
+          "LompatJikaSalah",
+          8
+        ],
+        [
+          "TandaiBaris",
+          18
+        ],
+        [
+          "PushK",
+          31
+        ],
+        [
+          "Kembalikan"
+        ],
+        [
+          "TandaiBaris",
+          20
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "PushK",
+          32
+        ],
+        [
+          "BinOp",
+          "Kurang"
+        ],
+        [
+          "PanggilFungsi",
+          1,
+          1
+        ],
+        [
+          "BinOp",
+          "Kali"
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 1,
+      "nama": "faktorial",
+      "param_count": 1,
+      "param_flat": [
+        null
+      ]
+    }
+  ],
+  "global_slot_count": 7,
+  "konstanta": [
+    {
+      "t": "Teks",
+      "v": "Budi"
+    },
+    {
+      "t": "Angka",
+      "v": 80
+    },
+    {
+      "t": "Angka",
+      "v": 75
+    },
+    {
+      "t": "Teks",
+      "v": "Selamat "
+    },
+    {
+      "t": "Teks",
+      "v": ", Anda lulus!"
+    },
+    {
+      "t": "Teks",
+      "v": "Maaf "
+    },
+    {
+      "t": "Teks",
+      "v": ", silakan coba lagi."
+    },
+    {
+      "t": "Angka",
+      "v": 10
+    },
+    {
+      "t": "Angka",
+      "v": 20
+    },
+    {
+      "t": "Teks",
+      "v": "10 + 20 = "
+    },
+    {
+      "t": "Teks",
+      "v": "5! = "
+    },
+    {
+      "t": "Angka",
+      "v": 5
+    },
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Angka",
+      "v": 5
+    },
+    {
+      "t": "Angka",
+      "v": 1
+    },
+    {
+      "t": "Teks",
+      "v": "Total 0..4 = "
+    },
+    {
+      "t": "Bool",
+      "v": true
+    },
+    {
+      "t": "Angka",
+      "v": 30
+    },
+    {
+      "t": "Angka",
+      "v": 25
+    },
+    {
+      "t": "Teks",
+      "v": "Cocok untuk panen"
+    },
+    {
+      "t": "Teks",
+      "v": "Tunggu dulu"
+    },
+    {
+      "t": "Teks",
+      "v": "2 + 3 * 4 = "
+    },
+    {
+      "t": "Angka",
+      "v": 2
+    },
+    {
+      "t": "Angka",
+      "v": 3
+    },
+    {
+      "t": "Angka",
+      "v": 4
+    },
+    {
+      "t": "Teks",
+      "v": "-5 + 10 = "
+    },
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Angka",
+      "v": 5
+    },
+    {
+      "t": "Angka",
+      "v": 10
+    },
+    {
+      "t": "Angka",
+      "v": 1
+    },
+    {
+      "t": "Angka",
+      "v": 1
+    },
+    {
+      "t": "Angka",
+      "v": 1
+    }
+  ],
+  "nama_ke_indeks": {
+    "faktorial": 1,
+    "tambah": 0
+  },
+  "top_kode": [
+    [
+      "TandaiBaris",
+      3
+    ],
+    [
+      "PushK",
+      0
+    ],
+    [
+      "StoreGlobal",
+      0
+    ],
+    [
+      "TandaiBaris",
+      4
+    ],
+    [
+      "PushK",
+      1
+    ],
+    [
+      "StoreGlobal",
+      1
+    ],
+    [
+      "TandaiBaris",
+      6
+    ],
+    [
+      "LoadGlobal",
+      1
+    ],
+    [
+      "PushK",
+      2
+    ],
+    [
+      "BinOp",
+      "LebihBesarSama"
+    ],
+    [
+      "LompatJikaSalah",
+      19
+    ],
+    [
+      "TandaiBaris",
+      7
+    ],
+    [
+      "PushK",
+      3
+    ],
+    [
+      "LoadGlobal",
+      0
+    ],
+    [
+      "BinOp",
+      "Tambah"
+    ],
+    [
+      "PushK",
+      4
+    ],
+    [
+      "BinOp",
+      "Tambah"
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "Lompat",
+      26
+    ],
+    [
+      "TandaiBaris",
+      9
+    ],
+    [
+      "PushK",
+      5
+    ],
+    [
+      "LoadGlobal",
+      0
+    ],
+    [
+      "BinOp",
+      "Tambah"
+    ],
+    [
+      "PushK",
+      6
+    ],
+    [
+      "BinOp",
+      "Tambah"
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "TandaiBaris",
+      23
+    ],
+    [
+      "PushK",
+      7
+    ],
+    [
+      "PushK",
+      8
+    ],
+    [
+      "PanggilFungsi",
+      0,
+      2
+    ],
+    [
+      "StoreGlobal",
+      2
+    ],
+    [
+      "TandaiBaris",
+      24
+    ],
+    [
+      "PushK",
+      9
+    ],
+    [
+      "LoadGlobal",
+      2
+    ],
+    [
+      "BinOp",
+      "Tambah"
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "TandaiBaris",
+      26
+    ],
+    [
+      "PushK",
+      10
+    ],
+    [
+      "PushK",
+      11
+    ],
+    [
+      "PanggilFungsi",
+      1,
+      1
+    ],
+    [
+      "BinOp",
+      "Tambah"
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "TandaiBaris",
+      29
+    ],
+    [
+      "PushK",
+      12
+    ],
+    [
+      "StoreGlobal",
+      3
+    ],
+    [
+      "TandaiBaris",
+      30
+    ],
+    [
+      "PushK",
+      13
+    ],
+    [
+      "StoreGlobal",
+      4
+    ],
+    [
+      "TandaiBaris",
+      31
+    ],
+    [
+      "LoadGlobal",
+      3
+    ],
+    [
+      "PushK",
+      14
+    ],
+    [
+      "BinOp",
+      "LebihKecil"
+    ],
+    [
+      "LompatJikaSalah",
+      64
+    ],
+    [
+      "TandaiBaris",
+      32
+    ],
+    [
+      "LoadGlobal",
+      4
+    ],
+    [
+      "LoadGlobal",
+      3
+    ],
+    [
+      "BinOp",
+      "Tambah"
+    ],
+    [
+      "StoreGlobal",
+      4
+    ],
+    [
+      "TandaiBaris",
+      33
+    ],
+    [
+      "LoadGlobal",
+      3
+    ],
+    [
+      "PushK",
+      15
+    ],
+    [
+      "BinOp",
+      "Tambah"
+    ],
+    [
+      "StoreGlobal",
+      3
+    ],
+    [
+      "Lompat",
+      49
+    ],
+    [
+      "TandaiBaris",
+      35
+    ],
+    [
+      "PushK",
+      16
+    ],
+    [
+      "LoadGlobal",
+      4
+    ],
+    [
+      "BinOp",
+      "Tambah"
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "TandaiBaris",
+      38
+    ],
+    [
+      "PushK",
+      17
+    ],
+    [
+      "StoreGlobal",
+      5
+    ],
+    [
+      "TandaiBaris",
+      39
+    ],
+    [
+      "PushK",
+      18
+    ],
+    [
+      "StoreGlobal",
+      6
+    ],
+    [
+      "TandaiBaris",
+      40
+    ],
+    [
+      "LoadGlobal",
+      5
+    ],
+    [
+      "LoadGlobal",
+      6
+    ],
+    [
+      "PushK",
+      19
+    ],
+    [
+      "BinOp",
+      "LebihBesar"
+    ],
+    [
+      "BinOp",
+      "Dan"
+    ],
+    [
+      "LompatJikaSalah",
+      86
+    ],
+    [
+      "TandaiBaris",
+      41
+    ],
+    [
+      "PushK",
+      20
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "Lompat",
+      89
+    ],
+    [
+      "TandaiBaris",
+      43
+    ],
+    [
+      "PushK",
+      21
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "TandaiBaris",
+      47
+    ],
+    [
+      "PushK",
+      22
+    ],
+    [
+      "PushK",
+      23
+    ],
+    [
+      "PushK",
+      24
+    ],
+    [
+      "PushK",
+      25
+    ],
+    [
+      "BinOp",
+      "Kali"
+    ],
+    [
+      "BinOp",
+      "Tambah"
+    ],
+    [
+      "BinOp",
+      "Tambah"
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "TandaiBaris",
+      48
+    ],
+    [
+      "PushK",
+      26
+    ],
+    [
+      "PushK",
+      27
+    ],
+    [
+      "PushK",
+      28
+    ],
+    [
+      "BinOp",
+      "Kurang"
+    ],
+    [
+      "PushK",
+      29
+    ],
+    [
+      "BinOp",
+      "Tambah"
+    ],
+    [
+      "BinOp",
+      "Tambah"
+    ],
+    [
+      "Tampilkan"
+    ]
+  ]
+}

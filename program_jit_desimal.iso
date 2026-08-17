@@ -1,0 +1,27 @@
+catatan: Uji JIT untuk fungsi ber-parameter Desimal (float)
+fungsi luas_lingkaran(r: Desimal) {
+    kembalikan 3.14159 * r * r
+}
+tampilkan "luas_lingkaran(2.5) = " + luas_lingkaran(2.5)
+fungsi jarak_kuadrat(dx: Desimal, dy: Desimal) {
+    kembalikan dx * dx + dy * dy
+}
+tampilkan "jarak_kuadrat(3.0, 4.0) = " + jarak_kuadrat(3.0, 4.0)
+catatan: rekursi Desimal + literal integer yang harus auto-promote ke f64
+fungsi pangkat(basis: Desimal, n: Desimal) {
+    kalau (n == 0.0) {
+        kembalikan 1.0
+    } lainnya {
+        kembalikan basis * pangkat(basis, n - 1)
+    }
+}
+tampilkan "pangkat(2.0, 10.0) = " + pangkat(2.0, 10.0)
+catatan: pastikan mode Angka lama masih jalan berdampingan
+fungsi fib(n) {
+    kalau (n < 2) {
+        kembalikan n
+    } lainnya {
+        kembalikan fib(n - 1) + fib(n - 2)
+    }
+}
+tampilkan "fib(15) = " + fib(15)

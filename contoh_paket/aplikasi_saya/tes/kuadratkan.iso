@@ -1,0 +1,6 @@
+muat "matematika"
+kalau (kuadratkan(4) == 16) {
+    tampilkan "OK"
+} lainnya {
+    gagal_uji("kuadratkan(4) harusnya 16")
+}

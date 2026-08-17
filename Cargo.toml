@@ -1,0 +1,12 @@
+[package]
+name = "isoteri"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ureq = "2"
+serde_json = "1"
+cranelift = "0.105"
+cranelift-jit = "0.105"
+cranelift-module = "0.105"
+cranelift-native = "0.105"

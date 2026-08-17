@@ -1,0 +1,18 @@
+catatan: Uji Milestone B -- DOM/Event/Storage
+fungsi ketika_diklik() {
+    tampilkan "Tombol diklik!"
+    simpan_lokal("terakhir_diklik", "ya")
+}
+ingat judul = dom_pilih("#judul")
+tampilkan dom_teks(judul)
+dom_atur_teks(judul, "Halo dari Isoteri")
+tampilkan dom_teks(judul)
+dom_tambah_kelas(judul, "aktif")
+tampilkan dom_punya_kelas(judul, "aktif")
+dom_atur_atribut(judul, "data-status", "siap")
+tampilkan dom_atribut(judul, "data-status")
+ingat baru = dom_buat("span")
+dom_atur_teks(baru, "Anak baru")
+dom_tambah_anak(judul, baru)
+dom_ketika(judul, "klik", "ketika_diklik")
+ambil_lokal("terakhir_diklik")

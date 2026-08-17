@@ -1,0 +1,24 @@
+catatan: Uji Milestone B lanjutan -- Canvas 2D & WebSocket
+fungsi ws_pesan_masuk(isi) {
+    tampilkan "Pesan masuk: " + isi
+}
+fungsi ws_terbuka() {
+    tampilkan "Koneksi terbuka"
+}
+ingat kanvas = dom_pilih("#papan")
+ingat ctx = dom_konteks_2d(kanvas)
+kanvas_isi_gaya(ctx, "merah")
+kanvas_isi_persegi(ctx, 10, 10, 100, 50)
+kanvas_garis_gaya(ctx, "biru")
+kanvas_lebar_garis(ctx, 3)
+kanvas_mulai_jalur(ctx)
+kanvas_pindah_ke(ctx, 0, 0)
+kanvas_garis_ke(ctx, 50, 50)
+kanvas_garis(ctx)
+kanvas_font(ctx, "16px sans-serif")
+kanvas_isi_teks(ctx, "Halo Kanvas", 5, 90)
+ingat soket = ws_buka("wss://contoh.tidak-nyata.invalid/socket")
+ws_ketika_buka(soket, "ws_terbuka")
+ws_ketika_pesan(soket, "ws_pesan_masuk")
+ws_kirim(soket, "halo dari isoteri")
+tampilkan ws_status(soket)

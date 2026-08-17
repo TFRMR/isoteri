@@ -1,0 +1,20 @@
+catatan: Uji fitur baru - Daftar (list), foreach, file, jaringan
+ingat harga_panen = [5000, 7500, 6200, 8100, 4900]
+tampilkan "Daftar harga: " + harga_panen
+tampilkan "Jumlah item: " + panjang(harga_panen)
+tampilkan "Total: " + jumlah(harga_panen)
+tampilkan "Rata-rata: " + rata_rata(harga_panen)
+tampilkan "Item ke-2: " + ambil(harga_panen, 2)
+tampilkan "Item ke-2 (kurung siku): " + harga_panen[2]
+ingat harga_baru = gabung(harga_panen, 9999)
+tampilkan "Setelah gabung: " + harga_baru
+catatan: Uji foreach
+ingat total_manual = 0
+ulang setiap h dari harga_panen {
+    total_manual = total_manual + h
+}
+tampilkan "Total dari foreach: " + total_manual
+catatan: Uji file I/O
+tulis_berkas("catatan_panen.txt", "Panen hari ini: " + jumlah(harga_panen))
+ingat isi_catatan = baca_berkas("catatan_panen.txt")
+tampilkan "Isi berkas: " + isi_catatan

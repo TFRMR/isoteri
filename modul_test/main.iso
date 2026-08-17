@@ -1,0 +1,9 @@
+catatan: Program utama -- muat beberapa modul, termasuk yang bersarang
+muat "matematika.iso"
+muat "petani.iso"
+catatan: muat modul yang sama dua kali -- harus aman (include guard), gak dobel-definisi
+muat "petani.iso"
+tampilkan "kuadrat(9) = " + kuadrat(9)
+tampilkan "rata_rata_dua(3.0, 7.0) = " + rata_rata_dua(3.0, 7.0)
+ingat budi = Petani { nama: "Budi", alamat: Alamat { desa: "Girimulyo", kecamatan: "Kokap" }, lahan: 2 }
+tampilkan budi

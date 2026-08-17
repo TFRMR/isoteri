@@ -1,0 +1,28 @@
+catatan: Uji fungsi matematika & teks baru
+catatan: --- Matematika ---
+tampilkan "akar(144) = " + akar(144)
+tampilkan "pangkat(2, 10) = " + pangkat(2, 10)
+tampilkan "pangkat(2.0, 0.5) = " + pangkat(2.0, 0.5)
+tampilkan "bulat(3.6) = " + bulat(3.6)
+tampilkan "bulat_bawah(3.9) = " + bulat_bawah(3.9)
+tampilkan "bulat_atas(3.1) = " + bulat_atas(3.1)
+tampilkan "mutlak(-7) = " + mutlak(-7)
+tampilkan "mutlak(-2.5) = " + mutlak(-2.5)
+tampilkan "min(4, 9) = " + min(4, 9)
+tampilkan "maks(4, 9) = " + maks(4, 9)
+ingat r1 = acak()
+ingat r2 = acak()
+tampilkan "acak() beda tiap panggil: " + (r1 != r2)
+catatan: --- Teks ---
+tampilkan "potong('pertanian', 0, 4) = " + potong("pertanian", 0, 4)
+tampilkan "ganti('panen padi', 'padi', 'jagung') = " + ganti("panen padi", "padi", "jagung")
+tampilkan "huruf_besar('menoreh') = " + huruf_besar("menoreh")
+tampilkan "huruf_kecil('KULON PROGO') = " + huruf_kecil("KULON PROGO")
+tampilkan "pangkas('  girimulyo  ') = [" + pangkas("  girimulyo  ") + "]"
+ingat bagian = pisah("padi,jagung,kopi", ",")
+tampilkan "pisah('padi,jagung,kopi', ',') = " + bagian
+tampilkan "satukan(bagian, ' - ') = " + satukan(bagian, " - ")
+tampilkan "mengandung('Kulon Progo', 'Progo') = " + mengandung("Kulon Progo", "Progo")
+tampilkan "diawali('Girimulyo', 'Giri') = " + diawali("Girimulyo", "Giri")
+tampilkan "diakhiri('Girimulyo', 'mulyo') = " + diakhiri("Girimulyo", "mulyo")
+tampilkan "ke_teks(42) = [" + ke_teks(42) + "]"

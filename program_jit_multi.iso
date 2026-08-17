@@ -1,0 +1,31 @@
+catatan: Uji JIT multi-parameter (sebelumnya cuma bisa 1 parameter Angka)
+fungsi tambah3(a: Angka, b: Angka, c: Angka) {
+    kembalikan a + b + c
+}
+tampilkan "tambah3(10, 20, 12) = " + tambah3(10, 20, 12)
+fungsi fpb(a: Angka, b: Angka) {
+    kalau (b == 0) {
+        kembalikan a
+    } lainnya {
+        kembalikan fpb(b, a - b * (a / b))
+    }
+}
+tampilkan "fpb(48, 18) = " + fpb(48, 18)
+catatan: fungsi rekursif 2-parameter yang lumayan berat -- ackermann kecil
+fungsi ackermann(m: Angka, n: Angka) {
+    kalau (m == 0) {
+        kembalikan n + 1
+    } lainnya {
+        kalau (n == 0) {
+            kembalikan ackermann(m - 1, 1)
+        } lainnya {
+            kembalikan ackermann(m - 1, ackermann(m, n - 1))
+        }
+    }
+}
+tampilkan "ackermann(2, 3) = " + ackermann(2, 3)
+catatan: pastikan fungsi 1-parameter (jalur lama) masih jalan
+fungsi kuadrat(n: Angka) {
+    kembalikan n * n
+}
+tampilkan "kuadrat(9) = " + kuadrat(9)

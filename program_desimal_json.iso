@@ -1,0 +1,23 @@
+catatan: Uji fitur baru - Desimal dan JSON/Peta
+catatan: --- Desimal ---
+ingat harga = 15500.75
+ingat pajak = 0.11
+ingat total = harga + harga * pajak
+tampilkan "Harga: " + harga
+tampilkan "Total dengan pajak: " + total
+ingat rata = rata_rata([10.5, 20.25, 15.0])
+tampilkan "Rata-rata desimal: " + rata
+catatan: --- Peta (object/dictionary) ---
+ingat petani = {"nama": "Budi", "lahan_ha": 2.5, "aktif": benar}
+tampilkan "Nama petani: " + petani["nama"]
+tampilkan "Luas lahan: " + petani["lahan_ha"]
+tampilkan "Kunci-kunci: " + kunci_peta(petani)
+catatan: --- JSON ---
+ingat teks_data = "{\"desa\": \"Menoreh\", \"hasil_panen\": [120.5, 98.2, 150.0], \"tahun\": 2026}"
+ingat data = urai_json(teks_data)
+tampilkan "Desa: " + data["desa"]
+tampilkan "Tahun: " + data["tahun"]
+tampilkan "Hasil panen: " + data["hasil_panen"]
+tampilkan "Rata-rata hasil: " + rata_rata(data["hasil_panen"])
+ingat kembali_json = teks_json(data)
+tampilkan "Kembali ke JSON: " + kembali_json

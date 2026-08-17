@@ -1,0 +1,7 @@
+catatan: Modul bentuk Petani, tergantung modul Alamat (muat relatif ke file INI, bukan ke main.iso)
+muat "alamat.iso"
+bentuk Petani {
+    nama: Teks,
+    alamat: Alamat,
+    lahan: Angka
+}

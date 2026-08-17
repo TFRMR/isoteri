@@ -1,0 +1,34 @@
+catatan: Uji nested field assignment (a.b.c = x)
+bentuk Alamat {
+    desa: Teks,
+    kecamatan: Teks
+}
+bentuk Petani {
+    nama: Teks,
+    alamat: Alamat
+}
+ingat budi = Petani { nama: "Budi", alamat: Alamat { desa: "Girimulyo", kecamatan: "Kokap" } }
+tampilkan budi.alamat.desa
+budi.alamat.desa = "Purwosari"
+tampilkan budi.alamat.desa
+tampilkan budi
+catatan: pastikan level-1 (yang lama) masih jalan berdampingan
+budi.nama = "Budi Santoso"
+tampilkan budi.nama
+catatan: 3 level -- bentuk di dalam bentuk di dalam bentuk
+bentuk Kabupaten {
+    nama: Teks
+}
+bentuk AlamatLengkap {
+    desa: Teks,
+    kabupaten: Kabupaten
+}
+bentuk Warga {
+    nama: Teks,
+    alamat: AlamatLengkap
+}
+ingat siti = Warga { nama: "Siti", alamat: AlamatLengkap { desa: "Sendangsari", kabupaten: Kabupaten { nama: "Kulon Progo" } } }
+tampilkan siti.alamat.kabupaten.nama
+siti.alamat.kabupaten.nama = "Kulon Progo Baru"
+tampilkan siti.alamat.kabupaten.nama
+tampilkan siti

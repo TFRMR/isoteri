@@ -1,0 +1,332 @@
+{
+  "format": "isoteri-web-bytecode-v1",
+  "fungsi": [
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          22
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "AmbilField",
+          "nama"
+        ],
+        [
+          "PushK",
+          8
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "AmbilField",
+          "lahan"
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          9
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 1,
+      "nama": "ringkas",
+      "param_count": 1,
+      "param_flat": [
+        null
+      ]
+    }
+  ],
+  "global_slot_count": 3,
+  "konstanta": [
+    {
+      "t": "Teks",
+      "v": "Budi"
+    },
+    {
+      "t": "Angka",
+      "v": 2
+    },
+    {
+      "t": "Desimal",
+      "v": 15.5
+    },
+    {
+      "t": "Desimal",
+      "v": 20.0
+    },
+    {
+      "t": "Teks",
+      "v": "Siti"
+    },
+    {
+      "t": "Angka",
+      "v": 1
+    },
+    {
+      "t": "Desimal",
+      "v": 8.25
+    },
+    {
+      "t": "Teks",
+      "v": "Tertangkap (sengaja): "
+    },
+    {
+      "t": "Teks",
+      "v": " punya "
+    },
+    {
+      "t": "Teks",
+      "v": " hektar lahan"
+    }
+  ],
+  "nama_ke_indeks": {
+    "ringkas": 0
+  },
+  "top_kode": [
+    [
+      "TandaiBaris",
+      9
+    ],
+    [
+      "PushK",
+      0
+    ],
+    [
+      "PushK",
+      1
+    ],
+    [
+      "PushK",
+      2
+    ],
+    [
+      "BuatInstans",
+      "Petani",
+      [
+        "nama",
+        "lahan",
+        "hasil"
+      ]
+    ],
+    [
+      "StoreGlobal",
+      0
+    ],
+    [
+      "TandaiBaris",
+      10
+    ],
+    [
+      "LoadGlobal",
+      0
+    ],
+    [
+      "AmbilField",
+      "nama"
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "TandaiBaris",
+      11
+    ],
+    [
+      "LoadGlobal",
+      0
+    ],
+    [
+      "AmbilField",
+      "lahan"
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "TandaiBaris",
+      12
+    ],
+    [
+      "LoadGlobal",
+      0
+    ],
+    [
+      "AmbilField",
+      "hasil"
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "TandaiBaris",
+      13
+    ],
+    [
+      "LoadGlobal",
+      0
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "TandaiBaris",
+      15
+    ],
+    [
+      "LoadGlobal",
+      0
+    ],
+    [
+      "PushK",
+      3
+    ],
+    [
+      "SetField",
+      "hasil"
+    ],
+    [
+      "StoreGlobal",
+      0
+    ],
+    [
+      "TandaiBaris",
+      16
+    ],
+    [
+      "LoadGlobal",
+      0
+    ],
+    [
+      "AmbilField",
+      "hasil"
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "TandaiBaris",
+      18
+    ],
+    [
+      "PushK",
+      4
+    ],
+    [
+      "PushK",
+      5
+    ],
+    [
+      "PushK",
+      6
+    ],
+    [
+      "BuatInstans",
+      "Petani",
+      [
+        "nama",
+        "lahan",
+        "hasil"
+      ]
+    ],
+    [
+      "StoreGlobal",
+      1
+    ],
+    [
+      "TandaiBaris",
+      19
+    ],
+    [
+      "LoadGlobal",
+      1
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "TandaiBaris",
+      24
+    ],
+    [
+      "LoadGlobal",
+      0
+    ],
+    [
+      "PanggilFungsi",
+      0,
+      1
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "TandaiBaris",
+      26
+    ],
+    [
+      "MulaiCobaGlobal",
+      51,
+      2
+    ],
+    [
+      "TandaiBaris",
+      27
+    ],
+    [
+      "LoadGlobal",
+      0
+    ],
+    [
+      "AmbilField",
+      "tidak_ada"
+    ],
+    [
+      "Tampilkan"
+    ],
+    [
+      "SelesaiCoba"
+    ],
+    [
+      "Lompat",
+      56
+    ],
+    [
+      "TandaiBaris",
+      29
+    ],
+    [
+      "PushK",
+      7
+    ],
+    [
+      "LoadGlobal",
+      2
+    ],
+    [
+      "BinOp",
+      "Tambah"
+    ],
+    [
+      "Tampilkan"
+    ]
+  ]
+}

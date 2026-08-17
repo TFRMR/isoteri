@@ -1,0 +1,39 @@
+catatan: Uji petakan/saring/urutkan dengan callback ber-parameter flattened
+bentuk Titik {
+    x: Angka,
+    y: Angka
+}
+fungsi jarak_kuadrat(p: Titik) {
+    kembalikan p.x * p.x + p.y * p.y
+}
+fungsi jauh(p: Titik) {
+    kembalikan p.x * p.x + p.y * p.y > 10
+}
+ingat titik_titik = [Titik { x: 1, y: 1 }, Titik { x: 3, y: 4 }, Titik { x: 0, y: 2 }, Titik { x: 5, y: 5 }]
+catatan: petakan dengan callback flattened
+tampilkan "petakan(jarak_kuadrat): " + petakan(titik_titik, "jarak_kuadrat")
+catatan: saring dengan callback flattened
+tampilkan "saring(jauh): " + saring(titik_titik, "jauh")
+catatan: urutkan dengan kunci callback flattened
+ingat terurut = urutkan(titik_titik, "jarak_kuadrat")
+ulang setiap p dari terurut {
+    tampilkan "  urut: (" + p.x + "," + p.y + ") jarak_kuadrat=" + jarak_kuadrat(p)
+}
+catatan: pastikan callback biasa (non-flattened) masih jalan normal (regresi)
+fungsi kuadrat(n) {
+    kembalikan n * n
+}
+tampilkan "petakan(kuadrat) biasa: " + petakan([1, 2, 3], "kuadrat")
+catatan: pastikan error masih jelas kalau instans-nya salah field
+bentuk BedaBentuk {
+    a: Angka,
+    b: Angka
+}
+fungsi ambil_a(x: BedaBentuk) {
+    kembalikan x.a
+}
+coba {
+    tampilkan petakan(titik_titik, "ambil_a")
+} tangkap pesan {
+    tampilkan "Tertangkap (sengaja): " + pesan
+}

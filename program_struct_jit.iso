@@ -1,0 +1,40 @@
+catatan: Uji struct-JIT-able (parameter bentuk numerik-murni di-flatten)
+bentuk Titik {
+    x: Angka,
+    y: Angka
+}
+fungsi jarak_kuadrat(p: Titik) {
+    kembalikan p.x * p.x + p.y * p.y
+}
+ingat t1 = Titik { x: 3, y: 4 }
+tampilkan "jarak_kuadrat(t1) = " + jarak_kuadrat(t1)
+catatan: bentuk campuran Angka+Desimal (mixed numeric juga harus tetap BENAR walau gak dapat JIT)
+bentuk Vektor {
+    dx: Angka,
+    dy: Desimal
+}
+fungsi magnitudo_kira(v: Vektor) {
+    kembalikan v.dx + v.dy
+}
+ingat vek = Vektor { dx: 5, dy: 2.5 }
+tampilkan "magnitudo_kira(vek) = " + magnitudo_kira(vek)
+catatan: rekursi dengan parameter flattened
+fungsi jarak_berulang(p: Titik, n: Angka) {
+    kalau (n <= 0) {
+        kembalikan 0
+    } lainnya {
+        kembalikan jarak_kuadrat(p) + jarak_berulang(p, n - 1)
+    }
+}
+tampilkan "jarak_berulang(t1, 3) = " + jarak_berulang(t1, 3)
+catatan: bentuk dgn field Teks -- HARUS TETAP normal (gak flatten, gak JIT, tapi tetap benar)
+bentuk Petani {
+    nama: Teks,
+    lahan: Angka
+}
+fungsi ambil_lahan(p: Petani) {
+    kembalikan p.lahan * 2
+}
+ingat budi = Petani { nama: "Budi", lahan: 3 }
+tampilkan "ambil_lahan(budi) = " + ambil_lahan(budi)
+tampilkan "nama budi (akses field biasa via variabel langsung) = " + budi.nama

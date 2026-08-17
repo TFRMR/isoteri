@@ -1,0 +1,497 @@
+{
+  "format": "isoteri-web-bytecode-v1",
+  "fungsi": [
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          4
+        ],
+        [
+          "PushK",
+          20
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "Tampilkan"
+        ]
+      ],
+      "local_slot_count": 1,
+      "nama": "ws_pesan_masuk",
+      "param_count": 1,
+      "param_flat": [
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          7
+        ],
+        [
+          "PushK",
+          21
+        ],
+        [
+          "Tampilkan"
+        ]
+      ],
+      "local_slot_count": 0,
+      "nama": "ws_terbuka",
+      "param_count": 0,
+      "param_flat": []
+    }
+  ],
+  "global_slot_count": 3,
+  "konstanta": [
+    {
+      "t": "Teks",
+      "v": "#papan"
+    },
+    {
+      "t": "Teks",
+      "v": "merah"
+    },
+    {
+      "t": "Angka",
+      "v": 10
+    },
+    {
+      "t": "Angka",
+      "v": 10
+    },
+    {
+      "t": "Angka",
+      "v": 100
+    },
+    {
+      "t": "Angka",
+      "v": 50
+    },
+    {
+      "t": "Teks",
+      "v": "biru"
+    },
+    {
+      "t": "Angka",
+      "v": 3
+    },
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Angka",
+      "v": 50
+    },
+    {
+      "t": "Angka",
+      "v": 50
+    },
+    {
+      "t": "Teks",
+      "v": "16px sans-serif"
+    },
+    {
+      "t": "Teks",
+      "v": "Halo Kanvas"
+    },
+    {
+      "t": "Angka",
+      "v": 5
+    },
+    {
+      "t": "Angka",
+      "v": 90
+    },
+    {
+      "t": "Teks",
+      "v": "wss://contoh.tidak-nyata.invalid/socket"
+    },
+    {
+      "t": "Teks",
+      "v": "ws_terbuka"
+    },
+    {
+      "t": "Teks",
+      "v": "ws_pesan_masuk"
+    },
+    {
+      "t": "Teks",
+      "v": "halo dari isoteri"
+    },
+    {
+      "t": "Teks",
+      "v": "Pesan masuk: "
+    },
+    {
+      "t": "Teks",
+      "v": "Koneksi terbuka"
+    }
+  ],
+  "nama_ke_indeks": {
+    "ws_pesan_masuk": 0,
+    "ws_terbuka": 1
+  },
+  "top_kode": [
+    [
+      "TandaiBaris",
+      10
+    ],
+    [
+      "PushK",
+      0
+    ],
+    [
+      "PanggilBawaan",
+      "dom_pilih",
+      1
+    ],
+    [
+      "StoreGlobal",
+      0
+    ],
+    [
+      "TandaiBaris",
+      11
+    ],
+    [
+      "LoadGlobal",
+      0
+    ],
+    [
+      "PanggilBawaan",
+      "dom_konteks_2d",
+      1
+    ],
+    [
+      "StoreGlobal",
+      1
+    ],
+    [
+      "TandaiBaris",
+      13
+    ],
+    [
+      "LoadGlobal",
+      1
+    ],
+    [
+      "PushK",
+      1
+    ],
+    [
+      "PanggilBawaan",
+      "kanvas_isi_gaya",
+      2
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      14
+    ],
+    [
+      "LoadGlobal",
+      1
+    ],
+    [
+      "PushK",
+      2
+    ],
+    [
+      "PushK",
+      3
+    ],
+    [
+      "PushK",
+      4
+    ],
+    [
+      "PushK",
+      5
+    ],
+    [
+      "PanggilBawaan",
+      "kanvas_isi_persegi",
+      5
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      16
+    ],
+    [
+      "LoadGlobal",
+      1
+    ],
+    [
+      "PushK",
+      6
+    ],
+    [
+      "PanggilBawaan",
+      "kanvas_garis_gaya",
+      2
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      17
+    ],
+    [
+      "LoadGlobal",
+      1
+    ],
+    [
+      "PushK",
+      7
+    ],
+    [
+      "PanggilBawaan",
+      "kanvas_lebar_garis",
+      2
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      18
+    ],
+    [
+      "LoadGlobal",
+      1
+    ],
+    [
+      "PanggilBawaan",
+      "kanvas_mulai_jalur",
+      1
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      19
+    ],
+    [
+      "LoadGlobal",
+      1
+    ],
+    [
+      "PushK",
+      8
+    ],
+    [
+      "PushK",
+      9
+    ],
+    [
+      "PanggilBawaan",
+      "kanvas_pindah_ke",
+      3
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      20
+    ],
+    [
+      "LoadGlobal",
+      1
+    ],
+    [
+      "PushK",
+      10
+    ],
+    [
+      "PushK",
+      11
+    ],
+    [
+      "PanggilBawaan",
+      "kanvas_garis_ke",
+      3
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      21
+    ],
+    [
+      "LoadGlobal",
+      1
+    ],
+    [
+      "PanggilBawaan",
+      "kanvas_garis",
+      1
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      23
+    ],
+    [
+      "LoadGlobal",
+      1
+    ],
+    [
+      "PushK",
+      12
+    ],
+    [
+      "PanggilBawaan",
+      "kanvas_font",
+      2
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      24
+    ],
+    [
+      "LoadGlobal",
+      1
+    ],
+    [
+      "PushK",
+      13
+    ],
+    [
+      "PushK",
+      14
+    ],
+    [
+      "PushK",
+      15
+    ],
+    [
+      "PanggilBawaan",
+      "kanvas_isi_teks",
+      4
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      26
+    ],
+    [
+      "PushK",
+      16
+    ],
+    [
+      "PanggilBawaan",
+      "ws_buka",
+      1
+    ],
+    [
+      "StoreGlobal",
+      2
+    ],
+    [
+      "TandaiBaris",
+      27
+    ],
+    [
+      "LoadGlobal",
+      2
+    ],
+    [
+      "PushK",
+      17
+    ],
+    [
+      "PanggilBawaan",
+      "ws_ketika_buka",
+      2
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      28
+    ],
+    [
+      "LoadGlobal",
+      2
+    ],
+    [
+      "PushK",
+      18
+    ],
+    [
+      "PanggilBawaan",
+      "ws_ketika_pesan",
+      2
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      29
+    ],
+    [
+      "LoadGlobal",
+      2
+    ],
+    [
+      "PushK",
+      19
+    ],
+    [
+      "PanggilBawaan",
+      "ws_kirim",
+      2
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      30
+    ],
+    [
+      "LoadGlobal",
+      2
+    ],
+    [
+      "PanggilBawaan",
+      "ws_status",
+      1
+    ],
+    [
+      "Tampilkan"
+    ]
+  ]
+}

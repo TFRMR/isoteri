@@ -1,0 +1,7 @@
+fungsi f(n: Angka) {
+    kalau (n <= 1) {
+        kembalikan n
+    }
+    kembalikan f(n - 1) + f(n - 2)
+}
+tampilkan f(10)

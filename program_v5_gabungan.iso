@@ -1,0 +1,25 @@
+catatan: Contoh gabungan fitur v5 - jika, gradual typing, dan ulang selaras (paralel)
+catatan: --- Gradual typing: tipe dicek saat kompilasi, bukan saat jalan ---
+ingat nama_desa: Teks = "Menoreh"
+ingat jumlah_petani: Angka = 42
+ingat rata_hasil: Desimal = 850.5
+kalau (jumlah_petani > 30) {
+    tampilkan nama_desa + " punya " + jumlah_petani + " petani aktif"
+} lainnya {
+    tampilkan "Desa kecil"
+}
+tampilkan "Rata-rata hasil panen: " + rata_hasil + " kg"
+catatan: --- Paralelisme: proses banyak data desa sekaligus di banyak core ---
+ingat harga_gabah_semua_desa = [5200, 6100, 4800, 7300, 5900, 6700, 5100, 6300, 4900, 7100]
+ulang selaras setiap harga dari harga_gabah_semua_desa {
+    kalau (harga >= 6000) {
+        tampilkan "Harga " + harga + " -> bagus, waktunya jual"
+    } lainnya {
+        kalau (harga >= 5000) {
+            tampilkan "Harga " + harga + " -> standar"
+        } lainnya {
+            tampilkan "Harga " + harga + " -> rendah, mungkin tunggu dulu"
+        }
+    }
+}
+tampilkan "Selesai analisa " + panjang(harga_gabah_semua_desa) + " desa"

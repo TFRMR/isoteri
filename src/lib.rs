@@ -1,0 +1,5225 @@
+use std::collections::HashMap;
+use std::fmt;
+use std::fs;
+use std::rc::Rc;
+
+// =====================================================================
+// 1. TOKEN & LEXER
+// =====================================================================
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Token {
+    Ingat, Kalau, Lainnya, Ulang, Tampilkan, Fungsi, Kembalikan, Muat,
+    Dan, Atau, Benar, Salah, Setiap, Dari, Selaras, Coba, Tangkap, Bentuk,
+
+    Identifikator(String),
+    Teks(String),
+    Angka(i64),
+    AngkaDesimal(f64),
+
+    SamaDengan, SamaDenganDua, TidakSama,
+    LebihBesar, LebihBesarSamaDengan, LebihKecil, LebihKecilSamaDengan,
+    Tambah, Kurang, Kali, Bagi,
+    Titik, TitikDua,
+    KurungBuka, KurungTutup, KurawalBuka, KurawalTutup,
+    KurungSikuBuka, KurungSikuTutup, Koma,
+
+    Eof,
+    /// Dipakai HANYA oleh `tokenize_dengan_komentar` (lihat bagian "11. FORMATTER") -- Parser
+    /// TIDAK PERNAH melihat token ini (difilter sebelum dikirim ke Parser::new), jadi
+    /// menambah varian ini aman buat kode compiler yang sudah ada.
+    Komentar(String),
+}
+
+pub struct Lexer { input: Vec<char>, posisi: usize, baris: usize, pertahankan_komentar: bool }
+
+impl Lexer {
+    pub fn new(input: &str) -> Self { Lexer { input: input.chars().collect(), posisi: 0, baris: 1, pertahankan_komentar: false } }
+
+    /// Sama seperti `tokenize()`, TAPI baris `catatan: ...` diemit sebagai `Token::Komentar`,
+    /// bukan dibuang -- dipakai HANYA oleh formatter (bagian "11"), supaya bisa tahu di baris
+    /// berapa komentar aslinya berada lalu menempelkannya kembali ke output yang diformat ulang.
+    /// Path kompilasi normal (`tokenize()`) SAMA SEKALI TIDAK BERUBAH -- nol risiko regresi ke
+    /// compiler/VM yang sudah ada.
+    pub fn tokenize_dengan_komentar(&mut self) -> Result<Vec<(Token, usize)>, String> {
+        self.pertahankan_komentar = true;
+        self.tokenize()
+    }
+
+    pub fn tokenize(&mut self) -> Result<Vec<(Token, usize)>, String> {
+        let mut tokens: Vec<(Token, usize)> = Vec::new();
+        macro_rules! push { ($t:expr) => { tokens.push(($t, self.baris)); } }
+        while self.posisi < self.input.len() {
+            let ch = self.input[self.posisi];
+            if ch == '\n' { self.baris += 1; self.posisi += 1; continue; }
+            if ch.is_whitespace() { self.posisi += 1; continue; }
+
+            if self.cek_kata_depan("catatan:") {
+                let mulai = self.posisi;
+                while self.posisi < self.input.len() && self.input[self.posisi] != '\n' { self.posisi += 1; }
+                if self.pertahankan_komentar {
+                    let teks: String = self.input[mulai..self.posisi].iter().collect();
+                    push!(Token::Komentar(teks));
+                }
+                continue;
+            }
+
+            if ch == '"' {
+                self.posisi += 1;
+                let mut teks = String::new();
+                while self.posisi < self.input.len() && self.input[self.posisi] != '"' {
+                    if self.input[self.posisi] == '\\' && self.posisi + 1 < self.input.len() {
+                        match self.input[self.posisi + 1] {
+                            '"' => { teks.push('"'); self.posisi += 2; continue; }
+                            'n' => { teks.push('\n'); self.posisi += 2; continue; }
+                            '\\' => { teks.push('\\'); self.posisi += 2; continue; }
+                            _ => {}
+                        }
+                    }
+                    teks.push(self.input[self.posisi]);
+                    self.posisi += 1;
+                }
+                if self.posisi >= self.input.len() { return Err("Teks tidak ditutup dengan tanda kutip (\")".to_string()); }
+                self.posisi += 1;
+                push!(Token::Teks(teks));
+                continue;
+            }
+
+            if ch.is_ascii_digit() {
+                let mut angka_str = String::new();
+                while self.posisi < self.input.len() && self.input[self.posisi].is_ascii_digit() {
+                    angka_str.push(self.input[self.posisi]);
+                    self.posisi += 1;
+                }
+                let mut desimal = false;
+                if self.posisi < self.input.len() && self.input[self.posisi] == '.'
+                    && self.posisi + 1 < self.input.len() && self.input[self.posisi + 1].is_ascii_digit()
+                {
+                    desimal = true;
+                    angka_str.push('.');
+                    self.posisi += 1;
+                    while self.posisi < self.input.len() && self.input[self.posisi].is_ascii_digit() {
+                        angka_str.push(self.input[self.posisi]);
+                        self.posisi += 1;
+                    }
+                }
+                if desimal {
+                    push!(Token::AngkaDesimal(angka_str.parse::<f64>().unwrap_or(0.0)));
+                } else {
+                    push!(Token::Angka(angka_str.parse::<i64>().unwrap_or(0)));
+                }
+                continue;
+            }
+
+            if ch.is_alphabetic() || ch == '_' {
+                let mut kata = String::new();
+                while self.posisi < self.input.len()
+                    && (self.input[self.posisi].is_alphanumeric() || self.input[self.posisi] == '_')
+                {
+                    kata.push(self.input[self.posisi]);
+                    self.posisi += 1;
+                }
+                let token = match kata.to_lowercase().as_str() {
+                    "ingat" | "simpan" => Token::Ingat,
+                    "jika" | "kalau" => Token::Kalau,
+                    "lainnya" => Token::Lainnya,
+                    "ulang" => Token::Ulang,
+                    "tampilkan" => Token::Tampilkan,
+                    "fungsi" => Token::Fungsi,
+                    "kembalikan" => Token::Kembalikan,
+                    "muat" => Token::Muat,
+                    "dan" => Token::Dan,
+                    "atau" => Token::Atau,
+                    "benar" => Token::Benar,
+                    "salah" => Token::Salah,
+                    "setiap" => Token::Setiap,
+                    "dari" => Token::Dari,
+                    "selaras" => Token::Selaras,
+                    "coba" => Token::Coba,
+                    "tangkap" => Token::Tangkap,
+                    "bentuk" => Token::Bentuk,
+                    _ => Token::Identifikator(kata),
+                };
+                push!(token);
+                continue;
+            }
+
+            match ch {
+                '=' => { if self.intip() == '=' { push!(Token::SamaDenganDua); self.posisi += 2; } else { push!(Token::SamaDengan); self.posisi += 1; } }
+                '!' => { if self.intip() == '=' { push!(Token::TidakSama); self.posisi += 2; } else { return Err(format!("Karakter '!' tidak dikenal pada baris {}", self.baris)); } }
+                '>' => { if self.intip() == '=' { push!(Token::LebihBesarSamaDengan); self.posisi += 2; } else { push!(Token::LebihBesar); self.posisi += 1; } }
+                '<' => { if self.intip() == '=' { push!(Token::LebihKecilSamaDengan); self.posisi += 2; } else { push!(Token::LebihKecil); self.posisi += 1; } }
+                '+' => { push!(Token::Tambah); self.posisi += 1; }
+                '-' => { push!(Token::Kurang); self.posisi += 1; }
+                '*' => { push!(Token::Kali); self.posisi += 1; }
+                '/' => { push!(Token::Bagi); self.posisi += 1; }
+                '.' => { push!(Token::Titik); self.posisi += 1; }
+                ':' => { push!(Token::TitikDua); self.posisi += 1; }
+                '(' => { push!(Token::KurungBuka); self.posisi += 1; }
+                ')' => { push!(Token::KurungTutup); self.posisi += 1; }
+                '{' => { push!(Token::KurawalBuka); self.posisi += 1; }
+                '}' => { push!(Token::KurawalTutup); self.posisi += 1; }
+                '[' => { push!(Token::KurungSikuBuka); self.posisi += 1; }
+                ']' => { push!(Token::KurungSikuTutup); self.posisi += 1; }
+                ',' => { push!(Token::Koma); self.posisi += 1; }
+                lain => return Err(format!("Karakter tidak dikenal: '{}' pada baris {}", lain, self.baris)),
+            }
+        }
+        tokens.push((Token::Eof, self.baris));
+        Ok(tokens)
+    }
+
+    fn intip(&self) -> char { if self.posisi + 1 < self.input.len() { self.input[self.posisi + 1] } else { '\0' } }
+    fn cek_kata_depan(&self, awalan: &str) -> bool { self.input[self.posisi..].iter().collect::<String>().starts_with(awalan) }
+}
+
+// =====================================================================
+// 2. AST MENTAH & PARSER
+// =====================================================================
+
+#[derive(Debug, Clone)]
+pub enum Expr {
+    Angka(i64), Desimal(f64), Teks(String), Bool(bool), Ident(String),
+    Binary(Box<Expr>, BinOp, Box<Expr>),
+    Panggil(String, Vec<Expr>),
+    Daftar(Vec<Expr>),
+    Peta(Vec<(String, Expr)>),
+    Indeks(Box<Expr>, Box<Expr>),
+    Field(Box<Expr>, String),
+    BentukLiteral(String, Vec<(String, Expr)>),
+    /// fungsi(params) { badan } dipakai sebagai EKSPRESI (closure/fungsi anonim) -- beda dari
+    /// Stmt::FungsiDef yang punya nama & cuma boleh di level atas. Closure ini boleh nangkep
+    /// variabel dari scope pembungkusnya (lihat fn variabel_bebas_stmt & resolve_fungsi_umum).
+    FungsiLiteral(Vec<(String, Option<String>)>, Vec<(usize, Stmt)>),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BinOp { Tambah, Kurang, Kali, Bagi, SamaDengan, TidakSama, LebihBesar, LebihBesarSama, LebihKecil, LebihKecilSama, Dan, Atau }
+
+#[derive(Debug, Clone)]
+pub enum Stmt {
+    Ingat(String, Option<String>, Expr),
+    Ubah(String, Expr),
+    UbahField(String, Vec<String>, Expr),
+    BentukDef(String, Vec<(String, Option<String>)>),
+    /// muat "path/relatif.iso" -- diekspansi (diganti isi file itu) SEBELUM resolver jalan,
+    /// lihat fn ekspansi_muat(). Cuma boleh muncul di level atas program.
+    Muat(String),
+    Tampilkan(Expr),
+    Kalau(Expr, Vec<(usize, Stmt)>, Option<Vec<(usize, Stmt)>>),
+    Ulang(Expr, Vec<(usize, Stmt)>),
+    UlangSetiap(String, Expr, Vec<(usize, Stmt)>),
+    UlangSelaras(String, Expr, Vec<(usize, Stmt)>),
+    FungsiDef(String, Vec<(String, Option<String>)>, Vec<(usize, Stmt)>),
+    Kembalikan(Expr),
+    EkspresiStmt(Expr),
+    Coba(Vec<(usize, Stmt)>, String, Vec<(usize, Stmt)>),
+}
+
+pub struct Parser { tokens: Vec<Token>, baris_token: Vec<usize>, posisi: usize, no_literal: bool }
+
+impl Parser {
+    pub fn new(token_berbaris: Vec<(Token, usize)>) -> Self {
+        let tokens = token_berbaris.iter().map(|(t, _)| t.clone()).collect();
+        let baris_token = token_berbaris.iter().map(|(_, b)| *b).collect();
+        Parser { tokens, baris_token, posisi: 0, no_literal: false }
+    }
+    fn sekarang(&self) -> &Token { &self.tokens[self.posisi] }
+    fn baris_sekarang(&self) -> usize { self.baris_token[self.posisi] }
+    /// Begitu masuk konteks berkurung (isi "(...)", "[...]", argumen panggilan, dst.),
+    /// ambiguitas "identifier diikuti '{'" hilang lagi -- jadi flag no_literal dilepas
+    /// sementara, lalu dikembalikan ke nilai sebelumnya setelah keluar dari sini.
+    fn dalam_kurung<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, String>) -> Result<T, String> {
+        let sebelum = std::mem::replace(&mut self.no_literal, false);
+        let hasil = f(self);
+        self.no_literal = sebelum;
+        hasil
+    }
+    fn maju(&mut self) -> Token {
+        let t = self.tokens[self.posisi].clone();
+        if self.posisi < self.tokens.len() - 1 { self.posisi += 1; }
+        t
+    }
+    fn harap(&mut self, expected: &Token) -> Result<(), String> {
+        if std::mem::discriminant(self.sekarang()) == std::mem::discriminant(expected) { self.maju(); Ok(()) }
+        else { Err(format!("Baris {}: Diharapkan {:?}, tapi ditemukan {:?}", self.baris_sekarang(), expected, self.sekarang())) }
+    }
+
+    pub fn parse_program(&mut self) -> Result<Vec<(usize, Stmt)>, String> {
+        let mut stmts = Vec::new();
+        while *self.sekarang() != Token::Eof {
+            let baris = self.baris_sekarang();
+            stmts.push((baris, self.parse_stmt()?));
+        }
+        Ok(stmts)
+    }
+
+    fn parse_block(&mut self) -> Result<Vec<(usize, Stmt)>, String> {
+        self.harap(&Token::KurawalBuka)?;
+        let mut stmts = Vec::new();
+        while *self.sekarang() != Token::KurawalTutup && *self.sekarang() != Token::Eof {
+            let baris = self.baris_sekarang();
+            stmts.push((baris, self.parse_stmt()?));
+        }
+        self.harap(&Token::KurawalTutup)?;
+        Ok(stmts)
+    }
+
+    fn parse_stmt(&mut self) -> Result<Stmt, String> {
+        match self.sekarang().clone() {
+            Token::Ingat => {
+                self.maju();
+                let nama = self.harap_identifier()?;
+                let tipe = if *self.sekarang() == Token::TitikDua { self.maju(); Some(self.harap_identifier()?) } else { None };
+                self.harap(&Token::SamaDengan)?;
+                Ok(Stmt::Ingat(nama, tipe, self.parse_expr()?))
+            }
+            Token::Tampilkan => { self.maju(); Ok(Stmt::Tampilkan(self.parse_expr()?)) }
+            Token::Kalau => {
+                self.maju();
+                self.harap(&Token::KurungBuka)?;
+                let cond = self.parse_expr()?;
+                self.harap(&Token::KurungTutup)?;
+                let then_block = self.parse_block()?;
+                let else_block = if *self.sekarang() == Token::Lainnya { self.maju(); Some(self.parse_block()?) } else { None };
+                Ok(Stmt::Kalau(cond, then_block, else_block))
+            }
+            Token::Ulang => {
+                self.maju();
+                if *self.sekarang() == Token::Selaras {
+                    self.maju();
+                    self.harap(&Token::Setiap)?;
+                    let var = self.harap_identifier()?;
+                    self.harap(&Token::Dari)?;
+                    let sebelum = std::mem::replace(&mut self.no_literal, true);
+                    let daftar_expr = self.parse_expr()?;
+                    self.no_literal = sebelum;
+                    let body = self.parse_block()?;
+                    Ok(Stmt::UlangSelaras(var, daftar_expr, body))
+                } else if *self.sekarang() == Token::Setiap {
+                    self.maju();
+                    let var = self.harap_identifier()?;
+                    self.harap(&Token::Dari)?;
+                    let sebelum = std::mem::replace(&mut self.no_literal, true);
+                    let daftar_expr = self.parse_expr()?;
+                    self.no_literal = sebelum;
+                    let body = self.parse_block()?;
+                    Ok(Stmt::UlangSetiap(var, daftar_expr, body))
+                } else {
+                    self.harap(&Token::KurungBuka)?;
+                    let cond = self.parse_expr()?;
+                    self.harap(&Token::KurungTutup)?;
+                    Ok(Stmt::Ulang(cond, self.parse_block()?))
+                }
+            }
+            Token::Fungsi => {
+                self.maju();
+                let nama = self.harap_identifier()?;
+                self.harap(&Token::KurungBuka)?;
+                let params = self.parse_daftar_parameter()?;
+                self.harap(&Token::KurungTutup)?;
+                Ok(Stmt::FungsiDef(nama, params, self.parse_block()?))
+            }
+            Token::Muat => {
+                self.maju();
+                match self.sekarang().clone() {
+                    Token::Teks(path) => { self.maju(); Ok(Stmt::Muat(path)) }
+                    lain => Err(format!("Baris {}: Diharapkan nama berkas (Teks) setelah 'muat', ditemukan {:?}", self.baris_sekarang(), lain)),
+                }
+            }
+            Token::Bentuk => {
+                self.maju();
+                let nama = self.harap_identifier()?;
+                self.harap(&Token::KurawalBuka)?;
+                let mut fields: Vec<(String, Option<String>)> = Vec::new();
+                if *self.sekarang() != Token::KurawalTutup {
+                    loop {
+                        let fnama = self.harap_identifier()?;
+                        let ftipe = if *self.sekarang() == Token::TitikDua { self.maju(); Some(self.harap_identifier()?) } else { None };
+                        fields.push((fnama, ftipe));
+                        if *self.sekarang() == Token::Koma { self.maju(); } else { break; }
+                    }
+                }
+                self.harap(&Token::KurawalTutup)?;
+                Ok(Stmt::BentukDef(nama, fields))
+            }
+            Token::Kembalikan => { self.maju(); Ok(Stmt::Kembalikan(self.parse_expr()?)) }
+            Token::Coba => {
+                self.maju();
+                let badan_coba = self.parse_block()?;
+                self.harap(&Token::Tangkap)?;
+                let nama_var = self.harap_identifier()?;
+                let badan_tangkap = self.parse_block()?;
+                Ok(Stmt::Coba(badan_coba, nama_var, badan_tangkap))
+            }
+            Token::Identifikator(nama) => {
+                if self.tokens.get(self.posisi + 1) == Some(&Token::SamaDengan) {
+                    self.maju(); self.maju();
+                    Ok(Stmt::Ubah(nama, self.parse_expr()?))
+                } else {
+                    // Intip ke depan: pola "nama.f1.f2...fk = nilai"? Rantai '.identifier' boleh
+                    // berapa pun panjangnya, asal berujung tepat di token '='.
+                    let mut la = self.posisi + 1;
+                    let mut fields = Vec::new();
+                    while self.tokens.get(la) == Some(&Token::Titik) {
+                        match self.tokens.get(la + 1) {
+                            Some(Token::Identifikator(f)) => { fields.push(f.clone()); la += 2; }
+                            _ => break,
+                        }
+                    }
+                    if !fields.is_empty() && self.tokens.get(la) == Some(&Token::SamaDengan) {
+                        self.maju(); // nama
+                        for _ in 0..fields.len() { self.maju(); self.maju(); } // tiap '.field'
+                        self.maju(); // '='
+                        Ok(Stmt::UbahField(nama, fields, self.parse_expr()?))
+                    } else {
+                        Ok(Stmt::EkspresiStmt(self.parse_expr()?))
+                    }
+                }
+            }
+            lain => Err(format!("Pernyataan tidak dikenal, ditemukan token: {:?}", lain)),
+        }
+    }
+
+    fn harap_identifier(&mut self) -> Result<String, String> {
+        match self.maju() { Token::Identifikator(s) => Ok(s), lain => Err(format!("Diharapkan nama identifier, tapi ditemukan {:?}", lain)) }
+    }
+
+    /// Parsing daftar "nama: Tipe, nama2: Tipe2" di dalam kurung parameter fungsi/closure --
+    /// diasumsikan '(' sudah dikonsumsi pemanggil, dan berhenti tepat sebelum ')'.
+    fn parse_daftar_parameter(&mut self) -> Result<Vec<(String, Option<String>)>, String> {
+        let mut params: Vec<(String, Option<String>)> = Vec::new();
+        if *self.sekarang() != Token::KurungTutup {
+            loop {
+                let pnama = self.harap_identifier()?;
+                let ptipe = if *self.sekarang() == Token::TitikDua { self.maju(); Some(self.harap_identifier()?) } else { None };
+                params.push((pnama, ptipe));
+                if *self.sekarang() == Token::Koma { self.maju(); } else { break; }
+            }
+        }
+        Ok(params)
+    }
+
+    fn parse_expr(&mut self) -> Result<Expr, String> { self.parse_or() }
+    fn parse_or(&mut self) -> Result<Expr, String> {
+        let mut kiri = self.parse_and()?;
+        while *self.sekarang() == Token::Atau { self.maju(); kiri = Expr::Binary(Box::new(kiri), BinOp::Atau, Box::new(self.parse_and()?)); }
+        Ok(kiri)
+    }
+    fn parse_and(&mut self) -> Result<Expr, String> {
+        let mut kiri = self.parse_equality()?;
+        while *self.sekarang() == Token::Dan { self.maju(); kiri = Expr::Binary(Box::new(kiri), BinOp::Dan, Box::new(self.parse_equality()?)); }
+        Ok(kiri)
+    }
+    fn parse_equality(&mut self) -> Result<Expr, String> {
+        let mut kiri = self.parse_comparison()?;
+        loop {
+            let op = match self.sekarang() { Token::SamaDenganDua => BinOp::SamaDengan, Token::TidakSama => BinOp::TidakSama, _ => break };
+            self.maju();
+            kiri = Expr::Binary(Box::new(kiri), op, Box::new(self.parse_comparison()?));
+        }
+        Ok(kiri)
+    }
+    fn parse_comparison(&mut self) -> Result<Expr, String> {
+        let mut kiri = self.parse_term()?;
+        loop {
+            let op = match self.sekarang() {
+                Token::LebihBesar => BinOp::LebihBesar, Token::LebihBesarSamaDengan => BinOp::LebihBesarSama,
+                Token::LebihKecil => BinOp::LebihKecil, Token::LebihKecilSamaDengan => BinOp::LebihKecilSama,
+                _ => break,
+            };
+            self.maju();
+            kiri = Expr::Binary(Box::new(kiri), op, Box::new(self.parse_term()?));
+        }
+        Ok(kiri)
+    }
+    fn parse_term(&mut self) -> Result<Expr, String> {
+        let mut kiri = self.parse_factor()?;
+        loop {
+            let op = match self.sekarang() { Token::Tambah => BinOp::Tambah, Token::Kurang => BinOp::Kurang, _ => break };
+            self.maju();
+            kiri = Expr::Binary(Box::new(kiri), op, Box::new(self.parse_factor()?));
+        }
+        Ok(kiri)
+    }
+    fn parse_factor(&mut self) -> Result<Expr, String> {
+        let mut kiri = self.parse_unary()?;
+        loop {
+            let op = match self.sekarang() { Token::Kali => BinOp::Kali, Token::Bagi => BinOp::Bagi, _ => break };
+            self.maju();
+            kiri = Expr::Binary(Box::new(kiri), op, Box::new(self.parse_unary()?));
+        }
+        Ok(kiri)
+    }
+    fn parse_unary(&mut self) -> Result<Expr, String> {
+        if *self.sekarang() == Token::Kurang {
+            self.maju();
+            let expr = self.parse_unary()?;
+            return Ok(Expr::Binary(Box::new(Expr::Angka(0)), BinOp::Kurang, Box::new(expr)));
+        }
+        let mut expr = self.parse_primary()?;
+        loop {
+            if *self.sekarang() == Token::KurungSikuBuka {
+                self.maju();
+                let idx = self.dalam_kurung(|p| p.parse_expr())?;
+                self.harap(&Token::KurungSikuTutup)?;
+                expr = Expr::Indeks(Box::new(expr), Box::new(idx));
+            } else if *self.sekarang() == Token::Titik {
+                self.maju();
+                let field = self.harap_identifier()?;
+                expr = Expr::Field(Box::new(expr), field);
+            } else {
+                break;
+            }
+        }
+        Ok(expr)
+    }
+    fn parse_primary(&mut self) -> Result<Expr, String> {
+        match self.maju() {
+            Token::Angka(n) => Ok(Expr::Angka(n)),
+            Token::AngkaDesimal(f) => Ok(Expr::Desimal(f)),
+            Token::Teks(s) => Ok(Expr::Teks(s)),
+            Token::Benar => Ok(Expr::Bool(true)),
+            Token::Salah => Ok(Expr::Bool(false)),
+            Token::Fungsi => {
+                self.harap(&Token::KurungBuka)?;
+                let params = self.dalam_kurung(|p| p.parse_daftar_parameter())?;
+                self.harap(&Token::KurungTutup)?;
+                Ok(Expr::FungsiLiteral(params, self.parse_block()?))
+            }
+            Token::Identifikator(nama) => {
+                if *self.sekarang() == Token::KurungBuka {
+                    self.maju();
+                    let mut args = Vec::new();
+                    if *self.sekarang() != Token::KurungTutup {
+                        loop {
+                            args.push(self.dalam_kurung(|p| p.parse_expr())?);
+                            if *self.sekarang() == Token::Koma { self.maju(); } else { break; }
+                        }
+                    }
+                    self.harap(&Token::KurungTutup)?;
+                    Ok(Expr::Panggil(nama, args))
+                } else if !self.no_literal && *self.sekarang() == Token::KurawalBuka {
+                    self.maju();
+                    let mut entries = Vec::new();
+                    if *self.sekarang() != Token::KurawalTutup {
+                        loop {
+                            let fnama = self.harap_identifier()?;
+                            self.harap(&Token::TitikDua)?;
+                            entries.push((fnama, self.dalam_kurung(|p| p.parse_expr())?));
+                            if *self.sekarang() == Token::Koma { self.maju(); } else { break; }
+                        }
+                    }
+                    self.harap(&Token::KurawalTutup)?;
+                    Ok(Expr::BentukLiteral(nama, entries))
+                } else { Ok(Expr::Ident(nama)) }
+            }
+            Token::KurungBuka => { let e = self.dalam_kurung(|p| p.parse_expr())?; self.harap(&Token::KurungTutup)?; Ok(e) }
+            Token::KurungSikuBuka => {
+                let mut elemen = Vec::new();
+                if *self.sekarang() != Token::KurungSikuTutup {
+                    loop {
+                        elemen.push(self.dalam_kurung(|p| p.parse_expr())?);
+                        if *self.sekarang() == Token::Koma { self.maju(); } else { break; }
+                    }
+                }
+                self.harap(&Token::KurungSikuTutup)?;
+                Ok(Expr::Daftar(elemen))
+            }
+            Token::KurawalBuka => {
+                let mut entries = Vec::new();
+                if *self.sekarang() != Token::KurawalTutup {
+                    loop {
+                        let kunci = match self.maju() { Token::Teks(s) => s, lain => return Err(format!("Kunci Peta harus berupa Teks, ditemukan {:?}", lain)) };
+                        self.harap(&Token::TitikDua)?;
+                        entries.push((kunci, self.dalam_kurung(|p| p.parse_expr())?));
+                        if *self.sekarang() == Token::Koma { self.maju(); } else { break; }
+                    }
+                }
+                self.harap(&Token::KurawalTutup)?;
+                Ok(Expr::Peta(entries))
+            }
+            lain => Err(format!("Ekspresi tidak valid, ditemukan token: {:?}", lain)),
+        }
+    }
+}
+
+// =====================================================================
+// 3. AST TERKOMPILASI (slot-based) & RESOLVER
+// =====================================================================
+
+#[derive(Debug, Clone)]
+pub enum CExpr {
+    Angka(i64), Desimal(f64), Teks(String), Bool(bool),
+    Global(usize), Local(usize),
+    Binary(Box<CExpr>, BinOp, Box<CExpr>),
+    Panggil(String, Vec<CExpr>),
+    Daftar(Vec<CExpr>),
+    Peta(Vec<(String, CExpr)>),
+    Indeks(Box<CExpr>, Box<CExpr>),
+    Field(Box<CExpr>, String),
+    /// Field sudah diurutkan & divalidasi lengkap terhadap skema 'bentuk' saat resolve --
+    /// jadi saat runtime tinggal dorong nilai sesuai urutan, tanpa perlu cek nama lagi.
+    BentukLiteral(String, Vec<(String, CExpr)>),
+    /// Literal closure: nama sintetis (terdaftar di fungsi_out via resolve_fungsi_umum, di-index
+    /// seperti fungsi biasa saat compile), + ekspresi buat ambil tiap nilai tangkapan SAAT INI
+    /// dari scope pembungkus (dievaluasi di tempat literalnya muncul, bukan di badan closure-nya).
+    FungsiLiteral(String, Vec<CExpr>),
+    /// Panggil NILAI (bukan nama fungsi statis) -- dipakai kalau target panggilan ternyata
+    /// sebuah variabel (kemungkinan berisi closure), bukan nama fungsi yang dikenal resolver.
+    PanggilNilai(Box<CExpr>, Vec<CExpr>),
+    /// Evaluasi ekspresi instans SEKALI, simpan salinannya ke slot sementara (buat dipakai
+    /// ekstraksi field-field berikutnya lewat CExpr::Local/Global ke slot yang sama), LALU
+    /// langsung ambil satu field darinya. Dipakai buat memanggil fungsi dengan parameter
+    /// "flattened" (lihat ekspansi_panggilan_args) ketika argumennya bukan variabel polos
+    /// (mis. panggilan fungsi lain atau literal 'bentuk' langsung) -- tanpa ini, ekspresinya
+    /// harus dievaluasi ulang per field, yang salah kalau ada efek samping/mahal.
+    SimpanLaluField(Box<CExpr>, SlotSasaran, String),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SlotSasaran { Lokal(usize), Global(usize) }
+
+#[derive(Debug, Clone)]
+pub enum CStmt {
+    IngatGlobal(usize, CExpr), UbahGlobal(usize, CExpr),
+    IngatLocal(usize, CExpr), UbahLocal(usize, CExpr),
+    UbahFieldGlobal(usize, Vec<String>, CExpr), UbahFieldLocal(usize, Vec<String>, CExpr),
+    Tampilkan(CExpr),
+    Kalau(CExpr, Vec<(usize, CStmt)>, Option<Vec<(usize, CStmt)>>),
+    Ulang(CExpr, Vec<(usize, CStmt)>),
+    UlangSetiapGlobal(usize, CExpr, Vec<(usize, CStmt)>),
+    UlangSetiapLocal(usize, CExpr, Vec<(usize, CStmt)>),
+    UlangSelaras(CExpr, String, Vec<(usize, Stmt)>),
+    CobaGlobal(Vec<(usize, CStmt)>, usize, Vec<(usize, CStmt)>),
+    CobaLocal(Vec<(usize, CStmt)>, usize, Vec<(usize, CStmt)>),
+    Kembalikan(CExpr),
+    EkspresiStmt(CExpr),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TipeJit { Angka, Desimal }
+
+fn tipe_jit_dari_nama(s: &str) -> Option<TipeJit> {
+    match s { "Angka" => Some(TipeJit::Angka), "Desimal" => Some(TipeJit::Desimal), _ => None }
+}
+
+/// Cek apakah sebuah fungsi "murni" secara sintaksis: cuma pakai konstruksi yang bisa
+/// diterjemahkan langsung ke instruksi mesin (aritmatika +,-,*, perbandingan, kalau/jika,
+/// ulang, dan rekursi ke dirinya sendiri saja). Tanpa pembagian (hindari trap div-by-nol
+/// di kode native), tanpa akses variabel global, tanpa panggil fungsi lain/builtin,
+/// tanpa Teks/Daftar/Peta. Kalau semua syarat ini + semua slot bertipe Angka terpenuhi,
+/// fungsi ini elig dikompilasi ke kode native lewat Cranelift (lihat JitEngine).
+/// Scan badan closure (AST mentah, sebelum resolve) buat kumpulkan nama variabel yang DIPAKAI
+/// tapi TIDAK diikat (dideklarasikan) di dalam badan itu sendiri -- kandidat variabel yang perlu
+/// ditangkap dari scope pembungkus. Boleh over-approximate (misal ikut catat nama fungsi statis
+/// yang dipanggil): itu aman, karena keputusan "beneran ditangkap atau enggak" ditentukan belakangan
+/// oleh LocalResolver (cuma nama yang memang ada di local_slots scope pembungkus yang ditangkap).
+fn variabel_bebas_stmt(s: &Stmt, terikat: &mut std::collections::HashSet<String>, bebas: &mut std::collections::HashSet<String>) {
+    match s {
+        Stmt::Ingat(nama, _, e) => { variabel_bebas_expr(e, terikat, bebas); terikat.insert(nama.clone()); }
+        Stmt::Ubah(nama, e) => { if !terikat.contains(nama) { bebas.insert(nama.clone()); } variabel_bebas_expr(e, terikat, bebas); }
+        Stmt::UbahField(nama, _, e) => { if !terikat.contains(nama) { bebas.insert(nama.clone()); } variabel_bebas_expr(e, terikat, bebas); }
+        Stmt::BentukDef(..) | Stmt::Muat(_) => {}
+        Stmt::Tampilkan(e) => variabel_bebas_expr(e, terikat, bebas),
+        Stmt::Kalau(c, tb, eb) => {
+            variabel_bebas_expr(c, terikat, bebas);
+            for (_, s) in tb { variabel_bebas_stmt(s, terikat, bebas); }
+            if let Some(eb) = eb { for (_, s) in eb { variabel_bebas_stmt(s, terikat, bebas); } }
+        }
+        Stmt::Ulang(c, b) => { variabel_bebas_expr(c, terikat, bebas); for (_, s) in b { variabel_bebas_stmt(s, terikat, bebas); } }
+        Stmt::UlangSetiap(var, e, b) | Stmt::UlangSelaras(var, e, b) => {
+            variabel_bebas_expr(e, terikat, bebas);
+            terikat.insert(var.clone());
+            for (_, s) in b { variabel_bebas_stmt(s, terikat, bebas); }
+        }
+        Stmt::FungsiDef(_, _, _) => { /* fungsi bernama bersarang gak didukung -- biar error normal muncul saat resolve sungguhan */ }
+        Stmt::Kembalikan(e) => variabel_bebas_expr(e, terikat, bebas),
+        Stmt::EkspresiStmt(e) => variabel_bebas_expr(e, terikat, bebas),
+        Stmt::Coba(bc, var, bt) => {
+            for (_, s) in bc { variabel_bebas_stmt(s, terikat, bebas); }
+            terikat.insert(var.clone());
+            for (_, s) in bt { variabel_bebas_stmt(s, terikat, bebas); }
+        }
+    }
+}
+
+fn variabel_bebas_expr(e: &Expr, terikat: &mut std::collections::HashSet<String>, bebas: &mut std::collections::HashSet<String>) {
+    match e {
+        Expr::Angka(_) | Expr::Desimal(_) | Expr::Teks(_) | Expr::Bool(_) => {}
+        Expr::Ident(nama) => { if !terikat.contains(nama) { bebas.insert(nama.clone()); } }
+        Expr::Binary(l, _, r) => { variabel_bebas_expr(l, terikat, bebas); variabel_bebas_expr(r, terikat, bebas); }
+        Expr::Panggil(nama, args) => {
+            // 'nama' bisa jadi nama fungsi statis ATAU variabel closure -- catat aja sebagai
+            // kandidat bebas, keputusan akhirnya di LocalResolver (lihat komentar di atas).
+            if !terikat.contains(nama) { bebas.insert(nama.clone()); }
+            for a in args { variabel_bebas_expr(a, terikat, bebas); }
+        }
+        Expr::Daftar(items) => { for i in items { variabel_bebas_expr(i, terikat, bebas); } }
+        Expr::Peta(entries) => { for (_, v) in entries { variabel_bebas_expr(v, terikat, bebas); } }
+        Expr::Indeks(t, i) => { variabel_bebas_expr(t, terikat, bebas); variabel_bebas_expr(i, terikat, bebas); }
+        Expr::Field(t, _) => variabel_bebas_expr(t, terikat, bebas),
+        Expr::BentukLiteral(_, entries) => { for (_, v) in entries { variabel_bebas_expr(v, terikat, bebas); } }
+        Expr::FungsiLiteral(params, body) => {
+            // Closure bersarang lagi di dalam closure -- scope sendiri (parameter closure dalam
+            // terikat lokal buat scan ini), tapi badannya tetap bisa merujuk variabel level ini,
+            // jadi tetap discan, bukan dilewati.
+            let sudah = terikat.clone();
+            for (p, _) in params { terikat.insert(p.clone()); }
+            for (_, s) in body { variabel_bebas_stmt(s, terikat, bebas); }
+            *terikat = sudah;
+        }
+    }
+}
+
+fn cek_jit_murni_stmt(s: &CStmt, nama_sendiri: &str, arity: usize, mode: TipeJit) -> bool {
+    match s {
+        CStmt::IngatLocal(_, e) | CStmt::UbahLocal(_, e) => cek_jit_murni_nilai(e, nama_sendiri, arity, mode),
+        CStmt::Kalau(c, tb, eb) => cek_jit_murni_kondisi(c, nama_sendiri, arity, mode)
+            && tb.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_sendiri, arity, mode))
+            && eb.as_ref().map_or(true, |b| b.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_sendiri, arity, mode))),
+        CStmt::Ulang(c, b) => cek_jit_murni_kondisi(c, nama_sendiri, arity, mode) && b.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_sendiri, arity, mode)),
+        CStmt::Kembalikan(e) => cek_jit_murni_nilai(e, nama_sendiri, arity, mode),
+        CStmt::EkspresiStmt(e) => cek_jit_murni_nilai(e, nama_sendiri, arity, mode),
+        _ => false, // IngatGlobal/UbahGlobal/UlangSetiap*/UlangSelaras/CobaGlobal/CobaLocal -> bukan fungsi murni
+    }
+}
+
+fn cek_jit_murni_nilai(e: &CExpr, nama_sendiri: &str, arity: usize, mode: TipeJit) -> bool {
+    match e {
+        CExpr::Local(_) => true,
+        // Literal Angka boleh muncul di kedua mode (di mode Desimal ia otomatis dipromosikan
+        // ke konstanta f64 saat codegen). Literal Desimal cuma sah kalau mode-nya Desimal.
+        CExpr::Angka(_) => true,
+        CExpr::Desimal(_) => mode == TipeJit::Desimal,
+        CExpr::Binary(l, op, r) => matches!(op, BinOp::Tambah | BinOp::Kurang | BinOp::Kali)
+            && cek_jit_murni_nilai(l, nama_sendiri, arity, mode) && cek_jit_murni_nilai(r, nama_sendiri, arity, mode),
+        CExpr::Panggil(nama, args) => nama == nama_sendiri && args.len() == arity && args.iter().all(|a| cek_jit_murni_nilai(a, nama_sendiri, arity, mode)),
+        _ => false, // Teks/Bool/Global/Daftar/Peta/Indeks/Field/BentukLiteral/Bagi/panggilan-lain -> bukan
+    }
+}
+
+fn cek_jit_murni_kondisi(e: &CExpr, nama_sendiri: &str, arity: usize, mode: TipeJit) -> bool {
+    match e {
+        CExpr::Binary(l, op, r) => match op {
+            BinOp::SamaDengan | BinOp::TidakSama | BinOp::LebihBesar | BinOp::LebihBesarSama
+            | BinOp::LebihKecil | BinOp::LebihKecilSama => cek_jit_murni_nilai(l, nama_sendiri, arity, mode) && cek_jit_murni_nilai(r, nama_sendiri, arity, mode),
+            BinOp::Dan | BinOp::Atau => cek_jit_murni_kondisi(l, nama_sendiri, arity, mode) && cek_jit_murni_kondisi(r, nama_sendiri, arity, mode),
+            _ => false,
+        },
+        // Kondisi yang sudah terlipat penuh jadi literal Bool oleh optimizer IR (mis. dari
+        // `1 < 2` di kode sumber) -- TANPA baris ini, fungsi yang tadinya elig JIT bisa jadi
+        // TIDAK elig lagi gara-gara optimizer terlalu pintar (regresi performa, walau tetap
+        // benar secara semantik lewat jalur bytecode). Lihat docs/IR.md.
+        CExpr::Bool(_) => true,
+        _ => false,
+    }
+}
+
+pub struct CFungsi {
+    param_count: usize,
+    local_slot_count: usize,
+    body: Vec<(usize, CStmt)>,
+    nama: String,
+    slot_tipe: Vec<Option<TipeJit>>,
+    /// Some(t) kalau fungsi ini "murni": semua parameter & variabel lokal bertipe SAMA (t),
+    /// baik semuanya Angka atau semuanya Desimal (gak campur), tanpa Teks/Bool/Daftar/Peta/Bentuk,
+    /// tanpa akses global, tanpa panggil fungsi lain selain dirinya sendiri (rekursi),
+    /// tanpa pembagian (hindari trap div-by-zero). Kalau Some, fungsi ini elig dikompilasi
+    /// JIT ke kode mesin asli lewat Cranelift, dengan t menentukan tipe Cranelift (I64/F64).
+    tipe_jit: Option<TipeJit>,
+    /// Per PARAMETER LOGIS (bukan slot -- lihat catatan di param_count), None kalau parameter
+    /// itu biasa (1 slot), Some((nama_bentuk, urutan_field)) kalau parameter itu instans 'bentuk'
+    /// yang SEMUA field-nya numerik (Angka/Desimal) -- di-"flatten" jadi beberapa slot lokal
+    /// berurutan (satu slot per field, tipe Cranelift mengikuti tipe field-nya), diakses langsung
+    /// tanpa lookup dinamis. Lihat komentar panjang di resolve_fungsi_umum soal cara kerjanya.
+    param_flat: Vec<Option<(String, Vec<String>)>>,
+}
+
+/// Inferensi tipe statis sederhana (gradual typing): mencoba menebak tipe hasil sebuah
+/// ekspresi HANYA kalau bisa dipastikan tanpa menjalankan program (literal, variabel
+/// bertipe diketahui, operasi aritmatika/logika di antara tipe yang diketahui). Kalau
+/// tidak bisa dipastikan (misal hasil panggilan fungsi, Daftar, Peta, indeks), kembalikan
+/// None -- itulah "gradual": bagian yang bertipe jelas dicek, bagian yang tidak jelas
+/// dibiarkan dinamis seperti biasa, tidak dipaksa.
+fn infer_tipe(e: &Expr, tipe_var: &HashMap<String, String>) -> Option<String> {
+    match e {
+        Expr::Angka(_) => Some("Angka".to_string()),
+        Expr::Desimal(_) => Some("Desimal".to_string()),
+        Expr::Teks(_) => Some("Teks".to_string()),
+        Expr::Bool(_) => Some("Bool".to_string()),
+        Expr::Ident(nama) => tipe_var.get(nama).cloned(),
+        Expr::Binary(l, op, r) => {
+            let tl = infer_tipe(l, tipe_var);
+            let tr = infer_tipe(r, tipe_var);
+            match op {
+                BinOp::SamaDengan | BinOp::TidakSama | BinOp::LebihBesar | BinOp::LebihBesarSama
+                | BinOp::LebihKecil | BinOp::LebihKecilSama | BinOp::Dan | BinOp::Atau => Some("Bool".to_string()),
+                BinOp::Tambah => match (tl.as_deref(), tr.as_deref()) {
+                    (Some("Teks"), _) | (_, Some("Teks")) => Some("Teks".to_string()),
+                    (Some("Angka"), Some("Angka")) => Some("Angka".to_string()),
+                    (Some("Angka"), Some("Desimal")) | (Some("Desimal"), Some("Angka")) | (Some("Desimal"), Some("Desimal")) => Some("Desimal".to_string()),
+                    _ => None,
+                },
+                BinOp::Kurang | BinOp::Kali | BinOp::Bagi => match (tl.as_deref(), tr.as_deref()) {
+                    (Some("Angka"), Some("Angka")) => Some("Angka".to_string()),
+                    (Some("Angka"), Some("Desimal")) | (Some("Desimal"), Some("Angka")) | (Some("Desimal"), Some("Desimal")) => Some("Desimal".to_string()),
+                    _ => None,
+                },
+            }
+        }
+        _ => None, // Panggil, Daftar, Peta, Indeks: tipe hasilnya tidak dicek statis (tetap dinamis)
+    }
+}
+
+fn cek_tipe(nama: &str, tipe_deklarasi: &str, e: &Expr, tipe_var: &HashMap<String, String>) -> Result<(), String> {
+    if let Some(tipe_aktual) = infer_tipe(e, tipe_var) {
+        if tipe_aktual != tipe_deklarasi {
+            return Err(format!(
+                "Kesalahan Tipe: variabel \"{}\" bertipe {}, tapi diberi nilai bertipe {}.",
+                nama, tipe_deklarasi, tipe_aktual
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub struct Resolver {
+    global_slots: HashMap<String, usize>, global_count: usize, fungsi_out: HashMap<String, Rc<CFungsi>>, tipe_var: HashMap<String, String>,
+    /// Skema tiap 'bentuk' yang dideklarasikan: nama field dalam urutan tetap + tipe opsionalnya.
+    /// Dikumpulkan lewat pre-pass di resolve_top() supaya bisa dipakai walau 'bentuk'-nya
+    /// dideklarasikan setelah dipakai (forward reference), sama seperti fungsi.
+    bentuk_skema: HashMap<String, Vec<(String, Option<String>)>>,
+    /// Penghitung buat nama sintetis unik closure ("<closure#N>"), dipakai baik oleh resolver
+    /// level atas maupun LocalResolver (closure bersarang) lewat referensi &mut yang sama.
+    closure_counter: usize,
+    /// Pre-scan (sebelum badan fungsi manapun diresolve, biar forward-reference tetap jalan)
+    /// dari nama fungsi -> info parameter mana yang "flattened" (lihat CFungsi::param_flat).
+    /// Dipakai saat meresolve PANGGILAN ke fungsi itu (bukan saat meresolve fungsi itu sendiri).
+    param_flat_info: HashMap<String, Vec<Option<(String, Vec<String>)>>>,
+}
+
+impl Resolver {
+    pub fn new() -> Self { Resolver { global_slots: HashMap::new(), global_count: 0, fungsi_out: HashMap::new(), tipe_var: HashMap::new(), bentuk_skema: HashMap::new(), closure_counter: 0, param_flat_info: HashMap::new() } }
+
+    fn slot_global(&mut self, nama: &str) -> usize {
+        if let Some(&i) = self.global_slots.get(nama) { i } else {
+            let i = self.global_count;
+            self.global_slots.insert(nama.to_string(), i);
+            self.global_count += 1;
+            i
+        }
+    }
+
+    pub fn resolve_top(&mut self, stmts: &[(usize, Stmt)]) -> Result<Vec<(usize, CStmt)>, String> {
+        for (_, s) in stmts {
+            if let Stmt::BentukDef(nama, fields) = s {
+                if self.bentuk_skema.contains_key(nama) {
+                    return Err(format!("Bentuk \"{}\" sudah dideklarasikan sebelumnya.", nama));
+                }
+                let mut nama_field_terlihat = std::collections::HashSet::new();
+                for (fnama, _) in fields {
+                    if !nama_field_terlihat.insert(fnama) {
+                        return Err(format!("Bentuk \"{}\": field \"{}\" dipakai lebih dari sekali.", nama, fnama));
+                    }
+                }
+                self.bentuk_skema.insert(nama.clone(), fields.clone());
+            }
+        }
+        for (_, s) in stmts {
+            if let Stmt::FungsiDef(nama, params, _) = s {
+                self.param_flat_info.insert(nama.clone(), hitung_param_flat(params, &self.bentuk_skema));
+            }
+        }
+        let mut out = Vec::new();
+        for (baris, s) in stmts {
+            match s {
+                Stmt::FungsiDef(nama, params, body) => {
+                    if self.fungsi_out.contains_key(nama) {
+                        return Err(format!("Fungsi \"{}\" sudah dideklarasikan sebelumnya.", nama));
+                    }
+                    let cf = resolve_fungsi_umum(nama, &[], params, body, &self.bentuk_skema, &self.global_slots, &self.param_flat_info, &mut self.fungsi_out, &mut self.closure_counter)?;
+                    self.fungsi_out.insert(nama.clone(), Rc::new(cf));
+                }
+                Stmt::BentukDef(..) => { /* sudah ditangani di pre-pass di atas */ }
+                lain => out.push((*baris, self.resolve_stmt_global(lain)?)),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Validasi & urutkan field literal 'Nama { ... }' sesuai skema 'bentuk'. Dipakai oleh
+    /// resolver global maupun lokal (logikanya sama, cuma resolve_expr-nya beda closure).
+    fn urutkan_field_bentuk<'a>(&self, nama: &str, entries: &'a [(String, Expr)]) -> Result<Vec<&'a Expr>, String> {
+        let skema = self.bentuk_skema.get(nama)
+            .ok_or_else(|| format!("Bentuk \"{}\" tidak dikenal. Apakah sudah dideklarasikan dengan 'bentuk'?", nama))?;
+        let mut fnama_terlihat = std::collections::HashSet::new();
+        for (fnama, _) in entries {
+            if !skema.iter().any(|(sn, _)| sn == fnama) {
+                return Err(format!("Bentuk \"{}\" tidak punya field \"{}\".", nama, fnama));
+            }
+            if !fnama_terlihat.insert(fnama) {
+                return Err(format!("Bentuk \"{}\": field \"{}\" diisi lebih dari sekali.", nama, fnama));
+            }
+        }
+        let mut hasil = Vec::with_capacity(skema.len());
+        for (sfnama, _) in skema {
+            let e = entries.iter().find(|(fnama, _)| fnama == sfnama)
+                .map(|(_, e)| e)
+                .ok_or_else(|| format!("Bentuk \"{}\" butuh field \"{}\" yang belum diisi.", nama, sfnama))?;
+            hasil.push(e);
+        }
+        Ok(hasil)
+    }
+
+    fn resolve_blok_global(&mut self, stmts: &[(usize, Stmt)]) -> Result<Vec<(usize, CStmt)>, String> {
+        stmts.iter().map(|(b, s)| Ok((*b, self.resolve_stmt_global(s)?))).collect()
+    }
+
+    fn resolve_stmt_global(&mut self, s: &Stmt) -> Result<CStmt, String> {
+        match s {
+            Stmt::Ingat(nama, tipe, e) => {
+                if let Some(t) = tipe {
+                    cek_tipe(nama, t, e, &self.tipe_var)?;
+                    self.tipe_var.insert(nama.clone(), t.clone());
+                } else {
+                    self.tipe_var.remove(nama);
+                }
+                // Kasus khusus 'ingat nama = fungsi(...) {...}': daftarkan slot 'nama' LEBIH
+                // DULU (sebelum resolve badan closure-nya), supaya closure top-level bisa
+                // rekursi ke dirinya sendiri lewat namanya. Ini aman karena isi slotnya
+                // dibaca LIVE lewat Global tiap closure dipanggil (bukan snapshot capture) --
+                // closure-nya baru "ada" di slot itu setelah statement ini selesai, tapi
+                // pemanggilan diri-sendiri baru kejadian belakangan (saat fungsinya dipanggil).
+                let (ce, slot) = if matches!(e, Expr::FungsiLiteral(..)) {
+                    let slot = self.slot_global(nama);
+                    (self.resolve_expr_global(e)?, slot)
+                } else {
+                    let ce = self.resolve_expr_global(e)?;
+                    (ce, self.slot_global(nama))
+                };
+                Ok(CStmt::IngatGlobal(slot, ce))
+            }
+            Stmt::Ubah(nama, e) => {
+                if let Some(t) = self.tipe_var.get(nama).cloned() {
+                    cek_tipe(nama, &t, e, &self.tipe_var)?;
+                }
+                let ce = self.resolve_expr_global(e)?;
+                let slot = *self.global_slots.get(nama).ok_or_else(|| format!("Variabel \"{}\" belum dideklarasikan dengan 'ingat'.", nama))?;
+                Ok(CStmt::UbahGlobal(slot, ce))
+            }
+            Stmt::Tampilkan(e) => Ok(CStmt::Tampilkan(self.resolve_expr_global(e)?)),
+            Stmt::Kalau(cond, tb, eb) => {
+                let c = self.resolve_expr_global(cond)?;
+                let t = self.resolve_blok_global(tb)?;
+                let e = match eb { Some(b) => Some(self.resolve_blok_global(b)?), None => None };
+                Ok(CStmt::Kalau(c, t, e))
+            }
+            Stmt::Ulang(cond, body) => {
+                let c = self.resolve_expr_global(cond)?;
+                let b = self.resolve_blok_global(body)?;
+                Ok(CStmt::Ulang(c, b))
+            }
+            Stmt::UlangSetiap(var, e, body) => {
+                let ce = self.resolve_expr_global(e)?;
+                let slot = self.slot_global(var);
+                let b = self.resolve_blok_global(body)?;
+                Ok(CStmt::UlangSetiapGlobal(slot, ce, b))
+            }
+            Stmt::UlangSelaras(var, e, body) => {
+                validasi_tubuh_selaras(body)?;
+                let ce = self.resolve_expr_global(e)?;
+                Ok(CStmt::UlangSelaras(ce, var.clone(), body.clone()))
+            }
+            Stmt::Coba(badan_coba, nama_var, badan_tangkap) => {
+                let bc = self.resolve_blok_global(badan_coba)?;
+                let slot = self.slot_global(nama_var);
+                let bt = self.resolve_blok_global(badan_tangkap)?;
+                Ok(CStmt::CobaGlobal(bc, slot, bt))
+            }
+            Stmt::Kembalikan(e) => Ok(CStmt::Kembalikan(self.resolve_expr_global(e)?)),
+            Stmt::EkspresiStmt(e) => Ok(CStmt::EkspresiStmt(self.resolve_expr_global(e)?)),
+            Stmt::UbahField(nama, field, e) => {
+                let ce = self.resolve_expr_global(e)?;
+                let slot = *self.global_slots.get(nama).ok_or_else(|| format!("Variabel \"{}\" belum dideklarasikan dengan 'ingat'.", nama))?;
+                Ok(CStmt::UbahFieldGlobal(slot, field.clone(), ce))
+            }
+            Stmt::FungsiDef(..) | Stmt::BentukDef(..) => unreachable!(),
+            Stmt::Muat(_) => Err("'muat' cuma boleh dipakai di level atas program (bukan di dalam kalau/ulang).".to_string()),
+        }
+    }
+
+    fn resolve_expr_global(&mut self, e: &Expr) -> Result<CExpr, String> {
+        match e {
+            Expr::Angka(n) => Ok(CExpr::Angka(*n)),
+            Expr::Desimal(f) => Ok(CExpr::Desimal(*f)),
+            Expr::Teks(s) => Ok(CExpr::Teks(s.clone())),
+            Expr::Bool(b) => Ok(CExpr::Bool(*b)),
+            Expr::Ident(nama) => {
+                let slot = *self.global_slots.get(nama).ok_or_else(|| format!("Variabel \"{}\" tidak ditemukan. Apakah sudah dideklarasikan dengan 'ingat'?", nama))?;
+                Ok(CExpr::Global(slot))
+            }
+            Expr::Binary(l, op, r) => Ok(CExpr::Binary(Box::new(self.resolve_expr_global(l)?), *op, Box::new(self.resolve_expr_global(r)?))),
+            Expr::Panggil(nama, args) => {
+                if let Some(&slot) = self.global_slots.get(nama) {
+                    // Ada variabel global bernama sama -- anggap itu closure yang mau dipanggil
+                    // sebagai NILAI (bukan nama fungsi statis). Konsisten dgn aturan shadowing biasa.
+                    let cargs: Vec<CExpr> = args.iter().map(|a| self.resolve_expr_global(a)).collect::<Result<_, _>>()?;
+                    Ok(CExpr::PanggilNilai(Box::new(CExpr::Global(slot)), cargs))
+                } else {
+                    let pfi = self.param_flat_info.clone();
+                    let info = pfi.get(nama);
+                    let mut cargs = Vec::new();
+                    for (i, a) in args.iter().enumerate() {
+                        let flat = info.and_then(|v| v.get(i)).and_then(|o| o.as_ref());
+                        match flat {
+                            Some((_, field_urut)) => {
+                                if let Expr::Ident(var_nama) = a {
+                                    for fnama in field_urut {
+                                        let fe = Expr::Field(Box::new(Expr::Ident(var_nama.clone())), fnama.clone());
+                                        cargs.push(self.resolve_expr_global(&fe)?);
+                                    }
+                                } else if field_urut.is_empty() {
+                                    self.resolve_expr_global(a)?;
+                                } else {
+                                    let ce_instans = self.resolve_expr_global(a)?;
+                                    self.closure_counter += 1;
+                                    let nama_slot = format!("<tmp#{}>", self.closure_counter);
+                                    let slot = self.slot_global(&nama_slot);
+                                    cargs.push(CExpr::SimpanLaluField(Box::new(ce_instans), SlotSasaran::Global(slot), field_urut[0].clone()));
+                                    for fnama in &field_urut[1..] {
+                                        cargs.push(CExpr::Field(Box::new(CExpr::Global(slot)), fnama.clone()));
+                                    }
+                                }
+                            }
+                            None => cargs.push(self.resolve_expr_global(a)?),
+                        }
+                    }
+                    Ok(CExpr::Panggil(nama.clone(), cargs))
+                }
+            }
+            Expr::Daftar(items) => Ok(CExpr::Daftar(items.iter().map(|i| self.resolve_expr_global(i)).collect::<Result<_, _>>()?)),
+            Expr::Peta(entries) => {
+                let mut out = Vec::new();
+                for (k, v) in entries { out.push((k.clone(), self.resolve_expr_global(v)?)); }
+                Ok(CExpr::Peta(out))
+            }
+            Expr::Indeks(t, i) => Ok(CExpr::Indeks(Box::new(self.resolve_expr_global(t)?), Box::new(self.resolve_expr_global(i)?))),
+            Expr::Field(t, f) => Ok(CExpr::Field(Box::new(self.resolve_expr_global(t)?), f.clone())),
+            Expr::BentukLiteral(nama, entries) => {
+                let terurut = self.urutkan_field_bentuk(nama, entries)?;
+                let skema = self.bentuk_skema.get(nama).unwrap().clone();
+                let mut out = Vec::with_capacity(terurut.len());
+                for (e, (fnama, ftipe)) in terurut.into_iter().zip(skema.iter()) {
+                    if let Some(t) = ftipe { cek_tipe(fnama, t, e, &self.tipe_var)?; }
+                    out.push((fnama.clone(), self.resolve_expr_global(e)?));
+                }
+                Ok(CExpr::BentukLiteral(nama.clone(), out))
+            }
+            Expr::FungsiLiteral(params, body) => {
+                self.closure_counter += 1;
+                let nama_sintetis = format!("<closure#{}>", self.closure_counter);
+                let cf = resolve_fungsi_umum(&nama_sintetis, &[], params, body, &self.bentuk_skema, &self.global_slots, &self.param_flat_info, &mut self.fungsi_out, &mut self.closure_counter)?;
+                self.fungsi_out.insert(nama_sintetis.clone(), Rc::new(cf));
+                Ok(CExpr::FungsiLiteral(nama_sintetis, Vec::new()))
+            }
+        }
+    }
+
+}
+
+/// Resolve isi SATU fungsi jadi CFungsi siap-compile -- dipakai baik buat 'fungsi' bernama
+/// biasa (tangkapan_nama kosong) MAUPUN closure/fungsi anonim (tangkapan_nama berisi nama
+/// variabel yang ditangkap dari scope pembungkus). Tangkapan menempati slot lokal PALING AWAL
+/// (0..K-1), baru disusul parameter eksplisit (K..K+P-1) -- jadi dari sudut pandang konvensi
+/// panggilan, tangkapan+parameter itu SATU larik argumen yang sama seperti fungsi biasa.
+/// Sengaja fungsi bebas (bukan method Resolver) supaya bisa dipanggil dari dalam LocalResolver
+/// (buat closure bersarang) tanpa konflik peminjaman &mut self.
+/// Untuk tiap parameter di `params`, tentukan apakah ia "flattenable": tipe-nya menunjuk ke
+/// sebuah 'bentuk' yang SEMUA field-nya bertipe numerik (Angka/Desimal). Kalau ya, hasilkan
+/// Some((nama_bentuk, urutan_field)); kalau bukan (bukan bentuk, bentuk gak dikenal, atau ada
+/// field non-numerik), None -- parameter itu tetap 1 slot biasa (instans 'bentuk' opak, akses
+/// field lewat jalur dinamis seperti biasa, gak dapat percepatan JIT tapi tetap benar).
+fn hitung_param_flat(
+    params: &[(String, Option<String>)],
+    bentuk_skema: &HashMap<String, Vec<(String, Option<String>)>>,
+) -> Vec<Option<(String, Vec<String>)>> {
+    params.iter().map(|(_, ptipe)| {
+        let tipe = ptipe.as_ref()?;
+        let skema = bentuk_skema.get(tipe)?;
+        let semua_numerik = skema.iter().all(|(_, ftipe)| ftipe.as_deref().and_then(tipe_jit_dari_nama).is_some());
+        if semua_numerik {
+            Some((tipe.clone(), skema.iter().map(|(fnama, _)| fnama.clone()).collect()))
+        } else {
+            None
+        }
+    }).collect()
+}
+
+
+fn resolve_fungsi_umum(
+    nama_fungsi: &str,
+    tangkapan_nama: &[String],
+    params: &[(String, Option<String>)],
+    body: &[(usize, Stmt)],
+    bentuk_skema: &HashMap<String, Vec<(String, Option<String>)>>,
+    global_slots: &HashMap<String, usize>,
+    param_flat_info: &HashMap<String, Vec<Option<(String, Vec<String>)>>>,
+    fungsi_out: &mut HashMap<String, Rc<CFungsi>>,
+    closure_counter: &mut usize,
+) -> Result<CFungsi, String> {
+    let mut local_slots: HashMap<String, usize> = HashMap::new();
+    let mut struct_params: HashMap<String, (usize, Vec<String>)> = HashMap::new();
+    let mut slot_tipe: Vec<Option<TipeJit>> = Vec::new();
+    let mut tipe_var: HashMap<String, String> = HashMap::new();
+    let mut local_count = 0usize;
+    for tnama in tangkapan_nama {
+        local_slots.insert(tnama.clone(), local_count);
+        slot_tipe.push(None); // tipe tangkapan gak dilacak eksplisit -- kalau ada tangkapan, fungsi ini otomatis gak eligible JIT (lihat tipe_seragam di bawah)
+        local_count += 1;
+    }
+    // Info parameter mana yang "flattened" (instans bentuk numerik-murni, lihat CFungsi::param_flat)
+    // -- untuk fungsi bernama biasa, ini sudah di-pre-scan (forward-reference aman); closure gak
+    // pernah muncul di pre-scan itu, jadi defaultnya semua None (closure gak dukung flattening).
+    let param_flat: Vec<Option<(String, Vec<String>)>> = param_flat_info.get(nama_fungsi).cloned()
+        .unwrap_or_else(|| vec![None; params.len()]);
+    for ((pnama, ptipe), flat) in params.iter().zip(param_flat.iter()) {
+        if local_slots.contains_key(pnama) || struct_params.contains_key(pnama) {
+            return Err(format!("Fungsi \"{}\": parameter \"{}\" dipakai lebih dari sekali.", nama_fungsi, pnama));
+        }
+        match flat {
+            Some((bentuk_nama, field_urut)) => {
+                // Parameter instans 'bentuk' numerik-murni -- "flatten" jadi beberapa slot lokal
+                // berurutan (1 slot per field), bukan 1 slot berisi Value::Instans opak. Field-nya
+                // cuma bisa diakses lewat 'param.field' (lihat resolve Expr::Field di bawah) --
+                // nama parameternya sendiri SENGAJA gak didaftarkan sebagai variabel biasa,
+                // jadi 'param' telanjang (tanpa .field) gak sah dipakai.
+                let base = local_count;
+                let skema = bentuk_skema.get(bentuk_nama)
+                    .ok_or_else(|| format!("Fungsi \"{}\": bentuk \"{}\" tidak dikenal.", nama_fungsi, bentuk_nama))?;
+                for fnama in field_urut {
+                    let ftipe = skema.iter().find(|(sn, _)| sn == fnama).and_then(|(_, t)| t.as_deref()).and_then(tipe_jit_dari_nama);
+                    slot_tipe.push(ftipe);
+                    local_count += 1;
+                }
+                struct_params.insert(pnama.clone(), (base, field_urut.clone()));
+            }
+            None => {
+                local_slots.insert(pnama.clone(), local_count);
+                slot_tipe.push(ptipe.as_deref().and_then(tipe_jit_dari_nama));
+                if let Some(t) = ptipe { tipe_var.insert(pnama.clone(), t.clone()); }
+                local_count += 1;
+            }
+        }
+    }
+    let param_count = local_count; // total SLOT (bukan parameter logis) yang diisi pemanggil
+    let mut lr = LocalResolver { local_slots, struct_params, local_count, tipe_var, slot_tipe, bentuk_skema, global_slots, param_flat_info, fungsi_out, closure_counter };
+    let cbody = lr.resolve_block(body)?;
+
+    let tipe_seragam: Option<TipeJit> = if param_count == 0 {
+        None
+    } else if lr.slot_tipe.iter().all(|t| *t == Some(TipeJit::Angka)) {
+        Some(TipeJit::Angka)
+    } else if lr.slot_tipe.iter().all(|t| *t == Some(TipeJit::Desimal)) {
+        Some(TipeJit::Desimal)
+    } else {
+        None
+    };
+    let tipe_jit = tipe_seragam.filter(|t| cbody.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_fungsi, param_count, *t)));
+
+    Ok(CFungsi {
+        param_count,
+        local_slot_count: lr.local_count,
+        body: cbody,
+        nama: nama_fungsi.to_string(),
+        slot_tipe: lr.slot_tipe,
+        tipe_jit,
+        param_flat,
+    })
+}
+
+struct LocalResolver<'a> {
+    local_slots: HashMap<String, usize>, local_count: usize, tipe_var: HashMap<String, String>, slot_tipe: Vec<Option<TipeJit>>,
+    /// Parameter fungsi INI SENDIRI yang "flattened" (lihat CFungsi::param_flat) -- nama param ->
+    /// (slot dasar, urutan nama field). Field-nya diakses langsung lewat slot (base+indeks_field),
+    /// param-nya SENGAJA gak masuk `local_slots` (bare identifier tanpa .field gak sah dipakai).
+    struct_params: HashMap<String, (usize, Vec<String>)>,
+    bentuk_skema: &'a HashMap<String, Vec<(String, Option<String>)>>,
+    /// Fallback baca variabel GLOBAL dari dalam badan fungsi/closure (sebelumnya gak didukung
+    /// sama sekali). Global harus sudah dideklarasikan LEBIH DULU secara tekstual (sama seperti
+    /// aturan 'ingat' di level atas -- gak ada forward-reference buat variabel, beda dari
+    /// fungsi/bentuk yang di-pre-pass).
+    global_slots: &'a HashMap<String, usize>,
+    /// Info parameter "flattened" milik SEMUA fungsi bernama (bukan cuma fungsi ini sendiri) --
+    /// dipakai saat meresolve PANGGILAN ke fungsi lain, biar argumen di posisi yang di-flatten
+    /// bisa dipecah jadi beberapa CExpr::Field/Local, bukan 1 nilai instans opak.
+    param_flat_info: &'a HashMap<String, Vec<Option<(String, Vec<String>)>>>,
+    /// Dua field ini dibawa turun dari Resolver level atas (lewat resolve_fungsi_umum) supaya
+    /// closure yang didefinisikan DI DALAM fungsi ini juga bisa terdaftar dgn nama sintetis unik.
+    fungsi_out: &'a mut HashMap<String, Rc<CFungsi>>,
+    closure_counter: &'a mut usize,
+}
+
+impl<'a> LocalResolver<'a> {
+    fn urutkan_field_bentuk<'b>(&self, nama: &str, entries: &'b [(String, Expr)]) -> Result<Vec<&'b Expr>, String> {
+        let skema = self.bentuk_skema.get(nama)
+            .ok_or_else(|| format!("Bentuk \"{}\" tidak dikenal. Apakah sudah dideklarasikan dengan 'bentuk'?", nama))?;
+        let mut fnama_terlihat = std::collections::HashSet::new();
+        for (fnama, _) in entries {
+            if !skema.iter().any(|(sn, _)| sn == fnama) {
+                return Err(format!("Bentuk \"{}\" tidak punya field \"{}\".", nama, fnama));
+            }
+            if !fnama_terlihat.insert(fnama) {
+                return Err(format!("Bentuk \"{}\": field \"{}\" diisi lebih dari sekali.", nama, fnama));
+            }
+        }
+        let mut hasil = Vec::with_capacity(skema.len());
+        for (sfnama, _) in skema {
+            let e = entries.iter().find(|(fnama, _)| fnama == sfnama)
+                .map(|(_, e)| e)
+                .ok_or_else(|| format!("Bentuk \"{}\" butuh field \"{}\" yang belum diisi.", nama, sfnama))?;
+            hasil.push(e);
+        }
+        Ok(hasil)
+    }
+    fn slot_local(&mut self, nama: &str) -> usize {
+        if let Some(&i) = self.local_slots.get(nama) { i } else {
+            let i = self.local_count;
+            self.local_slots.insert(nama.to_string(), i);
+            self.local_count += 1;
+            self.slot_tipe.push(None);
+            i
+        }
+    }
+    fn resolve_block(&mut self, stmts: &[(usize, Stmt)]) -> Result<Vec<(usize, CStmt)>, String> {
+        stmts.iter().map(|(b, s)| Ok((*b, self.resolve_stmt(s)?))).collect()
+    }
+    fn resolve_stmt(&mut self, s: &Stmt) -> Result<CStmt, String> {
+        match s {
+            Stmt::Ingat(nama, tipe, e) => {
+                if let Some(t) = tipe {
+                    cek_tipe(nama, t, e, &self.tipe_var)?;
+                    self.tipe_var.insert(nama.clone(), t.clone());
+                } else {
+                    self.tipe_var.remove(nama);
+                }
+                let ce = self.resolve_expr(e)?;
+                let slot = self.slot_local(nama);
+                if let Some(t) = tipe { self.slot_tipe[slot] = tipe_jit_dari_nama(t); }
+                Ok(CStmt::IngatLocal(slot, ce))
+            }
+            Stmt::Ubah(nama, e) => {
+                if let Some(t) = self.tipe_var.get(nama).cloned() {
+                    cek_tipe(nama, &t, e, &self.tipe_var)?;
+                }
+                let ce = self.resolve_expr(e)?;
+                if let Some(&slot) = self.local_slots.get(nama) {
+                    Ok(CStmt::UbahLocal(slot, ce))
+                } else if let Some(&slot) = self.global_slots.get(nama) {
+                    Ok(CStmt::UbahGlobal(slot, ce))
+                } else {
+                    Err(format!("Variabel \"{}\" belum dideklarasikan dengan 'ingat'.", nama))
+                }
+            }
+            Stmt::Tampilkan(e) => Ok(CStmt::Tampilkan(self.resolve_expr(e)?)),
+            Stmt::Kalau(cond, tb, eb) => {
+                let c = self.resolve_expr(cond)?;
+                let t = self.resolve_block(tb)?;
+                let e = match eb { Some(b) => Some(self.resolve_block(b)?), None => None };
+                Ok(CStmt::Kalau(c, t, e))
+            }
+            Stmt::Ulang(cond, body) => { let c = self.resolve_expr(cond)?; let b = self.resolve_block(body)?; Ok(CStmt::Ulang(c, b)) }
+            Stmt::UlangSetiap(var, e, body) => {
+                let ce = self.resolve_expr(e)?;
+                let slot = self.slot_local(var);
+                let b = self.resolve_block(body)?;
+                Ok(CStmt::UlangSetiapLocal(slot, ce, b))
+            }
+            Stmt::UlangSelaras(var, e, body) => {
+                validasi_tubuh_selaras(body)?;
+                let ce = self.resolve_expr(e)?;
+                Ok(CStmt::UlangSelaras(ce, var.clone(), body.clone()))
+            }
+            Stmt::Coba(badan_coba, nama_var, badan_tangkap) => {
+                let bc = self.resolve_block(badan_coba)?;
+                let slot = self.slot_local(nama_var);
+                let bt = self.resolve_block(badan_tangkap)?;
+                Ok(CStmt::CobaLocal(bc, slot, bt))
+            }
+            Stmt::Kembalikan(e) => Ok(CStmt::Kembalikan(self.resolve_expr(e)?)),
+            Stmt::EkspresiStmt(e) => Ok(CStmt::EkspresiStmt(self.resolve_expr(e)?)),
+            Stmt::UbahField(nama, field, e) => {
+                let ce = self.resolve_expr(e)?;
+                if let Some(&slot) = self.local_slots.get(nama) {
+                    Ok(CStmt::UbahFieldLocal(slot, field.clone(), ce))
+                } else if let Some(&slot) = self.global_slots.get(nama) {
+                    Ok(CStmt::UbahFieldGlobal(slot, field.clone(), ce))
+                } else {
+                    Err(format!("Variabel \"{}\" belum dideklarasikan dengan 'ingat'.", nama))
+                }
+            }
+            Stmt::FungsiDef(..) => Err("Fungsi di dalam fungsi belum didukung di Fase ini.".to_string()),
+            Stmt::BentukDef(..) => Err("'bentuk' hanya boleh dideklarasikan di level atas program.".to_string()),
+            Stmt::Muat(_) => Err("'muat' cuma boleh dipakai di level atas program (bukan di dalam fungsi).".to_string()),
+        }
+    }
+    fn resolve_expr(&mut self, e: &Expr) -> Result<CExpr, String> {
+        match e {
+            Expr::Angka(n) => Ok(CExpr::Angka(*n)),
+            Expr::Desimal(f) => Ok(CExpr::Desimal(*f)),
+            Expr::Teks(s) => Ok(CExpr::Teks(s.clone())),
+            Expr::Bool(b) => Ok(CExpr::Bool(*b)),
+            Expr::Ident(nama) => {
+                if let Some(&slot) = self.local_slots.get(nama) {
+                    Ok(CExpr::Local(slot))
+                } else if let Some(&slot) = self.global_slots.get(nama) {
+                    Ok(CExpr::Global(slot))
+                } else if self.struct_params.contains_key(nama) {
+                    Err(format!("Parameter \"{}\" adalah bentuk yang di-flatten untuk performa -- cuma bisa dipakai lewat \"{}.nama_field\", gak bisa dipakai sebagai nilai utuh.", nama, nama))
+                } else {
+                    Err(format!("Variabel \"{}\" tidak ditemukan (bukan parameter/lokal fungsi ini, bukan juga variabel global).", nama))
+                }
+            }
+            Expr::Binary(l, op, r) => Ok(CExpr::Binary(Box::new(self.resolve_expr(l)?), *op, Box::new(self.resolve_expr(r)?))),
+            Expr::Panggil(nama, args) => {
+                if let Some(&slot) = self.local_slots.get(nama) {
+                    let cargs: Vec<CExpr> = args.iter().map(|a| self.resolve_expr(a)).collect::<Result<_, _>>()?;
+                    Ok(CExpr::PanggilNilai(Box::new(CExpr::Local(slot)), cargs))
+                } else if let Some(&slot) = self.global_slots.get(nama) {
+                    let cargs: Vec<CExpr> = args.iter().map(|a| self.resolve_expr(a)).collect::<Result<_, _>>()?;
+                    Ok(CExpr::PanggilNilai(Box::new(CExpr::Global(slot)), cargs))
+                } else {
+                    let pfi = self.param_flat_info.clone();
+                    let info = pfi.get(nama);
+                    let mut cargs = Vec::new();
+                    for (i, a) in args.iter().enumerate() {
+                        let flat = info.and_then(|v| v.get(i)).and_then(|o| o.as_ref());
+                        match flat {
+                            Some((_, field_urut)) => {
+                                if let Expr::Ident(var_nama) = a {
+                                    for fnama in field_urut {
+                                        let fe = Expr::Field(Box::new(Expr::Ident(var_nama.clone())), fnama.clone());
+                                        cargs.push(self.resolve_expr(&fe)?);
+                                    }
+                                } else if field_urut.is_empty() {
+                                    self.resolve_expr(a)?;
+                                } else {
+                                    let ce_instans = self.resolve_expr(a)?;
+                                    let slot = self.local_count;
+                                    self.slot_tipe.push(None); // temp menampung instans 'bentuk', bukan skalar -- otomatis gak seragam-tipe (JIT pemanggil ini nonaktif kalau lewat jalur ini)
+                                    self.local_count += 1;
+                                    cargs.push(CExpr::SimpanLaluField(Box::new(ce_instans), SlotSasaran::Lokal(slot), field_urut[0].clone()));
+                                    for fnama in &field_urut[1..] {
+                                        cargs.push(CExpr::Field(Box::new(CExpr::Local(slot)), fnama.clone()));
+                                    }
+                                }
+                            }
+                            None => cargs.push(self.resolve_expr(a)?),
+                        }
+                    }
+                    Ok(CExpr::Panggil(nama.clone(), cargs))
+                }
+            }
+            Expr::Daftar(items) => Ok(CExpr::Daftar(items.iter().map(|i| self.resolve_expr(i)).collect::<Result<_, _>>()?)),
+            Expr::Peta(entries) => {
+                let mut out = Vec::new();
+                for (k, v) in entries { out.push((k.clone(), self.resolve_expr(v)?)); }
+                Ok(CExpr::Peta(out))
+            }
+            Expr::Indeks(t, i) => Ok(CExpr::Indeks(Box::new(self.resolve_expr(t)?), Box::new(self.resolve_expr(i)?))),
+            Expr::Field(t, f) => {
+                // Kalau basisnya identifier telanjang & itu parameter "flattened" milik fungsi
+                // ini sendiri, akses field-nya langsung ke slot lokal (murah, ramah-JIT) --
+                // bukan lewat CExpr::Field dinamis. Lihat komentar struct_params & param_flat.
+                if let Expr::Ident(nama) = t.as_ref() {
+                    if let Some((base, field_urut)) = self.struct_params.get(nama) {
+                        let idx = field_urut.iter().position(|fn_| fn_ == f)
+                            .ok_or_else(|| format!("Bentuk parameter \"{}\" tidak punya field \"{}\".", nama, f))?;
+                        return Ok(CExpr::Local(base + idx));
+                    }
+                }
+                Ok(CExpr::Field(Box::new(self.resolve_expr(t)?), f.clone()))
+            }
+            Expr::BentukLiteral(nama, entries) => {
+                let terurut = self.urutkan_field_bentuk(nama, entries)?;
+                let skema = self.bentuk_skema.get(nama).unwrap().clone();
+                let mut out = Vec::with_capacity(terurut.len());
+                for (e, (fnama, ftipe)) in terurut.into_iter().zip(skema.iter()) {
+                    if let Some(t) = ftipe { cek_tipe(fnama, t, e, &self.tipe_var)?; }
+                    out.push((fnama.clone(), self.resolve_expr(e)?));
+                }
+                Ok(CExpr::BentukLiteral(nama.clone(), out))
+            }
+            Expr::FungsiLiteral(params, body) => {
+                // 1. Cari variabel bebas di badan closure (dipakai tapi bukan parameter closure
+                //    sendiri / bukan dideklarasikan sendiri di dalam badannya).
+                let mut terikat: std::collections::HashSet<String> = params.iter().map(|(n, _)| n.clone()).collect();
+                let mut bebas: std::collections::HashSet<String> = std::collections::HashSet::new();
+                for (_, s) in body { variabel_bebas_stmt(s, &mut terikat, &mut bebas); }
+
+                // 2. Dari variabel bebas itu, yang beneran perlu ditangkap cuma yang memang ADA
+                //    di local_slots milik fungsi/closure PEMBUNGKUS ini (kalau bukan, nanti coba
+                //    diresolve sebagai fungsi statis/builtin seperti biasa saat badan closure-nya
+                //    sendiri diresolve secara rekursif).
+                let mut tangkapan_nama: Vec<String> = Vec::new();
+                let mut tangkapan_slot_induk: Vec<usize> = Vec::new();
+                for nama in &bebas {
+                    if let Some(&slot) = self.local_slots.get(nama) {
+                        tangkapan_nama.push(nama.clone());
+                        tangkapan_slot_induk.push(slot);
+                    }
+                }
+
+                // 3. Resolve badan closure jadi CFungsi baru & daftarkan dgn nama sintetis unik.
+                *self.closure_counter += 1;
+                let nama_sintetis = format!("<closure#{}>", *self.closure_counter);
+                let cf = resolve_fungsi_umum(&nama_sintetis, &tangkapan_nama, params, body, self.bentuk_skema, self.global_slots, self.param_flat_info, self.fungsi_out, self.closure_counter)?;
+                self.fungsi_out.insert(nama_sintetis.clone(), Rc::new(cf));
+
+                // 4. Ekspresi buat ambil nilai tangkapan SAAT INI (snapshot dari slot lokal milik
+                //    fungsi pembungkus, dievaluasi di titik literal closure-nya muncul).
+                let tangkapan_exprs: Vec<CExpr> = tangkapan_slot_induk.iter().map(|&s| CExpr::Local(s)).collect();
+                Ok(CExpr::FungsiLiteral(nama_sintetis, tangkapan_exprs))
+            }
+        }
+    }
+}
+
+// =====================================================================
+// 4. NILAI
+// =====================================================================
+
+#[derive(Debug, Clone)]
+pub enum Value {
+    Angka(i64), Desimal(f64), Teks(Rc<str>), Bool(bool),
+    Daftar(Rc<Vec<Value>>), Peta(Rc<Vec<(String, Value)>>), Kosong,
+    /// Instans dari sebuah 'bentuk': nama bentuk + pasangan (field, nilai) sesuai urutan skema.
+    /// Representasinya mirip Peta (immutable, clone-on-write) supaya konsisten dengan sisa
+    /// bahasa -- tapi field-nya sudah tervalidasi lengkap sejak konstruksi (lihat resolver).
+    Instans(Rc<str>, Rc<Vec<(String, Value)>>),
+    /// Nilai fungsi (dihasilkan literal 'fungsi(...) {...}') -- bisa disimpan di variabel,
+    /// dilewatkan sebagai argumen, dst. `idx` menunjuk ke VMFungsi terkompilasi di Pustaka::fungsi,
+    /// `tangkapan` adalah snapshot NILAI (bukan referensi hidup) variabel yang ditangkap dari
+    /// scope pembungkus saat closure ini dibuat -- lihat komentar resolve_fungsi_umum().
+    Fungsi(Rc<NilaiFungsi>),
+}
+
+#[derive(Debug)]
+pub struct NilaiFungsi { idx: usize, tangkapan: Vec<Value> }
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Value::Angka(n) => write!(f, "{}", n),
+            Value::Desimal(x) => if x.fract() == 0.0 && x.is_finite() { write!(f, "{:.1}", x) } else { write!(f, "{}", x) },
+            Value::Teks(s) => write!(f, "{}", s),
+            Value::Bool(b) => write!(f, "{}", if *b { "benar" } else { "salah" }),
+            Value::Daftar(items) => {
+                write!(f, "[")?;
+                for (i, v) in items.iter().enumerate() { if i > 0 { write!(f, ", ")?; } write!(f, "{}", v)?; }
+                write!(f, "]")
+            }
+            Value::Peta(entries) => {
+                write!(f, "{{")?;
+                for (i, (k, v)) in entries.iter().enumerate() { if i > 0 { write!(f, ", ")?; } write!(f, "\"{}\": {}", k, v)?; }
+                write!(f, "}}")
+            }
+            Value::Kosong => write!(f, "kosong"),
+            Value::Instans(nama, entries) => {
+                write!(f, "{} {{", nama)?;
+                for (i, (k, v)) in entries.iter().enumerate() { if i > 0 { write!(f, ", ")?; } write!(f, "{}: {}", k, v)?; }
+                write!(f, "}}")
+            }
+            Value::Fungsi(_) => write!(f, "<fungsi>"),
+        }
+    }
+}
+
+impl Value {
+    fn truthy(&self) -> bool {
+        match self {
+            Value::Bool(b) => *b,
+            Value::Angka(n) => *n != 0,
+            Value::Desimal(x) => *x != 0.0,
+            Value::Teks(s) => !s.is_empty(),
+            Value::Daftar(d) => !d.is_empty(),
+            Value::Peta(p) => !p.is_empty(),
+            Value::Kosong => false,
+            Value::Instans(..) => true,
+            Value::Fungsi(..) => true,
+        }
+    }
+}
+
+fn ke_desimal(v: &Value) -> Option<f64> { match v { Value::Angka(n) => Some(*n as f64), Value::Desimal(f) => Some(*f), _ => None } }
+
+fn nilai_sama(l: &Value, r: &Value) -> bool {
+    match (l, r) {
+        (Value::Angka(a), Value::Angka(b)) => a == b,
+        (Value::Desimal(a), Value::Desimal(b)) => a == b,
+        (Value::Angka(a), Value::Desimal(b)) | (Value::Desimal(b), Value::Angka(a)) => (*a as f64) == *b,
+        (Value::Teks(a), Value::Teks(b)) => a == b,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Daftar(a), Value::Daftar(b)) => a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| nilai_sama(x, y)),
+        (Value::Peta(a), Value::Peta(b)) => a.len() == b.len() && a.iter().all(|(k, v)| b.iter().any(|(k2, v2)| k == k2 && nilai_sama(v, v2))),
+        (Value::Kosong, Value::Kosong) => true,
+        (Value::Instans(na, a), Value::Instans(nb, b)) => na == nb && a.len() == b.len() && a.iter().zip(b.iter()).all(|((ka, va), (kb, vb))| ka == kb && nilai_sama(va, vb)),
+        _ => false,
+    }
+}
+
+fn bandingkan(l: Value, r: Value, f: impl Fn(f64, f64) -> bool) -> Result<Value, String> {
+    match (ke_desimal(&l), ke_desimal(&r)) {
+        (Some(a), Some(b)) => Ok(Value::Bool(f(a, b))),
+        _ => Err(format!("Perbandingan hanya berlaku untuk Angka, ditemukan {} dan {}", l, r)),
+    }
+}
+
+fn eval_binop(l: Value, op: BinOp, r: Value) -> Result<Value, String> {
+    use BinOp::*;
+    match op {
+        Tambah => match (&l, &r) {
+            (Value::Teks(_), _) | (_, Value::Teks(_)) => Ok(Value::Teks(format!("{}{}", l, r).into())),
+            (Value::Angka(a), Value::Angka(b)) => Ok(Value::Angka(a + b)),
+            (Value::Angka(_), Value::Desimal(_)) | (Value::Desimal(_), Value::Angka(_)) | (Value::Desimal(_), Value::Desimal(_)) => {
+                Ok(Value::Desimal(ke_desimal(&l).unwrap() + ke_desimal(&r).unwrap()))
+            }
+            _ => Err(format!("Tidak bisa menjumlahkan {} dengan {}", l, r)),
+        },
+        Kurang => match (&l, &r) {
+            (Value::Angka(a), Value::Angka(b)) => Ok(Value::Angka(a - b)),
+            _ => match (ke_desimal(&l), ke_desimal(&r)) {
+                (Some(a), Some(b)) => Ok(Value::Desimal(a - b)),
+                _ => Err(format!("Operator '-' hanya berlaku untuk Angka, ditemukan {} dan {}", l, r)),
+            },
+        },
+        Kali => match (&l, &r) {
+            (Value::Angka(a), Value::Angka(b)) => Ok(Value::Angka(a * b)),
+            _ => match (ke_desimal(&l), ke_desimal(&r)) {
+                (Some(a), Some(b)) => Ok(Value::Desimal(a * b)),
+                _ => Err(format!("Operator '*' hanya berlaku untuk Angka, ditemukan {} dan {}", l, r)),
+            },
+        },
+        Bagi => match (&l, &r) {
+            (Value::Angka(_), Value::Angka(0)) => Err("Tidak bisa membagi dengan nol.".to_string()),
+            (Value::Angka(a), Value::Angka(b)) => Ok(Value::Angka(a / b)),
+            _ => match (ke_desimal(&l), ke_desimal(&r)) {
+                (Some(_), Some(b)) if b == 0.0 => Err("Tidak bisa membagi dengan nol.".to_string()),
+                (Some(a), Some(b)) => Ok(Value::Desimal(a / b)),
+                _ => Err(format!("Operator '/' hanya berlaku untuk Angka, ditemukan {} dan {}", l, r)),
+            },
+        },
+        SamaDengan => Ok(Value::Bool(nilai_sama(&l, &r))),
+        TidakSama => Ok(Value::Bool(!nilai_sama(&l, &r))),
+        LebihBesar => bandingkan(l, r, |a, b| a > b),
+        LebihBesarSama => bandingkan(l, r, |a, b| a >= b),
+        LebihKecil => bandingkan(l, r, |a, b| a < b),
+        LebihKecilSama => bandingkan(l, r, |a, b| a <= b),
+        Dan => Ok(Value::Bool(l.truthy() && r.truthy())),
+        Atau => Ok(Value::Bool(l.truthy() || r.truthy())),
+    }
+}
+
+fn indeks_value(t: Value, i: Value) -> Result<Value, String> {
+    match (t, i) {
+        (Value::Daftar(d), Value::Angka(n)) => {
+            if n < 0 { return Err(format!("Indeks tidak boleh negatif: {}", n)); }
+            d.get(n as usize).cloned().ok_or_else(|| format!("Indeks {} di luar jangkauan (panjang daftar: {})", n, d.len()))
+        }
+        (Value::Peta(entries), Value::Teks(k)) => {
+            entries.iter().find(|(kk, _)| kk.as_str() == k.as_ref()).map(|(_, v)| v.clone()).ok_or_else(|| format!("Kunci \"{}\" tidak ditemukan di Peta.", k))
+        }
+        (t, i) => Err(format!("Tidak bisa mengindeks {} dengan {}", t, i)),
+    }
+}
+
+// =====================================================================
+// 4b. ISOTERI IR: optimizer
+// =====================================================================
+//
+// CStmt/CExpr (dihasilkan Resolver di atas) SUDAH berfungsi sebagai lapisan IR Isoteri:
+// backend bytecode (Compiler, bagian 5) dan backend JIT (JitEngine, bagian 5b) SAMA-SAMA
+// membaca representasi ini, bukan AST mentah (Stmt/Expr) lagi -- itulah yang membuatnya
+// "IR" (intermediate representation) dan bukan cuma AST biasa: sudah diresolve (nama
+// variabel -> slot lokal/global, field 'bentuk' -> urutan tervalidasi), backend-agnostic,
+// dan sekarang jadi SATU tempat optimisasi ditulis yang otomatis menguntungkan SEMUA
+// backend (termasuk backend web/ekspor-web) sekaligus -- lihat docs/IR.md.
+//
+// v1 ini sengaja MINIMAL & konservatif (2 optimisasi paling aman & bernilai tinggi):
+//   1. Constant folding: `2 + 3 * 4` -> `14` di waktu kompilasi, bukan runtime.
+//   2. Dead code elimination (bentuk paling sederhana): statement setelah 'kembalikan'
+//      di blok yang sama dibuang (tidak akan pernah tereksekusi).
+// TIDAK termasuk (didokumentasikan sebagai kerja lanjutan di docs/IR.md):
+//   - Dead-branch elimination untuk 'kalau' berkondisi konstan (mis. `kalau (benar) {...}`)
+//   - Inlining, escape analysis, vectorization/SIMD -- semuanya BUTUH IR ini ada dulu
+//     (lihat catatan di README.md soal kenapa SIMD lama direvert).
+//
+// Constant folding SENGAJA konservatif soal pembagian: `a / 0` TIDAK dilipat (dibiarkan
+// apa adanya) supaya pesan error "Tidak bisa membagi dengan nol." dengan nomor barisnya
+// yang benar tetap muncul persis seperti sebelum ada optimizer ini -- optimizer tidak
+// boleh mengubah PERILAKU yang teramati, cuma mempercepat jalannya.
+
+/// Optimisasi satu blok statement: lipat tiap statement, lalu buang segala sesuatu
+/// SETELAH 'kembalikan' pertama (kalau ada) karena pasti tak terjangkau.
+fn optimisasi_blok(stmts: Vec<(usize, CStmt)>) -> Vec<(usize, CStmt)> {
+    let mut keluar = Vec::with_capacity(stmts.len());
+    for (baris, s) in stmts {
+        let sudah_kembali = matches!(s, CStmt::Kembalikan(_));
+        keluar.push((baris, optimisasi_stmt(s)));
+        if sudah_kembali { break; }
+    }
+    keluar
+}
+
+fn optimisasi_stmt(s: CStmt) -> CStmt {
+    match s {
+        CStmt::IngatGlobal(slot, e) => CStmt::IngatGlobal(slot, optimisasi_expr(e)),
+        CStmt::UbahGlobal(slot, e) => CStmt::UbahGlobal(slot, optimisasi_expr(e)),
+        CStmt::IngatLocal(slot, e) => CStmt::IngatLocal(slot, optimisasi_expr(e)),
+        CStmt::UbahLocal(slot, e) => CStmt::UbahLocal(slot, optimisasi_expr(e)),
+        CStmt::UbahFieldGlobal(slot, path, e) => CStmt::UbahFieldGlobal(slot, path, optimisasi_expr(e)),
+        CStmt::UbahFieldLocal(slot, path, e) => CStmt::UbahFieldLocal(slot, path, optimisasi_expr(e)),
+        CStmt::Tampilkan(e) => CStmt::Tampilkan(optimisasi_expr(e)),
+        CStmt::Kalau(c, tb, eb) => CStmt::Kalau(optimisasi_expr(c), optimisasi_blok(tb), eb.map(optimisasi_blok)),
+        CStmt::Ulang(c, b) => CStmt::Ulang(optimisasi_expr(c), optimisasi_blok(b)),
+        CStmt::UlangSetiapGlobal(slot, e, b) => CStmt::UlangSetiapGlobal(slot, optimisasi_expr(e), optimisasi_blok(b)),
+        CStmt::UlangSetiapLocal(slot, e, b) => CStmt::UlangSetiapLocal(slot, optimisasi_expr(e), optimisasi_blok(b)),
+        // Badan 'ulang selaras' TETAP Stmt mentah (evaluator paralel sendiri, lihat bagian 7) --
+        // sengaja tidak disentuh optimizer IR ini.
+        CStmt::UlangSelaras(e, var, b) => CStmt::UlangSelaras(optimisasi_expr(e), var, b),
+        CStmt::CobaGlobal(bc, slot, bt) => CStmt::CobaGlobal(optimisasi_blok(bc), slot, optimisasi_blok(bt)),
+        CStmt::CobaLocal(bc, slot, bt) => CStmt::CobaLocal(optimisasi_blok(bc), slot, optimisasi_blok(bt)),
+        CStmt::Kembalikan(e) => CStmt::Kembalikan(optimisasi_expr(e)),
+        CStmt::EkspresiStmt(e) => CStmt::EkspresiStmt(optimisasi_expr(e)),
+    }
+}
+
+fn optimisasi_expr(e: CExpr) -> CExpr {
+    match e {
+        CExpr::Binary(l, op, r) => {
+            let l = optimisasi_expr(*l);
+            let r = optimisasi_expr(*r);
+            match lipat_binop(&l, op, &r) {
+                Some(hasil) => hasil,
+                None => CExpr::Binary(Box::new(l), op, Box::new(r)),
+            }
+        }
+        CExpr::Panggil(nama, args) => CExpr::Panggil(nama, args.into_iter().map(optimisasi_expr).collect()),
+        CExpr::Daftar(items) => CExpr::Daftar(items.into_iter().map(optimisasi_expr).collect()),
+        CExpr::Peta(entries) => CExpr::Peta(entries.into_iter().map(|(k, v)| (k, optimisasi_expr(v))).collect()),
+        CExpr::Indeks(t, i) => CExpr::Indeks(Box::new(optimisasi_expr(*t)), Box::new(optimisasi_expr(*i))),
+        CExpr::Field(t, f) => CExpr::Field(Box::new(optimisasi_expr(*t)), f),
+        CExpr::BentukLiteral(nama, entries) => CExpr::BentukLiteral(nama, entries.into_iter().map(|(k, v)| (k, optimisasi_expr(v))).collect()),
+        CExpr::FungsiLiteral(nama, tangkapan) => CExpr::FungsiLiteral(nama, tangkapan.into_iter().map(optimisasi_expr).collect()),
+        CExpr::PanggilNilai(f, args) => CExpr::PanggilNilai(Box::new(optimisasi_expr(*f)), args.into_iter().map(optimisasi_expr).collect()),
+        CExpr::SimpanLaluField(e, slot, f) => CExpr::SimpanLaluField(Box::new(optimisasi_expr(*e)), slot, f),
+        lain @ (CExpr::Angka(_) | CExpr::Desimal(_) | CExpr::Teks(_) | CExpr::Bool(_) | CExpr::Global(_) | CExpr::Local(_)) => lain,
+    }
+}
+
+/// Coba lipat `l op r` jadi satu literal kalau dua-duanya sudah literal SEKARANG (setelah
+/// anak-anaknya sendiri dilipat lebih dulu -- lihat optimisasi_expr, jadi ini otomatis
+/// menangani ekspresi bersarang seperti `(2 + 3) * 4` lewat rekursi biasa).
+/// Pakai wrapping_* (bukan checked_*) buat Angka supaya perilaku overflow-nya identik
+/// dengan operasi i64 biasa di VM (release build = wrapping, bukan panic).
+fn lipat_binop(l: &CExpr, op: BinOp, r: &CExpr) -> Option<CExpr> {
+    use BinOp::*;
+    match (l, r) {
+        (CExpr::Angka(a), CExpr::Angka(b)) => match op {
+            Tambah => Some(CExpr::Angka(a.wrapping_add(*b))),
+            Kurang => Some(CExpr::Angka(a.wrapping_sub(*b))),
+            Kali => Some(CExpr::Angka(a.wrapping_mul(*b))),
+            Bagi => if *b != 0 { Some(CExpr::Angka(a / b)) } else { None }, // biarkan runtime yang lempar error div-nol, lengkap dgn baris
+            SamaDengan => Some(CExpr::Bool(a == b)),
+            TidakSama => Some(CExpr::Bool(a != b)),
+            LebihBesar => Some(CExpr::Bool(a > b)),
+            LebihBesarSama => Some(CExpr::Bool(a >= b)),
+            LebihKecil => Some(CExpr::Bool(a < b)),
+            LebihKecilSama => Some(CExpr::Bool(a <= b)),
+            Dan => Some(CExpr::Bool(*a != 0 && *b != 0)),
+            Atau => Some(CExpr::Bool(*a != 0 || *b != 0)),
+        },
+        (CExpr::Angka(_) | CExpr::Desimal(_), CExpr::Angka(_) | CExpr::Desimal(_)) => {
+            let (Some(a), Some(b)) = (ke_desimal_lit(l), ke_desimal_lit(r)) else { return None };
+            match op {
+                Tambah => Some(CExpr::Desimal(a + b)),
+                Kurang => Some(CExpr::Desimal(a - b)),
+                Kali => Some(CExpr::Desimal(a * b)),
+                Bagi => if b != 0.0 { Some(CExpr::Desimal(a / b)) } else { None },
+                SamaDengan => Some(CExpr::Bool(a == b)),
+                TidakSama => Some(CExpr::Bool(a != b)),
+                LebihBesar => Some(CExpr::Bool(a > b)),
+                LebihBesarSama => Some(CExpr::Bool(a >= b)),
+                LebihKecil => Some(CExpr::Bool(a < b)),
+                LebihKecilSama => Some(CExpr::Bool(a <= b)),
+                Dan => Some(CExpr::Bool(a != 0.0 && b != 0.0)),
+                Atau => Some(CExpr::Bool(a != 0.0 || b != 0.0)),
+            }
+        }
+        (CExpr::Teks(a), CExpr::Teks(b)) if matches!(op, Tambah) => Some(CExpr::Teks(format!("{}{}", a, b))),
+        (CExpr::Bool(a), CExpr::Bool(b)) => match op {
+            Dan => Some(CExpr::Bool(*a && *b)),
+            Atau => Some(CExpr::Bool(*a || *b)),
+            SamaDengan => Some(CExpr::Bool(a == b)),
+            TidakSama => Some(CExpr::Bool(a != b)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn ke_desimal_lit(e: &CExpr) -> Option<f64> {
+    match e { CExpr::Angka(n) => Some(*n as f64), CExpr::Desimal(f) => Some(*f), _ => None }
+}
+
+// =====================================================================
+// 5. BYTECODE: Instr, Compiler
+// =====================================================================
+
+#[derive(Debug, Clone)]
+enum Instr {
+    PushK(usize),
+    LoadGlobal(usize), StoreGlobal(usize),
+    LoadLocal(usize), StoreLocal(usize),
+    BinOp(BinOp),
+    Lompat(usize),
+    LompatJikaSalah(usize),
+    MakeDaftar(usize),
+    MakePeta(Vec<String>),
+    Indeks,
+    AmbilField(String),
+    BuatInstans(String, Vec<String>),
+    SetField(String),
+    /// Duplikasi nilai di puncak stack tanpa mengubahnya -- dipakai buat navigasi rantai
+    /// field bersarang (baca "sambil menyimpan" struct perantara supaya bisa di-set balik).
+    Dup,
+    Tampilkan,
+    Pop,
+    PanggilFungsi(usize, usize),
+    PanggilBawaan(String, usize),
+    /// Bikin nilai closure: idx fungsi terkompilasi + berapa nilai tangkapan yang harus dipop
+    /// dari puncak stack (sudah didorong compiler sesuai urutan) buat dibungkus jadi Value::Fungsi.
+    BuatFungsi(usize, usize),
+    /// Panggil NILAI di puncak stack (bukan index fungsi statis) -- dipop dulu argc argumen,
+    /// baru nilai callee-nya sendiri, cek itu Value::Fungsi, gabung tangkapan+argumen lalu panggil.
+    PanggilNilai(usize),
+    IterMulai,
+    IterLanjutLocal(usize, usize),
+    IterLanjutGlobal(usize, usize),
+    JalankanSelaras(String, Vec<(usize, Stmt)>),
+    MulaiCobaLocal(usize, usize),
+    MulaiCobaGlobal(usize, usize),
+    SelesaiCoba,
+    TandaiBaris(usize),
+    Kembalikan,
+}
+
+/// Dua varian pointer fungsi native hasil JIT -- Angka (larik i64 masuk, i64 keluar) atau
+/// Desimal (larik f64 masuk, f64 keluar). Keduanya tetap "satu pointer ke larik" per
+/// komentar di VMFungsi::native, jadi arity berapa pun tetap satu tipe per mode.
+#[derive(Clone, Copy)]
+enum NativeFn {
+    Angka(extern "C" fn(*const i64) -> i64),
+    Desimal(extern "C" fn(*const f64) -> f64),
+}
+
+struct VMFungsi {
+    param_count: usize,
+    local_slot_count: usize,
+    kode: Vec<Instr>,
+    /// Terisi kalau fungsi ini berhasil dikompilasi JIT (lihat CFungsi::tipe_jit) --
+    /// kalau ada, VM memanggil ini langsung (kode mesin asli) dan sama sekali
+    /// melewati bytecode/loop dispatch. Signature-nya SENGAJA dibuat "terima pointer
+    /// ke larik" (bukan N parameter langsung) supaya satu tipe fungsi Rust ini
+    /// bisa dipakai untuk sembarang jumlah parameter tanpa perlu N varian tipe berbeda --
+    /// kode mesin hasil JIT sendiri yang tahu cara baca tiap elemen larik itu.
+    native: Option<NativeFn>,
+    /// Salinan CFungsi::param_flat, tapi cuma urutan nama field-nya (gak butuh nama bentuk lagi
+    /// di runtime) -- dipakai panggil_fungsi_1_arg buat membongkar 1 argumen instans 'bentuk'
+    /// jadi beberapa nilai field kalau parameter fungsi ini "flattened", supaya petakan()/
+    /// saring()/urutkan() bisa manggil fungsi begini juga (bukan cuma pemanggilan nama statis).
+    param_flat: Vec<Option<Vec<String>>>,
+}
+
+/// Compiler: mengubah CStmt/CExpr (AST yang sudah di-resolve ke slot) menjadi instruksi bytecode flat.
+/// Ini dikerjakan SEKALI di awal (bukan tiap eksekusi), lalu VM tinggal menjalankan array instruksi
+/// lewat loop dispatch yang rapat -- jauh lebih cepat dari menyusuri pohon AST berulang-ulang.
+struct Compiler { konstanta: Vec<Value>, fungsi_index: HashMap<String, usize> }
+
+impl Compiler {
+    fn new(fungsi_index: HashMap<String, usize>) -> Self { Compiler { konstanta: Vec::new(), fungsi_index } }
+
+    fn tambah_konstanta(&mut self, v: Value) -> usize {
+        self.konstanta.push(v);
+        self.konstanta.len() - 1
+    }
+
+    fn compile_top(&mut self, stmts: &[(usize, CStmt)]) -> Vec<Instr> {
+        let mut out = Vec::new();
+        self.compile_blok(stmts, &mut out);
+        out
+    }
+
+    fn compile_fungsi(&mut self, f: &CFungsi) -> VMFungsi {
+        let mut out = Vec::new();
+        self.compile_blok(&f.body, &mut out);
+        let param_flat = f.param_flat.iter().map(|p| p.as_ref().map(|(_, field_urut)| field_urut.clone())).collect();
+        VMFungsi { param_count: f.param_count, local_slot_count: f.local_slot_count, kode: out, native: None, param_flat }
+    }
+
+    fn compile_blok(&mut self, stmts: &[(usize, CStmt)], out: &mut Vec<Instr>) {
+        for (baris, s) in stmts {
+            out.push(Instr::TandaiBaris(*baris));
+            self.compile_stmt(s, out);
+        }
+    }
+
+    /// Diasumsikan puncak stack sudah berisi struct dasar (v0). Menavigasi turun sepanjang
+    /// `path[0..path.len()-1]` (baca sambil menyimpan tiap struct perantara lewat Dup, karena
+    /// representasi kita immutable/clone-on-write jadi butuh nilai lama buat "set balik"),
+    /// menghitung nilai baru, men-set field terakhir, lalu men-set balik tiap field perantara
+    /// dari dalam ke luar. Hasil akhirnya v0' (struct dasar yang sudah terbarui) tertinggal
+    /// di puncak stack, siap disimpan balik ke slotnya oleh pemanggil.
+    fn compile_ubah_field_path(&mut self, path: &[String], value: &CExpr, out: &mut Vec<Instr>) {
+        for f in &path[..path.len() - 1] {
+            out.push(Instr::Dup);
+            out.push(Instr::AmbilField(f.clone()));
+        }
+        self.compile_expr(value, out);
+        for f in path.iter().rev() {
+            out.push(Instr::SetField(f.clone()));
+        }
+    }
+
+    fn compile_expr(&mut self, e: &CExpr, out: &mut Vec<Instr>) {
+        match e {
+            CExpr::Angka(n) => { let k = self.tambah_konstanta(Value::Angka(*n)); out.push(Instr::PushK(k)); }
+            CExpr::Desimal(f) => { let k = self.tambah_konstanta(Value::Desimal(*f)); out.push(Instr::PushK(k)); }
+            CExpr::Teks(s) => { let k = self.tambah_konstanta(Value::Teks(s.clone().into())); out.push(Instr::PushK(k)); }
+            CExpr::Bool(b) => { let k = self.tambah_konstanta(Value::Bool(*b)); out.push(Instr::PushK(k)); }
+            CExpr::Global(slot) => out.push(Instr::LoadGlobal(*slot)),
+            CExpr::Local(slot) => out.push(Instr::LoadLocal(*slot)),
+            CExpr::Binary(l, op, r) => { self.compile_expr(l, out); self.compile_expr(r, out); out.push(Instr::BinOp(*op)); }
+            CExpr::Panggil(nama, args) => {
+                for a in args { self.compile_expr(a, out); }
+                if let Some(&idx) = self.fungsi_index.get(nama) {
+                    out.push(Instr::PanggilFungsi(idx, args.len()));
+                } else {
+                    out.push(Instr::PanggilBawaan(nama.clone(), args.len()));
+                }
+            }
+            CExpr::Daftar(items) => {
+                for i in items { self.compile_expr(i, out); }
+                out.push(Instr::MakeDaftar(items.len()));
+            }
+            CExpr::Peta(entries) => {
+                let kunci: Vec<String> = entries.iter().map(|(k, _)| k.clone()).collect();
+                for (_, v) in entries { self.compile_expr(v, out); }
+                out.push(Instr::MakePeta(kunci));
+            }
+            CExpr::Indeks(t, i) => { self.compile_expr(t, out); self.compile_expr(i, out); out.push(Instr::Indeks); }
+            CExpr::Field(t, f) => { self.compile_expr(t, out); out.push(Instr::AmbilField(f.clone())); }
+            CExpr::BentukLiteral(nama, entries) => {
+                let field_nama: Vec<String> = entries.iter().map(|(k, _)| k.clone()).collect();
+                for (_, v) in entries { self.compile_expr(v, out); }
+                out.push(Instr::BuatInstans(nama.clone(), field_nama));
+            }
+            CExpr::FungsiLiteral(nama_sintetis, tangkapan_exprs) => {
+                for e in tangkapan_exprs { self.compile_expr(e, out); }
+                let idx = *self.fungsi_index.get(nama_sintetis)
+                    .unwrap_or_else(|| panic!("Closure \"{}\" tidak terdaftar -- ini bug internal resolver.", nama_sintetis));
+                out.push(Instr::BuatFungsi(idx, tangkapan_exprs.len()));
+            }
+            CExpr::PanggilNilai(callee, args) => {
+                self.compile_expr(callee, out);
+                for a in args { self.compile_expr(a, out); }
+                out.push(Instr::PanggilNilai(args.len()));
+            }
+            CExpr::SimpanLaluField(e, slot, field) => {
+                self.compile_expr(e, out);
+                out.push(Instr::Dup);
+                match slot {
+                    SlotSasaran::Lokal(n) => out.push(Instr::StoreLocal(*n)),
+                    SlotSasaran::Global(n) => out.push(Instr::StoreGlobal(*n)),
+                }
+                out.push(Instr::AmbilField(field.clone()));
+            }
+        }
+    }
+
+    fn compile_stmt(&mut self, s: &CStmt, out: &mut Vec<Instr>) {
+        match s {
+            CStmt::IngatGlobal(slot, e) | CStmt::UbahGlobal(slot, e) => { self.compile_expr(e, out); out.push(Instr::StoreGlobal(*slot)); }
+            CStmt::IngatLocal(slot, e) | CStmt::UbahLocal(slot, e) => { self.compile_expr(e, out); out.push(Instr::StoreLocal(*slot)); }
+            CStmt::UbahFieldGlobal(slot, path, e) => {
+                out.push(Instr::LoadGlobal(*slot));
+                self.compile_ubah_field_path(path, e, out);
+                out.push(Instr::StoreGlobal(*slot));
+            }
+            CStmt::UbahFieldLocal(slot, path, e) => {
+                out.push(Instr::LoadLocal(*slot));
+                self.compile_ubah_field_path(path, e, out);
+                out.push(Instr::StoreLocal(*slot));
+            }
+            CStmt::Tampilkan(e) => { self.compile_expr(e, out); out.push(Instr::Tampilkan); }
+            CStmt::Kalau(cond, tb, eb) => {
+                self.compile_expr(cond, out);
+                let lompat_salah_idx = out.len();
+                out.push(Instr::LompatJikaSalah(0));
+                self.compile_blok(tb, out);
+                if let Some(eb) = eb {
+                    let lompat_akhir_idx = out.len();
+                    out.push(Instr::Lompat(0));
+                    let else_mulai = out.len();
+                    out[lompat_salah_idx] = Instr::LompatJikaSalah(else_mulai);
+                    self.compile_blok(eb, out);
+                    let akhir = out.len();
+                    out[lompat_akhir_idx] = Instr::Lompat(akhir);
+                } else {
+                    let akhir = out.len();
+                    out[lompat_salah_idx] = Instr::LompatJikaSalah(akhir);
+                }
+            }
+            CStmt::Ulang(cond, body) => {
+                let mulai = out.len();
+                self.compile_expr(cond, out);
+                let lompat_salah_idx = out.len();
+                out.push(Instr::LompatJikaSalah(0));
+                self.compile_blok(body, out);
+                out.push(Instr::Lompat(mulai));
+                let akhir = out.len();
+                out[lompat_salah_idx] = Instr::LompatJikaSalah(akhir);
+            }
+            CStmt::UlangSetiapGlobal(slot, e, body) => {
+                self.compile_expr(e, out);
+                out.push(Instr::IterMulai);
+                let mulai = out.len();
+                out.push(Instr::IterLanjutGlobal(*slot, 0));
+                self.compile_blok(body, out);
+                out.push(Instr::Lompat(mulai));
+                let akhir = out.len();
+                out[mulai] = Instr::IterLanjutGlobal(*slot, akhir);
+            }
+            CStmt::UlangSetiapLocal(slot, e, body) => {
+                self.compile_expr(e, out);
+                out.push(Instr::IterMulai);
+                let mulai = out.len();
+                out.push(Instr::IterLanjutLocal(*slot, 0));
+                self.compile_blok(body, out);
+                out.push(Instr::Lompat(mulai));
+                let akhir = out.len();
+                out[mulai] = Instr::IterLanjutLocal(*slot, akhir);
+            }
+            CStmt::UlangSelaras(e, var, body) => {
+                self.compile_expr(e, out);
+                out.push(Instr::JalankanSelaras(var.clone(), body.clone()));
+            }
+            CStmt::CobaGlobal(badan_coba, slot, badan_tangkap) => {
+                let mulai_idx = out.len();
+                out.push(Instr::MulaiCobaGlobal(0, *slot));
+                self.compile_blok(badan_coba, out);
+                out.push(Instr::SelesaiCoba);
+                let lompat_akhir_idx = out.len();
+                out.push(Instr::Lompat(0));
+                let target_tangkap = out.len();
+                if let Instr::MulaiCobaGlobal(t, _) = &mut out[mulai_idx] { *t = target_tangkap; }
+                self.compile_blok(badan_tangkap, out);
+                let akhir = out.len();
+                out[lompat_akhir_idx] = Instr::Lompat(akhir);
+            }
+            CStmt::CobaLocal(badan_coba, slot, badan_tangkap) => {
+                let mulai_idx = out.len();
+                out.push(Instr::MulaiCobaLocal(0, *slot));
+                self.compile_blok(badan_coba, out);
+                out.push(Instr::SelesaiCoba);
+                let lompat_akhir_idx = out.len();
+                out.push(Instr::Lompat(0));
+                let target_tangkap = out.len();
+                if let Instr::MulaiCobaLocal(t, _) = &mut out[mulai_idx] { *t = target_tangkap; }
+                self.compile_blok(badan_tangkap, out);
+                let akhir = out.len();
+                out[lompat_akhir_idx] = Instr::Lompat(akhir);
+            }
+            CStmt::Kembalikan(e) => { self.compile_expr(e, out); out.push(Instr::Kembalikan); }
+            CStmt::EkspresiStmt(e) => { self.compile_expr(e, out); out.push(Instr::Pop); }
+        }
+    }
+}
+
+// =====================================================================
+// 5b. JIT: kompilasi fungsi "murni" ke kode mesin asli via Cranelift
+// =====================================================================
+//
+// Cranelift cuma ngerti tipe primitif (i64, f64, pointer) -- dia tidak punya
+// konsep enum Value dinamis kita. Makanya JIT ini HANYA berlaku untuk fungsi
+// yang lolos cek_jit_murni: satu parameter Angka, isinya cuma aritmatika,
+// perbandingan, kalau/jika, ulang, dan rekursi ke dirinya sendiri. Fungsi yang
+// tidak lolos tetap jalan normal lewat bytecode VM (Pustaka/eksekusi di atas).
+
+struct JitEngine {
+    module: cranelift_jit::JITModule,
+}
+
+impl JitEngine {
+    fn new() -> Self {
+        use cranelift::prelude::Configurable;
+        let mut flag_builder = cranelift::prelude::settings::builder();
+        flag_builder.set("opt_level", "speed").unwrap();
+        let isa = cranelift_native::builder()
+            .unwrap()
+            .finish(cranelift::prelude::settings::Flags::new(flag_builder))
+            .unwrap();
+        let builder = cranelift_jit::JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+        JitEngine { module: cranelift_jit::JITModule::new(builder) }
+    }
+
+    /// Mengompilasi satu CFungsi (yang sudah lolos tipe_jit) menjadi kode mesin asli.
+    /// Mengembalikan pointer fungsi native -- SATU parameter pointer (bukan N parameter),
+    /// supaya arity berapa pun tetap satu tipe signature yang sama per mode (lihat
+    /// komentar di NativeFn/VMFungsi::native). Pointer argumennya sendiri selalu alamat
+    /// (I64) apapun mode-nya -- yang berubah cuma tipe nilai yang di-load/dikembalikan.
+    fn kompilasi(&mut self, f: &CFungsi, mode: TipeJit) -> Result<*const u8, String> {
+        use cranelift::prelude::*;
+        use cranelift_module::{Linkage, Module};
+
+        let tipe_cl = match mode { TipeJit::Angka => types::I64, TipeJit::Desimal => types::F64 };
+
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(types::I64)); // pointer ke larik argumen
+        sig.returns.push(AbiParam::new(tipe_cl));
+        let func_id = self.module
+            .declare_function(&f.nama, Linkage::Local, &sig)
+            .map_err(|e| e.to_string())?;
+
+        let mut ctx = self.module.make_context();
+        ctx.func.signature = sig;
+        let mut fbcx = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut fbcx);
+
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+
+        for i in 0..f.local_slot_count {
+            builder.declare_var(Variable::new(i), tipe_cl);
+        }
+        // Baca tiap parameter logis dari larik lewat pointer argumen (elemen ke-i di offset i*8 byte).
+        let ptr_arg = builder.block_params(entry)[0];
+        for i in 0..f.param_count {
+            let nilai = builder.ins().load(tipe_cl, MemFlags::new(), ptr_arg, (i * 8) as i32);
+            builder.def_var(Variable::new(i), nilai);
+        }
+        for i in f.param_count..f.local_slot_count {
+            let nol = match mode {
+                TipeJit::Angka => builder.ins().iconst(types::I64, 0),
+                TipeJit::Desimal => builder.ins().f64const(0.0),
+            };
+            builder.def_var(Variable::new(i), nol);
+        }
+
+        let local_callee = self.module.declare_func_in_func(func_id, builder.func);
+
+        let mut kompiler = KompilerBadan { builder, local_callee, mode };
+        let selesai = kompiler.kompilasi_blok(&f.body);
+        if !selesai {
+            let nol = match mode {
+                TipeJit::Angka => kompiler.builder.ins().iconst(types::I64, 0),
+                TipeJit::Desimal => kompiler.builder.ins().f64const(0.0),
+            };
+            kompiler.builder.ins().return_(&[nol]);
+        }
+        kompiler.builder.seal_all_blocks();
+        kompiler.builder.finalize();
+
+        self.module.define_function(func_id, &mut ctx).map_err(|e| e.to_string())?;
+        self.module.clear_context(&mut ctx);
+        self.module.finalize_definitions().map_err(|e| e.to_string())?;
+
+        Ok(self.module.get_finalized_function(func_id))
+    }
+
+    /// Migrasi JIT ke IR linear (docs/IR.md poin 3) -- SAMA PERSIS kontrak & elig-nya dengan
+    /// `kompilasi()` di atas (dipakai buat `nama`, `mode`, `param_count`), tapi codegen-nya
+    /// menelusuri `&[IrInstr]` (hasil lower_fungsi_ke_ir + ir_ke_instr_dgn_konstanta TIDAK
+    /// dipakai di sini -- IR LINEAR mentah, sebelum diturunkan ke bytecode Instr, dipakai
+    /// LANGSUNG karena target lompatannya sudah berupa index array yang pas buat dipetakan ke
+    /// Cranelift Block, tanpa perlu hitung ulang seperti backend bytecode).
+    ///
+    /// BUKAN jalur produksi -- dipanggil dari jalur validasi `isoteri via-ir` yang sama seperti
+    /// bytecode IR linear, dibandingkan HASIL (bukan cuma "berhasil compile") terhadap JIT
+    /// produksi (`kompilasi()`) DAN terhadap bytecode murni, lewat regresi yang sama.
+    fn kompilasi_dari_ir(&mut self, nama: &str, ir: &[IrInstr], reg_types: &[IrType], param_count: usize, ambang_temp: usize, mode: TipeJit) -> Result<*const u8, String> {
+        use cranelift::prelude::*;
+        use cranelift_module::{Linkage, Module};
+
+        let tipe_cl = match mode { TipeJit::Angka => types::I64, TipeJit::Desimal => types::F64 };
+        let tipe_reg = |r: usize| -> Type { if reg_types.get(r).copied() == Some(IrType::Bool) { types::I8 } else { tipe_cl } };
+
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(tipe_cl));
+        let func_id = self.module
+            .declare_function(nama, Linkage::Local, &sig)
+            .map_err(|e| e.to_string())?;
+
+        let mut ctx = self.module.make_context();
+        ctx.func.signature = sig;
+        let mut fbcx = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut fbcx);
+
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+
+        let total_reg = reg_types.len();
+        // Cuma register < ambang_temp (local slot ASLI: parameter + `ingat` lokal) yang butuh
+        // mesin Variable Cranelift -- register temporary (>= ambang_temp) dicache langsung
+        // sebagai nilai SSA mentah lewat KompilerBadanIr::temp_cache (lihat catatan di sana).
+        for i in 0..ambang_temp.min(total_reg) { builder.declare_var(Variable::new(i), tipe_reg(i)); }
+        let ptr_arg = builder.block_params(entry)[0];
+        for i in 0..param_count {
+            let nilai = builder.ins().load(tipe_cl, MemFlags::new(), ptr_arg, (i * 8) as i32);
+            builder.def_var(Variable::new(i), nilai);
+        }
+        for i in param_count..ambang_temp.min(total_reg) {
+            let nol = match tipe_reg(i) {
+                t if t == types::F64 => builder.ins().f64const(0.0),
+                t if t == types::I8 => builder.ins().iconst(types::I8, 0),
+                _ => builder.ins().iconst(types::I64, 0),
+            };
+            builder.def_var(Variable::new(i), nol);
+        }
+
+        let local_callee = self.module.declare_func_in_func(func_id, builder.func);
+
+        // --- Pemetaan basic block: leader = index 0, tiap target lompatan, dan index PERSIS
+        // setelah tiap Jump/JumpJikaSalah (jalur fallthrough). Semua block dibuat di awal TAPI
+        // BELUM di-seal sampai akhir (sama seperti kompilasi() -- deferred sealing, valid di
+        // Cranelift selama semua block terisi sebelum finalize()).
+        let n = ir.len();
+        let mut leader = vec![false; n + 1];
+        leader[0] = true;
+        for (idx, instr) in ir.iter().enumerate() {
+            match instr {
+                IrInstr::Jump(t) => { leader[(*t).min(n)] = true; leader[(idx + 1).min(n)] = true; }
+                IrInstr::JumpJikaSalah(_, t) => { leader[(*t).min(n)] = true; leader[(idx + 1).min(n)] = true; }
+                _ => {}
+            }
+        }
+        let mut block_of: std::collections::HashMap<usize, Block> = std::collections::HashMap::new();
+        block_of.insert(0, entry);
+        for idx in 1..=n {
+            if leader[idx] { block_of.insert(idx, builder.create_block()); }
+        }
+
+        let mut kompiler = KompilerBadanIr { builder, local_callee, mode, tipe_reg_fn: &tipe_reg, block_of: &block_of, ambang_temp, temp_cache: std::collections::HashMap::new() };
+        let mut terminated = false;
+        for (idx, instr) in ir.iter().enumerate() {
+            if idx > 0 && leader[idx] {
+                if !terminated { kompiler.builder.ins().jump(block_of[&idx], &[]); }
+                kompiler.builder.switch_to_block(block_of[&idx]);
+                terminated = false;
+            }
+            terminated = kompiler.kompilasi_instr(instr, idx);
+        }
+        if !terminated {
+            let nol = match mode { TipeJit::Angka => kompiler.builder.ins().iconst(types::I64, 0), TipeJit::Desimal => kompiler.builder.ins().f64const(0.0) };
+            kompiler.builder.ins().return_(&[nol]);
+        }
+        kompiler.builder.seal_all_blocks();
+        kompiler.builder.finalize();
+
+        self.module.define_function(func_id, &mut ctx).map_err(|e| e.to_string())?;
+        self.module.clear_context(&mut ctx);
+        self.module.finalize_definitions().map_err(|e| e.to_string())?;
+
+        Ok(self.module.get_finalized_function(func_id))
+    }
+}
+
+/// Codegen buat `kompilasi_dari_ir` -- padanan `KompilerBadan` tapi menelusuri `IrInstr` linear
+/// (satu instruksi = satu langkah, TIDAK rekursif seperti KompilerBadan yang menelusuri pohon
+/// CExpr) dan pakai `Variable::new(reg)` buat SEMUA register (lokal asli MAUPUN temporary --
+/// beda dari KompilerBadan yang cuma punya local_slot_count asli, di sini variabelnya lebih
+/// banyak tapi Cranelift menanganinya sama saja).
+struct KompilerBadanIr<'a, 'b> {
+    builder: cranelift::prelude::FunctionBuilder<'a>,
+    local_callee: cranelift::codegen::ir::FuncRef,
+    mode: TipeJit,
+    tipe_reg_fn: &'b dyn Fn(usize) -> cranelift::prelude::Type,
+    block_of: &'b std::collections::HashMap<usize, cranelift::prelude::Block>,
+    /// Ambang register temporary (== local_slot_count ASLI fungsi ini, lihat parameter
+    /// `ambang_temp` di kompilasi_dari_ir). Register >= ini TIDAK lewat mesin Variable/
+    /// def_var/use_var Cranelift sama sekali (lihat catatan di `v`/`set` kenapa).
+    ambang_temp: usize,
+    /// Cache nilai SSA mentah buat register temporary -- Cranelift IR itu SENDIRI sudah SSA,
+    /// jadi menaruh hasil sub-ekspresi ke `Variable` (yang mekanismenya buat menangani
+    /// REASSIGNMENT lewat resolusi phi-node otomatis) itu kerja EKSTRA yang tidak perlu buat
+    /// nilai yang cuma ditulis SEKALI lalu dibaca SEKALI (dijamin oleh IrLower, lihat "8b").
+    /// Ini persis kelas masalah yang sama dengan overhead StoreLocal/LoadLocal berlebih yang
+    /// dibereskan register allocation v1 di backend bytecode -- di sini versinya buat Cranelift.
+    /// AMAN karena (dibuktikan lewat konstruksi IrLower + regresi 17/17): temp TIDAK PERNAH
+    /// dibaca dari block Cranelift yang BEDA dari block tempat ia didefinisikan -- begitu ada
+    /// percabangan (`kalau`/kondisi), register yang masih "in-flight" sudah pasti terkonsumsi
+    /// duluan oleh instruksi percabangan itu sendiri sebelum block baru dimulai.
+    temp_cache: std::collections::HashMap<Reg, cranelift::prelude::Value>,
+}
+
+impl<'a, 'b> KompilerBadanIr<'a, 'b> {
+    fn v(&mut self, r: Reg) -> cranelift::prelude::Value {
+        use cranelift::prelude::*;
+        if (r as usize) < self.ambang_temp { self.builder.use_var(Variable::new(r as usize)) }
+        else { *self.temp_cache.get(&r).unwrap_or_else(|| panic!("bug internal: register temporary {} dibaca sebelum ditulis", r)) }
+    }
+    fn set(&mut self, r: Reg, val: cranelift::prelude::Value) {
+        use cranelift::prelude::*;
+        if (r as usize) < self.ambang_temp { self.builder.def_var(Variable::new(r as usize), val); }
+        else { self.temp_cache.insert(r, val); }
+    }
+
+    /// Kompilasi SATU instruksi IR linear. Return true kalau instruksi ini MENGAKHIRI block
+    /// saat ini (Jump/JumpJikaSalah/Kembalikan -- Cranelift butuh tahu ini supaya fallthrough
+    /// ke leader berikutnya tidak dobel-terminate).
+    fn kompilasi_instr(&mut self, instr: &IrInstr, idx: usize) -> bool {
+        use cranelift::prelude::*;
+        match instr {
+            IrInstr::TandaiBaris(_) => false,
+            IrInstr::Const(dst, c) => {
+                let v = match c {
+                    IrConst::Angka(n) => match self.mode {
+                        TipeJit::Angka => self.builder.ins().iconst(types::I64, *n),
+                        TipeJit::Desimal => self.builder.ins().f64const(*n as f64),
+                    },
+                    IrConst::Desimal(f) => self.builder.ins().f64const(*f),
+                    IrConst::Bool(b) => self.builder.ins().iconst(types::I8, if *b { 1 } else { 0 }),
+                    IrConst::Teks(_) => unreachable!("cek_jit_murni_nilai seharusnya sudah menyaring literal Teks"),
+                };
+                self.set(*dst, v);
+                false
+            }
+            IrInstr::Move(dst, src) => { let v = self.v(*src); self.set(*dst, v); false }
+            IrInstr::BinOp(dst, op, a, b) => {
+                use BinOp::*;
+                let av = self.v(*a);
+                let bv = self.v(*b);
+                let hasil = match op {
+                    Tambah | Kurang | Kali => match (self.mode, op) {
+                        (TipeJit::Angka, Tambah) => self.builder.ins().iadd(av, bv),
+                        (TipeJit::Angka, Kurang) => self.builder.ins().isub(av, bv),
+                        (TipeJit::Angka, Kali) => self.builder.ins().imul(av, bv),
+                        (TipeJit::Desimal, Tambah) => self.builder.ins().fadd(av, bv),
+                        (TipeJit::Desimal, Kurang) => self.builder.ins().fsub(av, bv),
+                        (TipeJit::Desimal, Kali) => self.builder.ins().fmul(av, bv),
+                        _ => unreachable!("Bagi seharusnya sudah disaring cek_jit_murni_nilai"),
+                    },
+                    Dan => self.builder.ins().band(av, bv),
+                    Atau => self.builder.ins().bor(av, bv),
+                    SamaDengan | TidakSama | LebihBesar | LebihBesarSama | LebihKecil | LebihKecilSama => match self.mode {
+                        TipeJit::Angka => {
+                            let cc = match op {
+                                SamaDengan => IntCC::Equal, TidakSama => IntCC::NotEqual,
+                                LebihBesar => IntCC::SignedGreaterThan, LebihBesarSama => IntCC::SignedGreaterThanOrEqual,
+                                LebihKecil => IntCC::SignedLessThan, LebihKecilSama => IntCC::SignedLessThanOrEqual,
+                                _ => unreachable!(),
+                            };
+                            self.builder.ins().icmp(cc, av, bv)
+                        }
+                        TipeJit::Desimal => {
+                            let cc = match op {
+                                SamaDengan => FloatCC::Equal, TidakSama => FloatCC::NotEqual,
+                                LebihBesar => FloatCC::GreaterThan, LebihBesarSama => FloatCC::GreaterThanOrEqual,
+                                LebihKecil => FloatCC::LessThan, LebihKecilSama => FloatCC::LessThanOrEqual,
+                                _ => unreachable!(),
+                            };
+                            self.builder.ins().fcmp(cc, av, bv)
+                        }
+                    },
+                    Bagi => unreachable!("Bagi seharusnya sudah disaring cek_jit_murni_nilai"),
+                };
+                self.set(*dst, hasil);
+                false
+            }
+            IrInstr::PanggilFungsi(dst, _idx_fungsi, args) => {
+                // Elig-JIT (cek_jit_murni_nilai) menjamin SATU-SATUNYA fungsi yang boleh
+                // dipanggil di sini adalah dirinya sendiri (rekursi) -- lihat local_callee.
+                let nilai: Vec<Value> = args.iter().map(|a| self.v(*a)).collect();
+                let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot, (nilai.len().max(1) * 8) as u32,
+                ));
+                for (i, val) in nilai.iter().enumerate() { self.builder.ins().stack_store(*val, slot, (i * 8) as i32); }
+                let addr = self.builder.ins().stack_addr(types::I64, slot, 0);
+                let panggilan = self.builder.ins().call(self.local_callee, &[addr]);
+                let hasil = self.builder.inst_results(panggilan)[0];
+                self.set(*dst, hasil);
+                false
+            }
+            IrInstr::Jump(t) => { self.builder.ins().jump(self.block_of[t], &[]); true }
+            IrInstr::JumpJikaSalah(r, t) => {
+                let c = self.v(*r);
+                let lanjut = self.block_of[&(idx + 1)];
+                self.builder.ins().brif(c, lanjut, &[], self.block_of[t], &[]);
+                true
+            }
+            IrInstr::Kembalikan(r) => { let v = self.v(*r); self.builder.ins().return_(&[v]); true }
+            IrInstr::LoadGlobal(..) | IrInstr::StoreGlobal(..) | IrInstr::MakeDaftar(..) | IrInstr::MakePeta(..)
+            | IrInstr::Indeks(..) | IrInstr::AmbilField(..) | IrInstr::BuatInstans(..) | IrInstr::BuatFungsi(..)
+            | IrInstr::PanggilBawaan(..) | IrInstr::PanggilNilai(..) | IrInstr::Tampilkan(..) | IrInstr::IterMulai(..)
+            | IrInstr::IterLanjut(..) | IrInstr::MulaiCoba(..) | IrInstr::SelesaiCoba | IrInstr::Legacy(..) => {
+                unreachable!("cek_jit_murni seharusnya sudah menyaring instruksi ini dari fungsi elig-JIT")
+            }
+        }
+    }
+}
+
+struct KompilerBadan<'a> {
+    builder: cranelift::prelude::FunctionBuilder<'a>,
+    local_callee: cranelift::codegen::ir::FuncRef,
+    /// Tipe numerik seragam fungsi ini (Angka=i64 atau Desimal=f64) -- menentukan instruksi
+    /// Cranelift apa yang dipakai (iadd vs fadd, icmp vs fcmp, dst).
+    mode: TipeJit,
+}
+
+impl<'a> KompilerBadan<'a> {
+    /// Mengembalikan true kalau blok ini PASTI berakhir dengan 'kembalikan'
+    /// (jadi block Cranelift saat ini sudah punya terminator).
+    fn kompilasi_blok(&mut self, stmts: &[(usize, CStmt)]) -> bool {
+        for (_, s) in stmts {
+            if self.kompilasi_stmt(s) { return true; }
+        }
+        false
+    }
+
+    fn kompilasi_stmt(&mut self, s: &CStmt) -> bool {
+        use cranelift::prelude::*;
+        match s {
+            CStmt::IngatLocal(slot, e) | CStmt::UbahLocal(slot, e) => {
+                let v = self.kompilasi_nilai(e);
+                self.builder.def_var(Variable::new(*slot), v);
+                false
+            }
+            CStmt::Kalau(cond, tb, eb) => {
+                let c = self.kompilasi_kondisi(cond);
+                let then_blk = self.builder.create_block();
+                let else_blk = self.builder.create_block();
+                let lanjut_blk = self.builder.create_block();
+
+                self.builder.ins().brif(c, then_blk, &[], else_blk, &[]);
+
+                self.builder.switch_to_block(then_blk);
+                let then_selesai = self.kompilasi_blok(tb);
+                if !then_selesai { self.builder.ins().jump(lanjut_blk, &[]); }
+                self.builder.seal_block(then_blk);
+
+                self.builder.switch_to_block(else_blk);
+                let else_selesai = if let Some(eb) = eb { self.kompilasi_blok(eb) } else { false };
+                if !else_selesai { self.builder.ins().jump(lanjut_blk, &[]); }
+                self.builder.seal_block(else_blk);
+
+                if then_selesai && else_selesai {
+                    self.builder.seal_block(lanjut_blk);
+                    true
+                } else {
+                    self.builder.switch_to_block(lanjut_blk);
+                    self.builder.seal_block(lanjut_blk);
+                    false
+                }
+            }
+            CStmt::Ulang(cond, body) => {
+                let cek_blk = self.builder.create_block();
+                let badan_blk = self.builder.create_block();
+                let selesai_blk = self.builder.create_block();
+
+                self.builder.ins().jump(cek_blk, &[]);
+                self.builder.switch_to_block(cek_blk);
+                let c = self.kompilasi_kondisi(cond);
+                self.builder.ins().brif(c, badan_blk, &[], selesai_blk, &[]);
+
+                self.builder.switch_to_block(badan_blk);
+                let badan_selesai = self.kompilasi_blok(body);
+                if !badan_selesai { self.builder.ins().jump(cek_blk, &[]); }
+                self.builder.seal_block(badan_blk);
+                self.builder.seal_block(cek_blk);
+
+                self.builder.switch_to_block(selesai_blk);
+                self.builder.seal_block(selesai_blk);
+                false
+            }
+            CStmt::Kembalikan(e) => {
+                let v = self.kompilasi_nilai(e);
+                self.builder.ins().return_(&[v]);
+                true
+            }
+            CStmt::EkspresiStmt(e) => { self.kompilasi_nilai(e); false }
+            _ => unreachable!("cek_jit_murni_stmt seharusnya sudah menyaring stmt yang tidak didukung"),
+        }
+    }
+
+    /// Kompilasi ekspresi yang menghasilkan NILAI (I64) -- aritmatika/literal/lokal/rekursi.
+    fn kompilasi_nilai(&mut self, e: &CExpr) -> cranelift::prelude::Value {
+        use cranelift::prelude::*;
+        match e {
+            CExpr::Angka(n) => match self.mode {
+                // Di mode Desimal, literal integer otomatis dipromosikan jadi konstanta f64
+                // (sudah divalidasi boleh oleh cek_jit_murni_nilai).
+                TipeJit::Angka => self.builder.ins().iconst(types::I64, *n),
+                TipeJit::Desimal => self.builder.ins().f64const(*n as f64),
+            },
+            CExpr::Desimal(f) => self.builder.ins().f64const(*f),
+            CExpr::Local(slot) => self.builder.use_var(Variable::new(*slot)),
+            CExpr::Binary(l, op, r) => {
+                let lv = self.kompilasi_nilai(l);
+                let rv = self.kompilasi_nilai(r);
+                match (self.mode, op) {
+                    (TipeJit::Angka, BinOp::Tambah) => self.builder.ins().iadd(lv, rv),
+                    (TipeJit::Angka, BinOp::Kurang) => self.builder.ins().isub(lv, rv),
+                    (TipeJit::Angka, BinOp::Kali) => self.builder.ins().imul(lv, rv),
+                    (TipeJit::Desimal, BinOp::Tambah) => self.builder.ins().fadd(lv, rv),
+                    (TipeJit::Desimal, BinOp::Kurang) => self.builder.ins().fsub(lv, rv),
+                    (TipeJit::Desimal, BinOp::Kali) => self.builder.ins().fmul(lv, rv),
+                    _ => unreachable!("cek_jit_murni_nilai seharusnya sudah menyaring operator ini"),
+                }
+            }
+            CExpr::Panggil(_, args) => {
+                let nilai: Vec<Value> = args.iter().map(|a| self.kompilasi_nilai(a)).collect();
+                // Fungsi native butuh SATU pointer ke larik argumen (bukan N parameter langsung --
+                // lihat komentar di VMFungsi::native), jadi di sini kita alokasikan larik 8-byte di
+                // stack frame (cukup buat i64 maupun f64), isi tiap argumen ke situ, lalu kirim alamatnya saja.
+                let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    (nilai.len().max(1) * 8) as u32,
+                ));
+                for (i, v) in nilai.iter().enumerate() {
+                    self.builder.ins().stack_store(*v, slot, (i * 8) as i32);
+                }
+                let addr = self.builder.ins().stack_addr(types::I64, slot, 0);
+                let panggilan = self.builder.ins().call(self.local_callee, &[addr]);
+                self.builder.inst_results(panggilan)[0]
+            }
+            _ => unreachable!("cek_jit_murni_nilai seharusnya sudah menyaring ekspresi ini"),
+        }
+    }
+
+    /// Kompilasi ekspresi kondisi (dipakai khusus di 'kalau'/'ulang') -- perbandingan & logika.
+    fn kompilasi_kondisi(&mut self, e: &CExpr) -> cranelift::prelude::Value {
+        use cranelift::prelude::*;
+        // Kondisi yang sudah terlipat penuh jadi literal Bool oleh optimizer IR (mis. dari
+        // `1 < 2` di kode sumber) -- lihat cek_jit_murni_kondisi. iconst 1 bit cukup karena
+        // dipakai sebagai operand band/bor/brif seperti hasil icmp/fcmp biasa.
+        if let CExpr::Bool(b) = e {
+            return self.builder.ins().iconst(cranelift::prelude::types::I8, if *b { 1 } else { 0 });
+        }
+        if let CExpr::Binary(l, op, r) = e {
+            match op {
+                BinOp::Dan => { let a = self.kompilasi_kondisi(l); let b = self.kompilasi_kondisi(r); return self.builder.ins().band(a, b); }
+                BinOp::Atau => { let a = self.kompilasi_kondisi(l); let b = self.kompilasi_kondisi(r); return self.builder.ins().bor(a, b); }
+                _ => {
+                    let lv = self.kompilasi_nilai(l);
+                    let rv = self.kompilasi_nilai(r);
+                    return match self.mode {
+                        TipeJit::Angka => {
+                            let cc = match op {
+                                BinOp::SamaDengan => IntCC::Equal,
+                                BinOp::TidakSama => IntCC::NotEqual,
+                                BinOp::LebihBesar => IntCC::SignedGreaterThan,
+                                BinOp::LebihBesarSama => IntCC::SignedGreaterThanOrEqual,
+                                BinOp::LebihKecil => IntCC::SignedLessThan,
+                                BinOp::LebihKecilSama => IntCC::SignedLessThanOrEqual,
+                                _ => unreachable!(),
+                            };
+                            self.builder.ins().icmp(cc, lv, rv)
+                        }
+                        TipeJit::Desimal => {
+                            let cc = match op {
+                                BinOp::SamaDengan => FloatCC::Equal,
+                                BinOp::TidakSama => FloatCC::NotEqual,
+                                BinOp::LebihBesar => FloatCC::GreaterThan,
+                                BinOp::LebihBesarSama => FloatCC::GreaterThanOrEqual,
+                                BinOp::LebihKecil => FloatCC::LessThan,
+                                BinOp::LebihKecilSama => FloatCC::LessThanOrEqual,
+                                _ => unreachable!(),
+                            };
+                            self.builder.ins().fcmp(cc, lv, rv)
+                        }
+                    };
+                }
+            }
+        }
+        unreachable!("cek_jit_murni_kondisi seharusnya sudah menyaring ekspresi ini")
+    }
+}
+
+
+// biasa (single-thread) secepat mungkin -- tapi Rc tidak boleh dikirim antar-thread.
+// Daripada memaksakan Arc ke SELURUH Value (yang terbukti bikin kode single-thread
+// ~20% lebih lambat walau tidak menyentuh data yang di-share), badan 'ulang selaras'
+// dijalankan lewat tipe nilai & evaluator sendiri yang sengaja sederhana (tanpa
+// Rc/Arc sama sekali, cukup String biasa) -- konsekuensinya badan paralel dibatasi:
+// hanya boleh aritmatika, teks, 'ingat', 'tampilkan', dan 'kalau'/'jika'. Tidak boleh
+// memanggil fungsi lain, mengubah variabel luar, atau menyentuh Daftar/Peta.
+
+fn validasi_tubuh_selaras(stmts: &[(usize, Stmt)]) -> Result<(), String> {
+    for (_, s) in stmts {
+        match s {
+            Stmt::Ingat(_, _, e) => validasi_ekspresi_selaras(e)?,
+            Stmt::Tampilkan(e) => validasi_ekspresi_selaras(e)?,
+            Stmt::Kalau(c, tb, eb) => {
+                validasi_ekspresi_selaras(c)?;
+                validasi_tubuh_selaras(tb)?;
+                if let Some(eb) = eb { validasi_tubuh_selaras(eb)?; }
+            }
+            _ => return Err(
+                "'ulang selaras' hanya boleh berisi 'ingat', 'tampilkan', dan 'kalau'/'jika' -- \
+                 tidak boleh memanggil fungsi lain, mengubah variabel di luar loop, memakai \
+                 Daftar/Peta, atau 'coba/tangkap' di dalamnya (supaya aman dijalankan di banyak thread sekaligus)."
+                    .to_string()
+            ),
+        }
+    }
+    Ok(())
+}
+
+fn validasi_ekspresi_selaras(e: &Expr) -> Result<(), String> {
+    match e {
+        Expr::Angka(_) | Expr::Desimal(_) | Expr::Teks(_) | Expr::Bool(_) | Expr::Ident(_) => Ok(()),
+        Expr::Binary(l, _, r) => { validasi_ekspresi_selaras(l)?; validasi_ekspresi_selaras(r) }
+        _ => Err(
+            "Ekspresi di dalam 'ulang selaras' hanya boleh aritmatika, teks, dan variabel -- \
+             tidak boleh memanggil fungsi, memakai Daftar/Peta, atau indeks [ ]."
+                .to_string()
+        ),
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ValorSelaras { Angka(i64), Desimal(f64), Teks(String), Bool(bool) }
+
+impl fmt::Display for ValorSelaras {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ValorSelaras::Angka(n) => write!(f, "{}", n),
+            ValorSelaras::Desimal(x) => if x.fract() == 0.0 && x.is_finite() { write!(f, "{:.1}", x) } else { write!(f, "{}", x) },
+            ValorSelaras::Teks(s) => write!(f, "{}", s),
+            ValorSelaras::Bool(b) => write!(f, "{}", if *b { "benar" } else { "salah" }),
+        }
+    }
+}
+
+fn truthy_selaras(v: &ValorSelaras) -> bool {
+    match v {
+        ValorSelaras::Bool(b) => *b,
+        ValorSelaras::Angka(n) => *n != 0,
+        ValorSelaras::Desimal(x) => *x != 0.0,
+        ValorSelaras::Teks(s) => !s.is_empty(),
+    }
+}
+
+fn ke_desimal_selaras(v: &ValorSelaras) -> Option<f64> {
+    match v { ValorSelaras::Angka(n) => Some(*n as f64), ValorSelaras::Desimal(f) => Some(*f), _ => None }
+}
+
+fn eval_binop_selaras(l: ValorSelaras, op: BinOp, r: ValorSelaras) -> Result<ValorSelaras, String> {
+    use BinOp::*;
+    match op {
+        Tambah => match (&l, &r) {
+            (ValorSelaras::Teks(_), _) | (_, ValorSelaras::Teks(_)) => Ok(ValorSelaras::Teks(format!("{}{}", l, r))),
+            (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => Ok(ValorSelaras::Angka(a + b)),
+            _ => match (ke_desimal_selaras(&l), ke_desimal_selaras(&r)) {
+                (Some(a), Some(b)) => Ok(ValorSelaras::Desimal(a + b)),
+                _ => Err(format!("Tidak bisa menjumlahkan {} dengan {}", l, r)),
+            },
+        },
+        Kurang => match (&l, &r) {
+            (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => Ok(ValorSelaras::Angka(a - b)),
+            _ => match (ke_desimal_selaras(&l), ke_desimal_selaras(&r)) {
+                (Some(a), Some(b)) => Ok(ValorSelaras::Desimal(a - b)),
+                _ => Err(format!("Operator '-' hanya untuk Angka, ditemukan {} dan {}", l, r)),
+            },
+        },
+        Kali => match (&l, &r) {
+            (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => Ok(ValorSelaras::Angka(a * b)),
+            _ => match (ke_desimal_selaras(&l), ke_desimal_selaras(&r)) {
+                (Some(a), Some(b)) => Ok(ValorSelaras::Desimal(a * b)),
+                _ => Err(format!("Operator '*' hanya untuk Angka, ditemukan {} dan {}", l, r)),
+            },
+        },
+        Bagi => match (&l, &r) {
+            (ValorSelaras::Angka(_), ValorSelaras::Angka(0)) => Err("Tidak bisa membagi dengan nol.".to_string()),
+            (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => Ok(ValorSelaras::Angka(a / b)),
+            _ => match (ke_desimal_selaras(&l), ke_desimal_selaras(&r)) {
+                (Some(_), Some(b)) if b == 0.0 => Err("Tidak bisa membagi dengan nol.".to_string()),
+                (Some(a), Some(b)) => Ok(ValorSelaras::Desimal(a / b)),
+                _ => Err(format!("Operator '/' hanya untuk Angka, ditemukan {} dan {}", l, r)),
+            },
+        },
+        SamaDengan | TidakSama | LebihBesar | LebihBesarSama | LebihKecil | LebihKecilSama => {
+            let sama = match (&l, &r) {
+                (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => (*a as f64) == (*b as f64),
+                (ValorSelaras::Teks(a), ValorSelaras::Teks(b)) => a == b,
+                (ValorSelaras::Bool(a), ValorSelaras::Bool(b)) => a == b,
+                _ => match (ke_desimal_selaras(&l), ke_desimal_selaras(&r)) { (Some(a), Some(b)) => a == b, _ => false },
+            };
+            match op {
+                SamaDengan => Ok(ValorSelaras::Bool(sama)),
+                TidakSama => Ok(ValorSelaras::Bool(!sama)),
+                _ => match (ke_desimal_selaras(&l), ke_desimal_selaras(&r)) {
+                    (Some(a), Some(b)) => Ok(ValorSelaras::Bool(match op {
+                        LebihBesar => a > b, LebihBesarSama => a >= b,
+                        LebihKecil => a < b, LebihKecilSama => a <= b, _ => unreachable!(),
+                    })),
+                    _ => Err(format!("Perbandingan hanya untuk Angka, ditemukan {} dan {}", l, r)),
+                },
+            }
+        }
+        Dan => Ok(ValorSelaras::Bool(truthy_selaras(&l) && truthy_selaras(&r))),
+        Atau => Ok(ValorSelaras::Bool(truthy_selaras(&l) || truthy_selaras(&r))),
+    }
+}
+
+fn eval_selaras(e: &Expr, scope: &HashMap<String, ValorSelaras>) -> Result<ValorSelaras, String> {
+    match e {
+        Expr::Angka(n) => Ok(ValorSelaras::Angka(*n)),
+        Expr::Desimal(f) => Ok(ValorSelaras::Desimal(*f)),
+        Expr::Teks(s) => Ok(ValorSelaras::Teks(s.clone())),
+        Expr::Bool(b) => Ok(ValorSelaras::Bool(*b)),
+        Expr::Ident(nama) => scope.get(nama).cloned()
+            .ok_or_else(|| format!("Variabel \"{}\" tidak dikenal di dalam 'ulang selaras'.", nama)),
+        Expr::Binary(l, op, r) => eval_binop_selaras(eval_selaras(l, scope)?, *op, eval_selaras(r, scope)?),
+        _ => Err("Ekspresi ini tidak didukung di dalam 'ulang selaras'.".to_string()),
+    }
+}
+
+fn eksekusi_selaras(stmts: &[(usize, Stmt)], scope: &mut HashMap<String, ValorSelaras>, keluaran: &mut Vec<String>) -> Result<(), String> {
+    for (_, s) in stmts {
+        match s {
+            Stmt::Ingat(nama, _tipe, e) => { let v = eval_selaras(e, scope)?; scope.insert(nama.clone(), v); }
+            Stmt::Tampilkan(e) => { let v = eval_selaras(e, scope)?; keluaran.push(format!("{}", v)); }
+            Stmt::Kalau(cond, tb, eb) => {
+                let c = eval_selaras(cond, scope)?;
+                if truthy_selaras(&c) { eksekusi_selaras(tb, scope, keluaran)?; }
+                else if let Some(eb) = eb { eksekusi_selaras(eb, scope, keluaran)?; }
+            }
+            _ => return Err("Pernyataan ini tidak didukung di dalam 'ulang selaras'.".to_string()),
+        }
+    }
+    Ok(())
+}
+
+fn value_ke_selaras(v: &Value) -> Result<ValorSelaras, String> {
+    match v {
+        Value::Angka(n) => Ok(ValorSelaras::Angka(*n)),
+        Value::Desimal(f) => Ok(ValorSelaras::Desimal(*f)),
+        Value::Teks(s) => Ok(ValorSelaras::Teks(s.to_string())),
+        Value::Bool(b) => Ok(ValorSelaras::Bool(*b)),
+        lain => Err(format!(
+            "'ulang selaras' hanya mendukung item Angka/Desimal/Teks/Bool di dalam daftar, ditemukan {}", lain
+        )),
+    }
+}
+
+/// Menjalankan badan 'ulang selaras' untuk semua item, dipecah ke beberapa thread
+/// (sebanyak core CPU yang tersedia). Hasil 'tampilkan' dikumpulkan per-item lalu
+/// dicetak di AKHIR sesuai urutan asli daftar -- supaya output tetap deterministik
+/// walau komputasinya berjalan tidak berurutan di banyak core.
+fn jalankan_selaras(var: &str, items: Vec<ValorSelaras>, body: &[(usize, Stmt)]) -> Result<Vec<Vec<String>>, String> {
+    if items.is_empty() { return Ok(Vec::new()); }
+
+    let n_thread = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).max(1);
+    let chunk_size = (items.len() + n_thread - 1) / n_thread;
+    let mut hasil: Vec<Vec<String>> = vec![Vec::new(); items.len()];
+
+    let hasil_per_chunk: Result<Vec<Vec<(usize, Vec<String>)>>, String> = std::thread::scope(|s| {
+        let mut handles = Vec::new();
+        for (chunk_idx, chunk) in items.chunks(chunk_size).enumerate() {
+            let start_idx = chunk_idx * chunk_size;
+            let handle = s.spawn(move || -> Result<Vec<(usize, Vec<String>)>, String> {
+                let mut lokal = Vec::with_capacity(chunk.len());
+                for (i, item) in chunk.iter().enumerate() {
+                    let mut scope: HashMap<String, ValorSelaras> = HashMap::new();
+                    scope.insert(var.to_string(), item.clone());
+                    let mut keluaran = Vec::new();
+                    eksekusi_selaras(body, &mut scope, &mut keluaran)?;
+                    lokal.push((start_idx + i, keluaran));
+                }
+                Ok(lokal)
+            });
+            handles.push(handle);
+        }
+        handles.into_iter()
+            .map(|h| h.join().map_err(|_| "Salah satu thread paralel gagal (panic).".to_string())?)
+            .collect()
+    });
+
+    for chunk_hasil in hasil_per_chunk? {
+        for (idx, keluaran) in chunk_hasil { hasil[idx] = keluaran; }
+    }
+    Ok(hasil)
+}
+
+
+
+/// Bagian VM yang read-only setelah kompilasi selesai (konstanta & tabel fungsi).
+/// Dipisah dari state yang berubah supaya: (1) tidak perlu di-clone tiap panggilan fungsi
+/// -- cukup dipinjam (borrow) biasa, gratis; (2) nantinya bisa dibagi ke banyak thread
+/// sekaligus lewat satu Arc<Pustaka>, dasar untuk 'ulang selaras' (paralel).
+pub struct Pustaka {
+    konstanta: Vec<Value>,
+    fungsi: Vec<Rc<VMFungsi>>,
+    /// Peta nama fungsi -> indeksnya di `fungsi` -- dipakai buat panggilan-balik (callback)
+    /// dari builtin seperti petakan()/saring()/urutkan() yang terima nama fungsi user
+    /// sebagai argumen Teks, lalu perlu manggil balik fungsi itu per-item.
+    nama_ke_indeks: HashMap<String, usize>,
+}
+
+enum SlotVar { Local(usize), Global(usize) }
+
+/// Satu penangan 'coba/tangkap' aktif: kalau error terjadi selagi ini masih di tumpukan,
+/// eksekusi dialihkan ke instruksi `target` (awal blok 'tangkap'), dengan operand stack
+/// dikembalikan ke `stack_base` dan pesan errornya disimpan ke `slot`.
+struct PenangkapError { stack_base: usize, target: usize, slot: SlotVar }
+
+/// Bagian VM yang berubah selama eksekusi (unik per-thread saat nanti dipakai paralel).
+struct VMState {
+    globals: Vec<Value>,
+    stack: Vec<Value>,
+    iter_stack: Vec<(Vec<Value>, usize)>,
+    locals_stack: Vec<Value>,
+    handler_stack: Vec<PenangkapError>,
+    baris_sekarang: usize,
+}
+
+pub struct VM {
+    pustaka: Pustaka,
+    state: VMState,
+}
+
+impl VM {
+    pub fn new(global_slot_count: usize, konstanta: Vec<Value>, fungsi: Vec<Rc<VMFungsi>>, nama_ke_indeks: HashMap<String, usize>) -> Self {
+        VM {
+            pustaka: Pustaka { konstanta, fungsi, nama_ke_indeks },
+            state: VMState {
+                globals: vec![Value::Kosong; global_slot_count],
+                stack: Vec::with_capacity(256),
+                iter_stack: Vec::new(),
+                locals_stack: Vec::with_capacity(256),
+                handler_stack: Vec::new(),
+                baris_sekarang: 0,
+            },
+        }
+    }
+
+    pub fn jalankan_top(&mut self, kode: &[Instr]) -> Result<(), String> {
+        eksekusi(&self.pustaka, &mut self.state, kode, 0)?;
+        Ok(())
+    }
+}
+
+/// Tempelkan nomor baris ke pesan error, TAPI cuma sekali -- kalau pesan sudah
+/// diawali "Baris N:" (berarti sudah ditempelkan di frame yang lebih dalam saat
+/// error itu pertama kali terjadi), biarkan apa adanya supaya tidak dobel.
+fn dengan_baris(pesan: String, baris: usize) -> String {
+    if pesan.starts_with("Baris ") { pesan } else { format!("Baris {}: {}", baris, pesan) }
+}
+
+/// Panggil fungsi user (bytecode ATAU native JIT, dua-duanya didukung) dengan tepat 1 argumen --
+/// dipakai sebagai mesin panggilan-balik buat petakan()/saring()/urutkan().
+fn panggil_fungsi_1_arg(pustaka: &Pustaka, state: &mut VMState, idx: usize, arg: Value) -> Result<Value, String> {
+    let f = &pustaka.fungsi[idx];
+    if f.param_flat.len() != 1 {
+        return Err(format!("Fungsi callback butuh tepat 1 parameter (item-nya sendiri), tapi fungsi ini punya {} parameter.", f.param_flat.len()));
+    }
+    let argumen = match &f.param_flat[0] {
+        // Parameter callback ini "flattened" (instans 'bentuk' numerik-murni, lihat
+        // CFungsi::param_flat) -- bongkar `arg` (harus instans) jadi nilai per-field sesuai
+        // urutan skema, supaya petakan()/saring()/urutkan() tetap bisa manggil fungsi begini.
+        Some(field_urut) => {
+            let entries = match &arg {
+                Value::Instans(_, entries) => entries,
+                lain => return Err(format!("Fungsi callback ini butuh instans 'bentuk', ditemukan {}", lain)),
+            };
+            let mut v = Vec::with_capacity(field_urut.len());
+            for fnama in field_urut {
+                let val = entries.iter().find(|(k, _)| k == fnama).map(|(_, val)| val.clone())
+                    .ok_or_else(|| format!("Instans tidak punya field \"{}\" yang dibutuhkan fungsi callback.", fnama))?;
+                v.push(val);
+            }
+            v
+        }
+        None => vec![arg],
+    };
+    panggil_fungsi_dengan_argumen(pustaka, state, idx, argumen)
+}
+
+/// Versi umum panggil_fungsi_1_arg buat sembarang jumlah argumen -- dipakai buat memanggil
+/// Value::Fungsi (closure) lewat Instr::PanggilNilai. `argumen` sudah termasuk tangkapan
+/// closure DI DEPAN (kalau ada), diikuti argumen dari titik pemanggilan, persis sesuai urutan
+/// slot lokal fungsi tujuan (lihat resolve_fungsi_umum: tangkapan dulu, baru parameter).
+fn panggil_fungsi_dengan_argumen(pustaka: &Pustaka, state: &mut VMState, idx: usize, argumen: Vec<Value>) -> Result<Value, String> {
+    let f = &pustaka.fungsi[idx];
+    if argumen.len() != f.param_count {
+        return Err(format!("Fungsi ini butuh {} argumen, tapi diberi {}.", f.param_count, argumen.len()));
+    }
+    if let Some(native) = f.native {
+        match native {
+            NativeFn::Angka(native) => {
+                let mut larik = Vec::with_capacity(argumen.len());
+                for v in argumen {
+                    match v {
+                        Value::Angka(n) => larik.push(n),
+                        lain => return Err(format!("Argumen untuk fungsi native (JIT) harus Angka, ditemukan {}", lain)),
+                    }
+                }
+                Ok(Value::Angka(native(larik.as_ptr())))
+            }
+            NativeFn::Desimal(native) => {
+                let mut larik = Vec::with_capacity(argumen.len());
+                for v in argumen {
+                    match v {
+                        Value::Desimal(n) => larik.push(n),
+                        Value::Angka(n) => larik.push(n as f64),
+                        lain => return Err(format!("Argumen untuk fungsi native (JIT) harus Desimal, ditemukan {}", lain)),
+                    }
+                }
+                Ok(Value::Desimal(native(larik.as_ptr())))
+            }
+        }
+    } else {
+        let base = state.locals_stack.len();
+        state.locals_stack.resize(base + f.local_slot_count, Value::Kosong);
+        for (i, v) in argumen.into_iter().enumerate() { state.locals_stack[base + i] = v; }
+        let hasil = eksekusi(pustaka, state, &f.kode, base)?.unwrap_or(Value::Kosong);
+        state.locals_stack.truncate(base);
+        Ok(hasil)
+    }
+}
+
+/// Bandingkan dua nilai buat kebutuhan urutkan() -- hanya Angka/Desimal (dibandingkan
+/// numerik, boleh campur) dan Teks (dibandingkan leksikografis) yang didukung.
+fn bandingkan_nilai(a: &Value, b: &Value) -> Result<std::cmp::Ordering, String> {
+    match (a, b) {
+        (Value::Teks(x), Value::Teks(y)) => Ok(x.cmp(y)),
+        _ => match (ke_desimal(a), ke_desimal(b)) {
+            (Some(x), Some(y)) => Ok(x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)),
+            _ => Err(format!("urutkan() cuma bisa buat daftar berisi Angka/Desimal atau Teks (gak campur), ditemukan {} dan {}", a, b)),
+        },
+    }
+}
+
+/// Loop dispatch inti VM. Mengembalikan Some(nilai) kalau 'kembalikan' tereksekusi.
+/// `pustaka` dipinjam (bukan di-clone) di jalur panggilan fungsi -- karena Arc::clone
+/// itu atomic increment (sedikit lebih mahal dari Rc), kalau dilakukan jutaan kali di
+/// rekursi berat itu kerasa. Meminjam biasa di sini nol biaya.
+///
+/// Error TIDAK langsung dipropagasi lewat '?' seperti biasa -- tiap kali eksekusi_satu()
+/// gagal, loop di sini cek dulu apakah ada 'coba/tangkap' aktif MILIK frame ini sendiri
+/// (handler_stack.len() > base_handler, bukan warisan dari fungsi pemanggil). Kalau ada,
+/// program TIDAK berhenti: pesan error disimpan ke variabel 'tangkap' dan eksekusi
+/// lanjut dari situ. Kalau tidak ada, error dipropagasi seperti biasa ke pemanggil.
+fn eksekusi(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_base: usize) -> Result<Option<Value>, String> {
+    let base_stack = state.stack.len();
+    let base_handler = state.handler_stack.len();
+    let mut pc = 0usize;
+
+    while pc < kode.len() {
+        match eksekusi_satu(pustaka, state, kode, locals_base, &mut pc) {
+            Ok(None) => { /* lanjut, pc sudah diupdate di dalam eksekusi_satu */ }
+            Ok(Some(v)) => {
+                state.stack.truncate(base_stack);
+                state.handler_stack.truncate(base_handler);
+                return Ok(Some(v));
+            }
+            Err(pesan) => {
+                let pesan = dengan_baris(pesan, state.baris_sekarang);
+                if state.handler_stack.len() > base_handler {
+                    let handler = state.handler_stack.pop().unwrap();
+                    state.stack.truncate(handler.stack_base);
+                    match handler.slot {
+                        SlotVar::Local(s) => state.locals_stack[locals_base + s] = Value::Teks(pesan.into()),
+                        SlotVar::Global(s) => state.globals[s] = Value::Teks(pesan.into()),
+                    }
+                    pc = handler.target;
+                } else {
+                    state.stack.truncate(base_stack);
+                    state.handler_stack.truncate(base_handler);
+                    return Err(pesan);
+                }
+            }
+        }
+    }
+    state.stack.truncate(base_stack);
+    state.handler_stack.truncate(base_handler);
+    Ok(None)
+}
+
+/// Menjalankan SATU instruksi. Ok(None) = lanjut (pc sudah diupdate di dalam sini),
+/// Ok(Some(v)) = 'kembalikan' tereksekusi, Err = ada kesalahan (belum tentu fatal --
+/// eksekusi() di atas yang memutuskan mau ditangkap 'coba/tangkap' atau dipropagasi).
+fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_base: usize, pc: &mut usize) -> Result<Option<Value>, String> {
+            match &kode[*pc] {
+                Instr::TandaiBaris(baris) => { state.baris_sekarang = *baris; *pc += 1; }
+                Instr::PushK(i) => { state.stack.push(pustaka.konstanta[*i].clone()); *pc += 1; }
+                Instr::LoadGlobal(s) => { state.stack.push(state.globals[*s].clone()); *pc += 1; }
+                Instr::StoreGlobal(s) => { let v = state.stack.pop().unwrap(); state.globals[*s] = v; *pc += 1; }
+                Instr::LoadLocal(s) => { state.stack.push(state.locals_stack[locals_base + *s].clone()); *pc += 1; }
+                Instr::StoreLocal(s) => { let v = state.stack.pop().unwrap(); state.locals_stack[locals_base + *s] = v; *pc += 1; }
+                Instr::BinOp(op) => {
+                    let r = state.stack.pop().unwrap();
+                    let l = state.stack.pop().unwrap();
+                    state.stack.push(eval_binop(l, *op, r)?);
+                    *pc += 1;
+                }
+                Instr::Lompat(target) => { *pc = *target; }
+                Instr::LompatJikaSalah(target) => {
+                    let v = state.stack.pop().unwrap();
+                    if v.truthy() { *pc += 1; } else { *pc = *target; }
+                }
+                Instr::MakeDaftar(n) => {
+                    let mut items = Vec::with_capacity(*n);
+                    for _ in 0..*n { items.push(state.stack.pop().unwrap()); }
+                    items.reverse();
+                    state.stack.push(Value::Daftar(items.into()));
+                    *pc += 1;
+                }
+                Instr::MakePeta(kunci) => {
+                    let mut nilai = Vec::with_capacity(kunci.len());
+                    for _ in 0..kunci.len() { nilai.push(state.stack.pop().unwrap()); }
+                    nilai.reverse();
+                    let entries: Vec<(String, Value)> = kunci.iter().cloned().zip(nilai.into_iter()).collect();
+                    state.stack.push(Value::Peta(entries.into()));
+                    *pc += 1;
+                }
+                Instr::Indeks => {
+                    let i = state.stack.pop().unwrap();
+                    let t = state.stack.pop().unwrap();
+                    state.stack.push(indeks_value(t, i)?);
+                    *pc += 1;
+                }
+                Instr::AmbilField(field) => {
+                    let t = state.stack.pop().unwrap();
+                    match &t {
+                        Value::Instans(nama, entries) => {
+                            let v = entries.iter().find(|(k, _)| k == field).map(|(_, v)| v.clone())
+                                .ok_or_else(|| format!("Bentuk \"{}\" tidak punya field \"{}\".", nama, field))?;
+                            state.stack.push(v);
+                        }
+                        lain => return Err(format!("Akses field \".{}\" hanya berlaku untuk instans 'bentuk', ditemukan {}", field, lain)),
+                    }
+                    *pc += 1;
+                }
+                Instr::BuatInstans(nama, field_nama) => {
+                    let mut nilai = Vec::with_capacity(field_nama.len());
+                    for _ in 0..field_nama.len() { nilai.push(state.stack.pop().unwrap()); }
+                    nilai.reverse();
+                    let entries: Vec<(String, Value)> = field_nama.iter().cloned().zip(nilai.into_iter()).collect();
+                    state.stack.push(Value::Instans(nama.as_str().into(), Rc::new(entries)));
+                    *pc += 1;
+                }
+                Instr::SetField(field) => {
+                    let baru = state.stack.pop().unwrap();
+                    let t = state.stack.pop().unwrap();
+                    match t {
+                        Value::Instans(nama, entries) => {
+                            if !entries.iter().any(|(k, _)| k == field) {
+                                return Err(format!("Bentuk \"{}\" tidak punya field \"{}\".", nama, field));
+                            }
+                            let mut baru_entries = (*entries).clone();
+                            for (k, v) in baru_entries.iter_mut() { if k == field { *v = baru; break; } }
+                            state.stack.push(Value::Instans(nama, Rc::new(baru_entries)));
+                        }
+                        lain => return Err(format!("Tidak bisa mengubah field \".{}\" pada nilai {} (bukan instans 'bentuk').", field, lain)),
+                    }
+                    *pc += 1;
+                }
+                Instr::Dup => { let v = state.stack.last().unwrap().clone(); state.stack.push(v); *pc += 1; }
+                Instr::BuatFungsi(idx, jumlah_tangkapan) => {
+                    let mulai = state.stack.len() - jumlah_tangkapan;
+                    let tangkapan: Vec<Value> = state.stack.drain(mulai..).collect();
+                    state.stack.push(Value::Fungsi(Rc::new(NilaiFungsi { idx: *idx, tangkapan })));
+                    *pc += 1;
+                }
+                Instr::PanggilNilai(argc) => {
+                    let mulai = state.stack.len() - argc;
+                    let argumen_panggilan: Vec<Value> = state.stack.drain(mulai..).collect();
+                    let callee = state.stack.pop().unwrap();
+                    let nf = match callee {
+                        Value::Fungsi(nf) => nf,
+                        lain => return Err(format!("Nilai ini bukan fungsi, gak bisa dipanggil: {}", lain)),
+                    };
+                    let mut argumen_lengkap = nf.tangkapan.clone();
+                    argumen_lengkap.extend(argumen_panggilan);
+                    let hasil = panggil_fungsi_dengan_argumen(pustaka, state, nf.idx, argumen_lengkap)?;
+                    state.stack.push(hasil);
+                    *pc += 1;
+                }
+                Instr::Tampilkan => { let v = state.stack.pop().unwrap(); println!("{}", v); *pc += 1; }
+                Instr::Pop => { state.stack.pop(); *pc += 1; }
+                Instr::PanggilFungsi(idx, argc) => {
+                    let f = &pustaka.fungsi[*idx];
+                    if f.param_count != *argc {
+                        return Err(format!("Fungsi mengharapkan {} argumen, tapi diberikan {}.", f.param_count, argc));
+                    }
+                    if let Some(native) = f.native {
+                        // Jalur JIT: langsung panggil kode mesin asli, lewati bytecode VM sepenuhnya.
+                        // Susun argumen jadi larik sesuai mode (i64 atau f64), lalu kirim pointer-nya --
+                        // signature native seragam untuk sembarang jumlah parameter per mode (lihat VMFungsi::native).
+                        let args_start = state.stack.len() - argc;
+                        let hasil = match native {
+                            NativeFn::Angka(native) => {
+                                let mut larik: Vec<i64> = Vec::with_capacity(*argc);
+                                for v in state.stack.drain(args_start..) {
+                                    match v {
+                                        Value::Angka(n) => larik.push(n),
+                                        lain => return Err(format!("Argumen untuk fungsi native (JIT) harus Angka, ditemukan {}", lain)),
+                                    }
+                                }
+                                Value::Angka(native(larik.as_ptr()))
+                            }
+                            NativeFn::Desimal(native) => {
+                                let mut larik: Vec<f64> = Vec::with_capacity(*argc);
+                                for v in state.stack.drain(args_start..) {
+                                    match v {
+                                        Value::Desimal(n) => larik.push(n),
+                                        Value::Angka(n) => larik.push(n as f64),
+                                        lain => return Err(format!("Argumen untuk fungsi native (JIT) harus Desimal, ditemukan {}", lain)),
+                                    }
+                                }
+                                Value::Desimal(native(larik.as_ptr()))
+                            }
+                        };
+                        state.stack.push(hasil);
+                    } else {
+                        let base = state.locals_stack.len();
+                        state.locals_stack.resize(base + f.local_slot_count, Value::Kosong);
+                        let args_start = state.stack.len() - argc;
+                        for i in 0..*argc {
+                            state.locals_stack[base + i] = std::mem::replace(&mut state.stack[args_start + i], Value::Kosong);
+                        }
+                        state.stack.truncate(args_start);
+                        let hasil = eksekusi(pustaka, state, &f.kode, base)?.unwrap_or(Value::Kosong);
+                        state.locals_stack.truncate(base);
+                        state.stack.push(hasil);
+                    }
+                    *pc += 1;
+                }
+                Instr::PanggilBawaan(nama, argc) => {
+                    let args_start = state.stack.len() - argc;
+                    let hasil = match nama.as_str() {
+                        "petakan" | "saring" if *argc == 2 => {
+                            let fungsi_nama = match &state.stack[args_start + 1] {
+                                Value::Teks(s) => s.to_string(),
+                                lain => return Err(format!("{}(daftar, nama_fungsi): argumen kedua harus Teks berisi nama fungsi, ditemukan {}", nama, lain)),
+                            };
+                            let daftar = match &state.stack[args_start] {
+                                Value::Daftar(d) => (**d).clone(),
+                                lain => return Err(format!("{}(daftar, nama_fungsi): argumen pertama harus Daftar, ditemukan {}", nama, lain)),
+                            };
+                            let idx = *pustaka.nama_ke_indeks.get(&fungsi_nama)
+                                .ok_or_else(|| format!("{}(): fungsi \"{}\" tidak ditemukan.", nama, fungsi_nama))?;
+                            state.stack.truncate(args_start);
+                            if nama == "petakan" {
+                                let mut hasil_daftar = Vec::with_capacity(daftar.len());
+                                for item in daftar { hasil_daftar.push(panggil_fungsi_1_arg(pustaka, state, idx, item)?); }
+                                Value::Daftar(Rc::new(hasil_daftar))
+                            } else {
+                                let mut hasil_daftar = Vec::with_capacity(daftar.len());
+                                for item in daftar {
+                                    match panggil_fungsi_1_arg(pustaka, state, idx, item.clone())? {
+                                        Value::Bool(true) => hasil_daftar.push(item),
+                                        Value::Bool(false) => {}
+                                        lain => return Err(format!("saring(): fungsi penyaring harus mengembalikan Bool, ditemukan {}", lain)),
+                                    }
+                                }
+                                Value::Daftar(Rc::new(hasil_daftar))
+                            }
+                        }
+                        "urutkan" if *argc == 1 || *argc == 2 => {
+                            let fungsi_kunci = if *argc == 2 {
+                                match &state.stack[args_start + 1] {
+                                    Value::Teks(s) => Some(s.to_string()),
+                                    lain => return Err(format!("urutkan(daftar, nama_fungsi): argumen kedua harus Teks berisi nama fungsi, ditemukan {}", lain)),
+                                }
+                            } else { None };
+                            let daftar = match &state.stack[args_start] {
+                                Value::Daftar(d) => (**d).clone(),
+                                lain => return Err(format!("urutkan(): argumen pertama harus Daftar, ditemukan {}", lain)),
+                            };
+                            state.stack.truncate(args_start);
+                            let hasil_daftar = if let Some(fnama) = fungsi_kunci {
+                                let idx = *pustaka.nama_ke_indeks.get(&fnama)
+                                    .ok_or_else(|| format!("urutkan(): fungsi \"{}\" tidak ditemukan.", fnama))?;
+                                let mut berkunci = Vec::with_capacity(daftar.len());
+                                for item in daftar { let kunci = panggil_fungsi_1_arg(pustaka, state, idx, item.clone())?; berkunci.push((kunci, item)); }
+                                let mut kesalahan = None;
+                                berkunci.sort_by(|(ka, _), (kb, _)| bandingkan_nilai(ka, kb).unwrap_or_else(|e| { kesalahan = Some(e); std::cmp::Ordering::Equal }));
+                                if let Some(e) = kesalahan { return Err(e); }
+                                berkunci.into_iter().map(|(_, v)| v).collect()
+                            } else {
+                                let mut d = daftar;
+                                let mut kesalahan = None;
+                                d.sort_by(|a, b| bandingkan_nilai(a, b).unwrap_or_else(|e| { kesalahan = Some(e); std::cmp::Ordering::Equal }));
+                                if let Some(e) = kesalahan { return Err(e); }
+                                d
+                            };
+                            Value::Daftar(Rc::new(hasil_daftar))
+                        }
+                        _ => {
+                            let hasil = panggil_bawaan(nama, &state.stack[args_start..])?
+                                .ok_or_else(|| format!("Fungsi \"{}\" tidak ditemukan.", nama))?;
+                            state.stack.truncate(args_start);
+                            hasil
+                        }
+                    };
+                    state.stack.push(hasil);
+                    *pc += 1;
+                }
+                Instr::IterMulai => {
+                    let v = state.stack.pop().unwrap();
+                    match v {
+                        Value::Daftar(items) => state.iter_stack.push(((*items).clone(), 0)),
+                        lain => return Err(format!("'ulang setiap' butuh Daftar, ditemukan {}", lain)),
+                    }
+                    *pc += 1;
+                }
+                Instr::IterLanjutLocal(slot, target) => {
+                    let selesai = {
+                        let (items, pos) = state.iter_stack.last_mut().unwrap();
+                        if *pos < items.len() { state.locals_stack[locals_base + *slot] = items[*pos].clone(); *pos += 1; false } else { true }
+                    };
+                    if selesai { state.iter_stack.pop(); *pc = *target; } else { *pc += 1; }
+                }
+                Instr::IterLanjutGlobal(slot, target) => {
+                    let selesai = {
+                        let (items, pos) = state.iter_stack.last_mut().unwrap();
+                        if *pos < items.len() { state.globals[*slot] = items[*pos].clone(); *pos += 1; false } else { true }
+                    };
+                    if selesai { state.iter_stack.pop(); *pc = *target; } else { *pc += 1; }
+                }
+                Instr::JalankanSelaras(var, body) => {
+                    let daftar_val = state.stack.pop().unwrap();
+                    let items: Vec<ValorSelaras> = match daftar_val {
+                        Value::Daftar(d) => d.iter().map(value_ke_selaras).collect::<Result<Vec<_>, _>>()?,
+                        lain => return Err(format!("'ulang selaras' butuh Daftar, ditemukan {}", lain)),
+                    };
+                    let hasil = jalankan_selaras(var, items, body)?;
+                    for keluaran in hasil {
+                        for baris in keluaran { println!("{}", baris); }
+                    }
+                    *pc += 1;
+                }
+                Instr::MulaiCobaLocal(target, slot) => {
+                    state.handler_stack.push(PenangkapError { stack_base: state.stack.len(), target: *target, slot: SlotVar::Local(*slot) });
+                    *pc += 1;
+                }
+                Instr::MulaiCobaGlobal(target, slot) => {
+                    state.handler_stack.push(PenangkapError { stack_base: state.stack.len(), target: *target, slot: SlotVar::Global(*slot) });
+                    *pc += 1;
+                }
+                Instr::SelesaiCoba => {
+                    state.handler_stack.pop(); // blok 'coba' selesai TANPA error, buang penangannya
+                    *pc += 1;
+                }
+                Instr::Kembalikan => {
+                    let v = state.stack.pop().unwrap();
+                    return Ok(Some(v));
+                }
+            }
+    Ok(None)
+}
+
+/// Standard Library dasar: daftar, peta/JSON, berkas, jaringan.
+fn panggil_bawaan(nama: &str, args: &[Value]) -> Result<Option<Value>, String> {
+    match nama {
+        "panjang" => match args.get(0) {
+            Some(Value::Daftar(d)) => Ok(Some(Value::Angka(d.len() as i64))),
+            Some(Value::Teks(s)) => Ok(Some(Value::Angka(s.chars().count() as i64))),
+            Some(Value::Peta(p)) => Ok(Some(Value::Angka(p.len() as i64))),
+            Some(lain) => Err(format!("panjang() tidak berlaku untuk {}", lain)),
+            None => Err("panjang() butuh 1 argumen".to_string()),
+        },
+        "gabung" => {
+            let daftar = args.get(0).ok_or_else(|| "gabung(daftar, item) butuh 2 argumen".to_string())?;
+            let item = args.get(1).ok_or_else(|| "gabung(daftar, item) butuh 2 argumen".to_string())?;
+            match daftar {
+                Value::Daftar(d) => { let mut baru = (**d).clone(); baru.push(item.clone()); Ok(Some(Value::Daftar(baru.into()))) }
+                lain => Err(format!("gabung() argumen pertama harus Daftar, ditemukan {}", lain)),
+            }
+        }
+        "ambil" => {
+            let struktur = args.get(0).ok_or_else(|| "ambil(struktur, kunci) butuh 2 argumen".to_string())?;
+            let kunci = args.get(1).ok_or_else(|| "ambil(struktur, kunci) butuh 2 argumen".to_string())?;
+            match (struktur, kunci) {
+                (Value::Daftar(d), Value::Angka(i)) => {
+                    if *i < 0 { return Err(format!("Indeks tidak boleh negatif: {}", i)); }
+                    d.get(*i as usize).cloned().map(Some).ok_or_else(|| format!("Indeks {} di luar jangkauan (panjang daftar: {})", i, d.len()))
+                }
+                (Value::Peta(entries), Value::Teks(k)) => {
+                    entries.iter().find(|(kk, _)| kk.as_str() == k.as_ref()).map(|(_, v)| v.clone()).map(Some)
+                        .ok_or_else(|| format!("Kunci \"{}\" tidak ditemukan di Peta.", k))
+                }
+                (s, k) => Err(format!("ambil() butuh (Daftar, Angka) atau (Peta, Teks), ditemukan {} dan {}", s, k)),
+            }
+        }
+        "jumlah" => match args.get(0) {
+            Some(Value::Daftar(d)) => {
+                let mut total_i = 0i64; let mut total_f = 0f64; let mut ada_desimal = false;
+                for v in d.iter() {
+                    match v {
+                        Value::Angka(n) => { total_i += n; total_f += *n as f64; }
+                        Value::Desimal(x) => { ada_desimal = true; total_f += x; }
+                        lain => return Err(format!("jumlah() hanya untuk daftar berisi Angka, ditemukan {}", lain)),
+                    }
+                }
+                if ada_desimal { Ok(Some(Value::Desimal(total_f))) } else { Ok(Some(Value::Angka(total_i))) }
+            }
+            Some(lain) => Err(format!("jumlah() butuh Daftar, ditemukan {}", lain)),
+            None => Err("jumlah() butuh 1 argumen".to_string()),
+        },
+        "rata_rata" => match args.get(0) {
+            Some(Value::Daftar(d)) if !d.is_empty() => {
+                let mut total_i = 0i64; let mut total_f = 0f64; let mut ada_desimal = false;
+                for v in d.iter() {
+                    match v {
+                        Value::Angka(n) => { total_i += n; total_f += *n as f64; }
+                        Value::Desimal(x) => { ada_desimal = true; total_f += x; }
+                        lain => return Err(format!("rata_rata() hanya untuk daftar berisi Angka, ditemukan {}", lain)),
+                    }
+                }
+                if ada_desimal { Ok(Some(Value::Desimal(total_f / d.len() as f64))) } else { Ok(Some(Value::Angka(total_i / d.len() as i64))) }
+            }
+            Some(Value::Daftar(_)) => Err("rata_rata() tidak bisa dihitung dari daftar kosong".to_string()),
+            Some(lain) => Err(format!("rata_rata() butuh Daftar, ditemukan {}", lain)),
+            None => Err("rata_rata() butuh 1 argumen".to_string()),
+        },
+        "kunci_peta" => match args.get(0) {
+            Some(Value::Peta(entries)) => Ok(Some(Value::Daftar(Rc::new(entries.iter().map(|(k, _)| Value::Teks(k.clone().into())).collect())))),
+            Some(lain) => Err(format!("kunci_peta() butuh Peta, ditemukan {}", lain)),
+            None => Err("kunci_peta() butuh 1 argumen".to_string()),
+        },
+        "urai_json" => match args.get(0) {
+            Some(Value::Teks(s)) => json_urai(s).map(Some),
+            Some(lain) => Err(format!("urai_json() butuh Teks, ditemukan {}", lain)),
+            None => Err("urai_json(teks) butuh 1 argumen".to_string()),
+        },
+        "teks_json" => match args.get(0) {
+            Some(v) => Ok(Some(Value::Teks(json_dari_value(v).into()))),
+            None => Err("teks_json(nilai) butuh 1 argumen".to_string()),
+        },
+        // Milestone C: dipakai `isoteri uji` (test runner minimal, lihat main.rs mode_uji) --
+        // konvensi: `kalau (bukan kondisi) { gagal_uji("pesan") }`. Cuma melempar Err biasa,
+        // sama seperti error runtime lain -- gak butuh mekanisme baru sama sekali.
+        "gagal_uji" => match args.get(0) {
+            Some(Value::Teks(pesan)) => Err(pesan.to_string()),
+            Some(lain) => Err(format!("gagal_uji(): {}", lain)),
+            None => Err("Uji gagal (gagal_uji() dipanggil tanpa pesan).".to_string()),
+        },
+        "baca_berkas" => match args.get(0) {
+            Some(Value::Teks(p)) => match fs::read_to_string(p.as_ref()) {
+                Ok(isi) => Ok(Some(Value::Teks(isi.into()))),
+                Err(e) => Err(format!("Tidak bisa membaca berkas \"{}\": {}", p, e)),
+            },
+            Some(lain) => Err(format!("baca_berkas() butuh nama berkas berupa Teks, ditemukan {}", lain)),
+            None => Err("baca_berkas(path) butuh 1 argumen".to_string()),
+        },
+        "tulis_berkas" => {
+            let path = args.get(0).ok_or_else(|| "tulis_berkas(path, isi) butuh 2 argumen".to_string())?;
+            let isi = args.get(1).ok_or_else(|| "tulis_berkas(path, isi) butuh 2 argumen".to_string())?;
+            match (path, isi) {
+                (Value::Teks(p), Value::Teks(s)) => match fs::write(p.as_ref(), s.as_ref()) {
+                    Ok(_) => Ok(Some(Value::Bool(true))),
+                    Err(e) => Err(format!("Tidak bisa menulis berkas \"{}\": {}", p, e)),
+                },
+                (p, s) => Err(format!("tulis_berkas(path, isi) butuh dua Teks, ditemukan {} dan {}", p, s)),
+            }
+        }
+        "unduh" => match args.get(0) {
+            Some(Value::Teks(u)) => match ureq::get(u.as_ref()).call() {
+                Ok(resp) => match resp.into_string() {
+                    Ok(body) => Ok(Some(Value::Teks(body.into()))),
+                    Err(e) => Err(format!("Gagal membaca respons dari \"{}\": {}", u, e)),
+                },
+                Err(e) => Err(format!("Gagal mengunduh dari \"{}\": {}", u, e)),
+            },
+            Some(lain) => Err(format!("unduh() butuh URL berupa Teks, ditemukan {}", lain)),
+            None => Err("unduh(url) butuh 1 argumen".to_string()),
+        },
+        "ke_desimal" => match args.get(0) {
+            Some(Value::Angka(n)) => Ok(Some(Value::Desimal(*n as f64))),
+            Some(v @ Value::Desimal(_)) => Ok(Some(v.clone())),
+            Some(lain) => Err(format!("ke_desimal() tidak berlaku untuk {}", lain)),
+            None => Err("ke_desimal(angka) butuh 1 argumen".to_string()),
+        },
+        "ke_bulat" => match args.get(0) {
+            Some(Value::Desimal(f)) => Ok(Some(Value::Angka(*f as i64))),
+            Some(v @ Value::Angka(_)) => Ok(Some(v.clone())),
+            Some(lain) => Err(format!("ke_bulat() tidak berlaku untuk {}", lain)),
+            None => Err("ke_bulat(desimal) butuh 1 argumen".to_string()),
+        },
+        "ke_teks" => match args.get(0) {
+            Some(v) => Ok(Some(Value::Teks(v.to_string().into()))),
+            None => Err("ke_teks(nilai) butuh 1 argumen".to_string()),
+        },
+
+        // --- Matematika ---
+        "akar" => match ke_desimal(args.get(0).ok_or_else(|| "akar(angka) butuh 1 argumen".to_string())?) {
+            Some(x) if x >= 0.0 => Ok(Some(Value::Desimal(x.sqrt()))),
+            Some(_) => Err("akar() tidak berlaku untuk angka negatif.".to_string()),
+            None => Err(format!("akar() butuh Angka/Desimal, ditemukan {}", args[0])),
+        },
+        "pangkat" => {
+            let basis = args.get(0).ok_or_else(|| "pangkat(basis, eksponen) butuh 2 argumen".to_string())?;
+            let eksponen = args.get(1).ok_or_else(|| "pangkat(basis, eksponen) butuh 2 argumen".to_string())?;
+            match (basis, eksponen) {
+                (Value::Angka(b), Value::Angka(e)) if *e >= 0 => Ok(Some(Value::Angka(b.pow(*e as u32)))),
+                _ => match (ke_desimal(basis), ke_desimal(eksponen)) {
+                    (Some(b), Some(e)) => Ok(Some(Value::Desimal(b.powf(e)))),
+                    _ => Err(format!("pangkat() butuh Angka/Desimal, ditemukan {} dan {}", basis, eksponen)),
+                },
+            }
+        }
+        "bulat" => match ke_desimal(args.get(0).ok_or_else(|| "bulat(desimal) butuh 1 argumen".to_string())?) {
+            Some(x) => Ok(Some(Value::Angka(x.round() as i64))),
+            None => Err(format!("bulat() butuh Angka/Desimal, ditemukan {}", args[0])),
+        },
+        "bulat_bawah" => match ke_desimal(args.get(0).ok_or_else(|| "bulat_bawah(desimal) butuh 1 argumen".to_string())?) {
+            Some(x) => Ok(Some(Value::Angka(x.floor() as i64))),
+            None => Err(format!("bulat_bawah() butuh Angka/Desimal, ditemukan {}", args[0])),
+        },
+        "bulat_atas" => match ke_desimal(args.get(0).ok_or_else(|| "bulat_atas(desimal) butuh 1 argumen".to_string())?) {
+            Some(x) => Ok(Some(Value::Angka(x.ceil() as i64))),
+            None => Err(format!("bulat_atas() butuh Angka/Desimal, ditemukan {}", args[0])),
+        },
+        "mutlak" => match args.get(0) {
+            Some(Value::Angka(n)) => Ok(Some(Value::Angka(n.abs()))),
+            Some(Value::Desimal(f)) => Ok(Some(Value::Desimal(f.abs()))),
+            Some(lain) => Err(format!("mutlak() tidak berlaku untuk {}", lain)),
+            None => Err("mutlak(angka) butuh 1 argumen".to_string()),
+        },
+        "min" => {
+            let a = args.get(0).ok_or_else(|| "min(a, b) butuh 2 argumen".to_string())?;
+            let b = args.get(1).ok_or_else(|| "min(a, b) butuh 2 argumen".to_string())?;
+            match (ke_desimal(a), ke_desimal(b)) {
+                (Some(x), Some(y)) => Ok(Some(if x <= y { a.clone() } else { b.clone() })),
+                _ => Err(format!("min() butuh Angka/Desimal, ditemukan {} dan {}", a, b)),
+            }
+        }
+        "maks" => {
+            let a = args.get(0).ok_or_else(|| "maks(a, b) butuh 2 argumen".to_string())?;
+            let b = args.get(1).ok_or_else(|| "maks(a, b) butuh 2 argumen".to_string())?;
+            match (ke_desimal(a), ke_desimal(b)) {
+                (Some(x), Some(y)) => Ok(Some(if x >= y { a.clone() } else { b.clone() })),
+                _ => Err(format!("maks() butuh Angka/Desimal, ditemukan {} dan {}", a, b)),
+            }
+        }
+        "acak" => Ok(Some(Value::Desimal(acak_f64()))),
+
+        // --- Teks ---
+        "potong" => {
+            let s = match args.get(0) { Some(Value::Teks(s)) => s, _ => return Err("potong(teks, mulai, akhir) argumen pertama harus Teks".to_string()) };
+            let mulai = match args.get(1) { Some(Value::Angka(n)) => *n, _ => return Err("potong(teks, mulai, akhir) butuh Angka untuk 'mulai'".to_string()) };
+            let akhir = match args.get(2) { Some(Value::Angka(n)) => *n, _ => return Err("potong(teks, mulai, akhir) butuh Angka untuk 'akhir'".to_string()) };
+            let chars: Vec<char> = s.chars().collect();
+            let mulai = mulai.max(0) as usize;
+            let akhir = (akhir.max(0) as usize).min(chars.len());
+            if mulai > akhir { return Err(format!("potong(): 'mulai' ({}) tidak boleh lebih besar dari 'akhir' ({})", mulai, akhir)); }
+            Ok(Some(Value::Teks(chars[mulai..akhir].iter().collect::<String>().into())))
+        }
+        "ganti" => {
+            let s = match args.get(0) { Some(Value::Teks(s)) => s, _ => return Err("ganti(teks, dari, ke) argumen pertama harus Teks".to_string()) };
+            let dari = match args.get(1) { Some(Value::Teks(s)) => s, _ => return Err("ganti(teks, dari, ke) butuh Teks untuk 'dari'".to_string()) };
+            let ke = match args.get(2) { Some(Value::Teks(s)) => s, _ => return Err("ganti(teks, dari, ke) butuh Teks untuk 'ke'".to_string()) };
+            Ok(Some(Value::Teks(s.replace(dari.as_ref(), ke).into())))
+        }
+        "huruf_besar" => match args.get(0) {
+            Some(Value::Teks(s)) => Ok(Some(Value::Teks(s.to_uppercase().into()))),
+            Some(lain) => Err(format!("huruf_besar() butuh Teks, ditemukan {}", lain)),
+            None => Err("huruf_besar(teks) butuh 1 argumen".to_string()),
+        },
+        "huruf_kecil" => match args.get(0) {
+            Some(Value::Teks(s)) => Ok(Some(Value::Teks(s.to_lowercase().into()))),
+            Some(lain) => Err(format!("huruf_kecil() butuh Teks, ditemukan {}", lain)),
+            None => Err("huruf_kecil(teks) butuh 1 argumen".to_string()),
+        },
+        "pangkas" => match args.get(0) {
+            Some(Value::Teks(s)) => Ok(Some(Value::Teks(s.trim().into()))),
+            Some(lain) => Err(format!("pangkas() butuh Teks, ditemukan {}", lain)),
+            None => Err("pangkas(teks) butuh 1 argumen".to_string()),
+        },
+        "pisah" => {
+            let s = match args.get(0) { Some(Value::Teks(s)) => s, _ => return Err("pisah(teks, pemisah) argumen pertama harus Teks".to_string()) };
+            let pemisah = match args.get(1) { Some(Value::Teks(s)) => s, _ => return Err("pisah(teks, pemisah) butuh Teks untuk 'pemisah'".to_string()) };
+            let bagian: Vec<Value> = if pemisah.is_empty() {
+                s.chars().map(|c| Value::Teks(c.to_string().into())).collect()
+            } else {
+                s.split(pemisah.as_ref()).map(|b| Value::Teks(b.into())).collect()
+            };
+            Ok(Some(Value::Daftar(Rc::new(bagian))))
+        }
+        "satukan" => {
+            let daftar = match args.get(0) { Some(Value::Daftar(d)) => d, _ => return Err("satukan(daftar, pemisah) argumen pertama harus Daftar".to_string()) };
+            let pemisah = match args.get(1) { Some(Value::Teks(s)) => s, _ => return Err("satukan(daftar, pemisah) butuh Teks untuk 'pemisah'".to_string()) };
+            let mut potongan_teks = Vec::with_capacity(daftar.len());
+            for v in daftar.iter() {
+                match v {
+                    Value::Teks(s) => potongan_teks.push(s.to_string()),
+                    lain => return Err(format!("satukan() cuma bisa buat daftar berisi Teks, ditemukan {}", lain)),
+                }
+            }
+            Ok(Some(Value::Teks(potongan_teks.join(pemisah).into())))
+        }
+        "mengandung" => {
+            let s = match args.get(0) { Some(Value::Teks(s)) => s, _ => return Err("mengandung(teks, sub) argumen pertama harus Teks".to_string()) };
+            let sub = match args.get(1) { Some(Value::Teks(s)) => s, _ => return Err("mengandung(teks, sub) butuh Teks untuk 'sub'".to_string()) };
+            Ok(Some(Value::Bool(s.contains(sub.as_ref()))))
+        }
+        "diawali" => {
+            let s = match args.get(0) { Some(Value::Teks(s)) => s, _ => return Err("diawali(teks, awalan) argumen pertama harus Teks".to_string()) };
+            let awalan = match args.get(1) { Some(Value::Teks(s)) => s, _ => return Err("diawali(teks, awalan) butuh Teks untuk 'awalan'".to_string()) };
+            Ok(Some(Value::Bool(s.starts_with(awalan.as_ref()))))
+        }
+        "diakhiri" => {
+            let s = match args.get(0) { Some(Value::Teks(s)) => s, _ => return Err("diakhiri(teks, akhiran) argumen pertama harus Teks".to_string()) };
+            let akhiran = match args.get(1) { Some(Value::Teks(s)) => s, _ => return Err("diakhiri(teks, akhiran) butuh Teks untuk 'akhiran'".to_string()) };
+            Ok(Some(Value::Bool(s.ends_with(akhiran.as_ref()))))
+        }
+
+        _ => Ok(None),
+    }
+}
+
+/// Generator angka acak sederhana (xorshift64), zero-dependency -- cukup buat kebutuhan skrip
+/// biasa (bukan kriptografi). State-nya statis & thread-safe (AtomicU64), dibarui tiap panggilan.
+fn acak_f64() -> f64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static STATE: AtomicU64 = AtomicU64::new(0);
+    let mut lama = STATE.load(Ordering::Relaxed);
+    if lama == 0 {
+        lama = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0x2545F4914F6CDD1D) | 1;
+    }
+    let mut x = lama;
+    x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+    STATE.store(x, Ordering::Relaxed);
+    // Ambil 53 bit atas jadi mantissa f64, hasilkan pecahan di [0, 1).
+    (x >> 11) as f64 / (1u64 << 53) as f64
+}
+
+// =====================================================================
+// 7. JSON: parser & serializer, zero-dependency
+// =====================================================================
+
+fn json_urai(s: &str) -> Result<Value, String> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut pos = 0usize;
+    json_skip_ws(&chars, &mut pos);
+    json_nilai(&chars, &mut pos)
+}
+fn json_skip_ws(c: &[char], pos: &mut usize) { while *pos < c.len() && c[*pos].is_whitespace() { *pos += 1; } }
+fn json_nilai(c: &[char], pos: &mut usize) -> Result<Value, String> {
+    json_skip_ws(c, pos);
+    if *pos >= c.len() { return Err("JSON tidak lengkap.".to_string()); }
+    match c[*pos] {
+        '{' => json_objek(c, pos),
+        '[' => json_larik(c, pos),
+        '"' => Ok(Value::Teks(json_string(c, pos)?.into())),
+        't' => { json_harap_kata(c, pos, "true")?; Ok(Value::Bool(true)) }
+        'f' => { json_harap_kata(c, pos, "false")?; Ok(Value::Bool(false)) }
+        'n' => { json_harap_kata(c, pos, "null")?; Ok(Value::Kosong) }
+        _ => json_angka(c, pos),
+    }
+}
+fn json_harap_kata(c: &[char], pos: &mut usize, kata: &str) -> Result<(), String> {
+    for ch in kata.chars() {
+        if *pos >= c.len() || c[*pos] != ch { return Err(format!("JSON tidak valid, diharapkan \"{}\".", kata)); }
+        *pos += 1;
+    }
+    Ok(())
+}
+fn json_string(c: &[char], pos: &mut usize) -> Result<String, String> {
+    *pos += 1;
+    let mut s = String::new();
+    while *pos < c.len() && c[*pos] != '"' {
+        if c[*pos] == '\\' && *pos + 1 < c.len() {
+            match c[*pos + 1] {
+                '"' => { s.push('"'); *pos += 2; }
+                '\\' => { s.push('\\'); *pos += 2; }
+                'n' => { s.push('\n'); *pos += 2; }
+                't' => { s.push('\t'); *pos += 2; }
+                'r' => { s.push('\r'); *pos += 2; }
+                '/' => { s.push('/'); *pos += 2; }
+                'u' => {
+                    if *pos + 5 < c.len() {
+                        let hex: String = c[*pos + 2..*pos + 6].iter().collect();
+                        if let Ok(code) = u32::from_str_radix(&hex, 16) { if let Some(ch) = char::from_u32(code) { s.push(ch); } }
+                        *pos += 6;
+                    } else { *pos += 2; }
+                }
+                lain => { s.push(lain); *pos += 2; }
+            }
+        } else { s.push(c[*pos]); *pos += 1; }
+    }
+    if *pos >= c.len() { return Err("Teks JSON tidak ditutup dengan tanda kutip.".to_string()); }
+    *pos += 1;
+    Ok(s)
+}
+fn json_angka(c: &[char], pos: &mut usize) -> Result<Value, String> {
+    let mulai = *pos;
+    if *pos < c.len() && c[*pos] == '-' { *pos += 1; }
+    while *pos < c.len() && c[*pos].is_ascii_digit() { *pos += 1; }
+    let mut desimal = false;
+    if *pos < c.len() && c[*pos] == '.' { desimal = true; *pos += 1; while *pos < c.len() && c[*pos].is_ascii_digit() { *pos += 1; } }
+    if *pos < c.len() && (c[*pos] == 'e' || c[*pos] == 'E') {
+        desimal = true; *pos += 1;
+        if *pos < c.len() && (c[*pos] == '+' || c[*pos] == '-') { *pos += 1; }
+        while *pos < c.len() && c[*pos].is_ascii_digit() { *pos += 1; }
+    }
+    let teks: String = c[mulai..*pos].iter().collect();
+    if teks.is_empty() || teks == "-" { return Err("JSON tidak valid: angka kosong.".to_string()); }
+    if desimal { teks.parse::<f64>().map(Value::Desimal).map_err(|_| "JSON tidak valid: format angka desimal salah.".to_string()) }
+    else { teks.parse::<i64>().map(Value::Angka).map_err(|_| "JSON tidak valid: format angka bulat salah.".to_string()) }
+}
+fn json_larik(c: &[char], pos: &mut usize) -> Result<Value, String> {
+    *pos += 1;
+    let mut items = Vec::new();
+    json_skip_ws(c, pos);
+    if *pos < c.len() && c[*pos] == ']' { *pos += 1; return Ok(Value::Daftar(items.into())); }
+    loop {
+        items.push(json_nilai(c, pos)?);
+        json_skip_ws(c, pos);
+        if *pos < c.len() && c[*pos] == ',' { *pos += 1; json_skip_ws(c, pos); continue; }
+        break;
+    }
+    json_skip_ws(c, pos);
+    if *pos >= c.len() || c[*pos] != ']' { return Err("JSON larik tidak ditutup dengan ']'.".to_string()); }
+    *pos += 1;
+    Ok(Value::Daftar(items.into()))
+}
+fn json_objek(c: &[char], pos: &mut usize) -> Result<Value, String> {
+    *pos += 1;
+    let mut entries = Vec::new();
+    json_skip_ws(c, pos);
+    if *pos < c.len() && c[*pos] == '}' { *pos += 1; return Ok(Value::Peta(entries.into())); }
+    loop {
+        json_skip_ws(c, pos);
+        if *pos >= c.len() || c[*pos] != '"' { return Err("JSON objek: kunci harus berupa teks berpetik dua.".to_string()); }
+        let kunci = json_string(c, pos)?;
+        json_skip_ws(c, pos);
+        if *pos >= c.len() || c[*pos] != ':' { return Err("JSON objek: diharapkan ':' setelah kunci.".to_string()); }
+        *pos += 1;
+        let nilai = json_nilai(c, pos)?;
+        entries.push((kunci, nilai));
+        json_skip_ws(c, pos);
+        if *pos < c.len() && c[*pos] == ',' { *pos += 1; continue; }
+        break;
+    }
+    json_skip_ws(c, pos);
+    if *pos >= c.len() || c[*pos] != '}' { return Err("JSON objek tidak ditutup dengan '}'.".to_string()); }
+    *pos += 1;
+    Ok(Value::Peta(entries.into()))
+}
+fn json_escape(s: &str) -> String {
+    let mut out = String::new();
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""), '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"), '\t' => out.push_str("\\t"), '\r' => out.push_str("\\r"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+fn json_dari_value(v: &Value) -> String {
+    match v {
+        Value::Angka(n) => n.to_string(),
+        Value::Desimal(f) => f.to_string(),
+        Value::Teks(s) => format!("\"{}\"", json_escape(s)),
+        Value::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Value::Daftar(items) => format!("[{}]", items.iter().map(json_dari_value).collect::<Vec<_>>().join(",")),
+        Value::Peta(entries) => format!("{{{}}}", entries.iter().map(|(k, v)| format!("\"{}\":{}", json_escape(k), json_dari_value(v))).collect::<Vec<_>>().join(",")),
+        Value::Kosong => "null".to_string(),
+        Value::Instans(_, entries) => format!("{{{}}}", entries.iter().map(|(k, v)| format!("\"{}\":{}", json_escape(k), json_dari_value(v))).collect::<Vec<_>>().join(",")),
+        Value::Fungsi(_) => "null".to_string(), // fungsi gak bisa direpresentasikan di JSON
+    }
+}
+
+// =====================================================================
+// 8. MAIN
+// =====================================================================
+
+/// Ekspansi statement 'muat "path.iso"' di level atas program -- jalan SEBELUM resolver,
+/// jadi Resolver/Compiler/VM sama sekali tidak tahu soal modul, mereka cuma lihat satu
+/// Vec<Stmt> gabungan seolah-olah semua ditulis di satu file. Path relatif dihitung dari
+/// direktori file YANG MEMUAT (bukan selalu dari file utama), jadi modul juga bisa
+// =====================================================================
+// 10. PACKAGE MANAGER MINIMAL (Milestone C, docs/FILOSOFI.md)
+// =====================================================================
+//
+// Sengaja MINIMAL sesuai filosofi ("bukan langsung sekelas Cargo/npm"):
+// dependensi lokal lewat path (belum ada registry -- itu memang item
+// TERPISAH & belakangan di roadmap Milestone C, bukan bagian dari v1 ini).
+// Manifest (`isoteri.toml`) di-parse dengan parser tulisan tangan (bukan
+// dependensi crate `toml`) -- skemanya sengaja cuma dua level (key=value
+// datar + SATU section `[dependensi]`), konsisten dengan gaya proyek ini
+// yang juga menulis parser JSON sendiri (lihat json_urai) daripada
+// menambah dependensi buat sesuatu yang skema-nya dikontrol sendiri.
+//
+// Konvensi paket: satu direktori berisi `isoteri.toml` (nama, versi) DAN
+// `src/main.iso` (entry point buat dijalankan langsung) ATAU `src/lib.iso`
+// (buat dijadikan dependensi paket lain, dimuat lewat namanya, bukan path
+// relatif). `isoteri tambah nama path/ke/paket` mendaftarkan pemetaan nama
+// -> path di `[dependensi]`; `muat "nama"` (tanpa `/` atau akhiran `.iso`)
+// dicoba diresolusi lewat manifest SEBELUM dicoba sebagai path relatif
+// biasa gagal -- lihat `resolusi_muat`.
+
+/// Sumber sebuah dependensi di `[dependensi]` -- dua cara mendapatkan paket:
+/// - `Lokal`: path direktori paket relatif terhadap lokasi isoteri.toml (perilaku lama,
+///   TIDAK berubah). Cocok buat paket yang dikembangkan bareng dalam satu monorepo/mesin.
+/// - `Git`: registry v1 (lihat docs/FILOSOFI.md Milestone C) -- paket = repo Git APAPUN
+///   (GitHub/GitLab/Gitea/dst, bukan indeks server terpusat kayak npm/Cargo) yang dipin ke
+///   satu `tag` (rilis semver, direkomendasikan) ATAU `rev` (commit hash spesifik), TIDAK
+///   PERNAH KEDUANYA. Diresolusi lewat `resolusi_paket_git` ke cache lokal.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SumberDependensi {
+    Lokal(String),
+    Git { url: String, tag: Option<String>, rev: Option<String> },
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Manifest {
+    pub nama: String,
+    pub versi: String,
+    /// nama_paket -> sumbernya (path lokal ATAU repo git+tag/rev)
+    pub dependensi: HashMap<String, SumberDependensi>,
+}
+
+/// Uraikan isi `{ kunci = "nilai", kunci2 = "nilai2" }` jadi pasangan (kunci, nilai).
+/// Pemisah `,` di level atas saja -- cukup buat skema flat yang dipakai isoteri.toml,
+/// tidak perlu penanganan koma di dalam string (URL git tidak pernah mengandung koma).
+fn urai_pasangan_kurung(dalam: &str, no: usize) -> Result<Vec<(String, String)>, String> {
+    let mut hasil = Vec::new();
+    for bagian in dalam.split(',') {
+        let bagian = bagian.trim();
+        if bagian.is_empty() { continue; }
+        let (k, v) = bagian.split_once('=')
+            .ok_or_else(|| format!("isoteri.toml baris {}: pasangan \"{}\" tidak valid di dalam {{ }}.", no, bagian))?;
+        let v = urai_string_toml(v.trim())
+            .ok_or_else(|| format!("isoteri.toml baris {}: nilai \"{}\" harus Teks diapit tanda kutip dua.", no, v.trim()))?;
+        hasil.push((k.trim().to_string(), v));
+    }
+    Ok(hasil)
+}
+
+/// Parser tulisan tangan buat subset TOML yang dipakai `isoteri.toml`:
+/// - baris kosong & komentar (`#...`) diabaikan
+/// - `kunci = "nilai"` di level atas (sebelum section manapun) -> field manifest
+/// - `[dependensi]` menandai section; baris berikutnya `kunci = { path = "..." }` (lokal)
+///   ATAU `kunci = { git = "...", tag = "..." }` / `{ git = "...", rev = "..." }` (registry
+///   git-based) sampai section lain (atau akhir berkas)
+fn urai_manifest(isi: &str) -> Result<Manifest, String> {
+    let mut m = Manifest::default();
+    let mut di_dependensi = false;
+    for (i, baris_mentah) in isi.lines().enumerate() {
+        let baris = baris_mentah.trim();
+        let no = i + 1;
+        if baris.is_empty() || baris.starts_with('#') { continue; }
+        if baris.starts_with('[') {
+            if baris == "[dependensi]" { di_dependensi = true; continue; }
+            return Err(format!("isoteri.toml baris {}: section \"{}\" tidak dikenal (cuma [dependensi] yang didukung di v1 ini).", no, baris));
+        }
+        let (kunci, nilai) = baris.split_once('=')
+            .ok_or_else(|| format!("isoteri.toml baris {}: diharapkan \"kunci = nilai\", ditemukan \"{}\".", no, baris))?;
+        let kunci = kunci.trim();
+        let nilai = nilai.trim();
+        if di_dependensi {
+            // Format: nama = { path = "../lokasi" } ATAU nama = { git = "url", tag/rev = "..." }
+            let dalam = nilai.strip_prefix('{').and_then(|s| s.strip_suffix('}'))
+                .ok_or_else(|| format!("isoteri.toml baris {}: dependensi \"{}\" harus berbentuk {{ path = \"...\" }} atau {{ git = \"...\", tag = \"...\" }}.", no, kunci))?;
+            let pasangan = urai_pasangan_kurung(dalam, no)?;
+            let (mut path, mut git, mut tag, mut rev) = (None, None, None, None);
+            for (k, v) in pasangan {
+                match k.as_str() {
+                    "path" => path = Some(v),
+                    "git" => git = Some(v),
+                    "tag" => tag = Some(v),
+                    "rev" => rev = Some(v),
+                    lain => return Err(format!("isoteri.toml baris {}: kunci \"{}\" tidak dikenal di dalam {{ }} (yang didukung: path, git, tag, rev).", no, lain)),
+                }
+            }
+            let sumber = match (path, git) {
+                (Some(p), None) => SumberDependensi::Lokal(p),
+                (Some(_), Some(_)) => return Err(format!("isoteri.toml baris {}: dependensi \"{}\" tidak boleh punya \"path\" DAN \"git\" sekaligus.", no, kunci)),
+                (None, Some(g)) => {
+                    if tag.is_some() && rev.is_some() {
+                        return Err(format!("isoteri.toml baris {}: dependensi \"{}\" tidak boleh punya \"tag\" DAN \"rev\" sekaligus -- pilih salah satu.", no, kunci));
+                    }
+                    if tag.is_none() && rev.is_none() {
+                        return Err(format!("isoteri.toml baris {}: dependensi git \"{}\" butuh \"tag\" (rilis) atau \"rev\" (commit hash).", no, kunci));
+                    }
+                    SumberDependensi::Git { url: g, tag, rev }
+                }
+                (None, None) => return Err(format!("isoteri.toml baris {}: dependensi \"{}\" butuh \"path\" (lokal) atau \"git\" (registry).", no, kunci)),
+            };
+            m.dependensi.insert(kunci.to_string(), sumber);
+        } else {
+            let nilai_str = urai_string_toml(nilai)
+                .ok_or_else(|| format!("isoteri.toml baris {}: nilai \"{}\" harus berupa Teks diapit tanda kutip dua.", no, nilai))?;
+            match kunci {
+                "nama" => m.nama = nilai_str,
+                "versi" => m.versi = nilai_str,
+                lain => return Err(format!("isoteri.toml baris {}: kunci \"{}\" tidak dikenal di level atas (yang didukung: nama, versi).", no, lain)),
+            }
+        }
+    }
+    if m.nama.is_empty() { return Err("isoteri.toml tidak punya \"nama\".".to_string()); }
+    Ok(m)
+}
+
+fn urai_string_toml(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') { Some(s[1..s.len() - 1].to_string()) } else { None }
+}
+
+pub fn baca_manifest(path: &std::path::Path) -> Result<Manifest, String> {
+    let isi = fs::read_to_string(path).map_err(|e| format!("Tidak bisa membaca \"{}\": {}", path.display(), e))?;
+    urai_manifest(&isi)
+}
+
+/// Cari `isoteri.toml` mulai dari `dir`, naik ke direktori induk berturut-turut sampai
+/// ketemu atau mentok di root -- persis cara Cargo mencari Cargo.toml, supaya `muat "nama"`
+/// tetap bisa meresolusi dependensi proyek dari submodul manapun di dalamnya, bukan cuma
+/// dari direktori paling atas.
+pub fn cari_manifest(dir: &std::path::Path) -> Option<(std::path::PathBuf, Manifest)> {
+    let mut cur = Some(dir.to_path_buf());
+    while let Some(d) = cur {
+        let kandidat = d.join("isoteri.toml");
+        if kandidat.is_file() {
+            if let Ok(m) = baca_manifest(&kandidat) { return Some((kandidat, m)); }
+            return None;
+        }
+        cur = d.parent().map(|p| p.to_path_buf());
+    }
+    None
+}
+
+/// Resolusi target `muat "..."`: path relatif biasa (perilaku lama, TIDAK berubah) kalau
+/// berkasnya memang ada; kalau tidak DAN nama-nya "polos" (tanpa `/` atau akhiran `.iso` --
+/// ciri nama paket, bukan path berkas), coba cari lewat manifest proyek -> `<path>/src/lib.iso`.
+/// Mengembalikan path akhir yang dipakai (SELALU path relatif-biasa dulu kalau ada, supaya
+/// proyek lama yang belum punya isoteri.toml sama sekali tidak terpengaruh apa pun).
+fn resolusi_muat(rel_path: &str, dir_saat_ini: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let langsung = dir_saat_ini.join(rel_path);
+    if langsung.exists() { return Ok(langsung); }
+
+    let terlihat_seperti_nama_paket = !rel_path.contains('/') && !rel_path.contains('\\') && !rel_path.ends_with(".iso");
+    if terlihat_seperti_nama_paket {
+        if let Some((manifest_path, manifest)) = cari_manifest(dir_saat_ini) {
+            if let Some(sumber) = manifest.dependensi.get(rel_path) {
+                let root_proyek = manifest_path.parent().unwrap_or(std::path::Path::new("."));
+                let paket_dir = match sumber {
+                    SumberDependensi::Lokal(dep_path) => root_proyek.join(dep_path),
+                    SumberDependensi::Git { url, tag, rev } =>
+                        resolusi_paket_git(url, tag.as_deref(), rev.as_deref())?,
+                };
+                let target = paket_dir.join("src").join("lib.iso");
+                if target.exists() { return Ok(target); }
+                return Err(format!(
+                    "'muat \"{}\"' ditemukan di [dependensi] isoteri.toml (mengarah ke \"{}\"), tapi \"{}\" tidak ada.",
+                    rel_path, paket_dir.display(), target.display()
+                ));
+            }
+        }
+    }
+    // Gagal semua cara -- kembalikan path langsung apa adanya, biar pesan error "tidak bisa
+    // dibaca" di pemanggil tetap menunjuk ke path yang jelas & konsisten dengan perilaku lama.
+    Ok(langsung)
+}
+
+// =====================================================================
+// REGISTRY v1 -- GIT-BASED (lihat docs/FILOSOFI.md Milestone C)
+// =====================================================================
+//
+// Keputusan arsitektur (dibahas & disepakati sebelum implementasi): registry TIDAK
+// berbentuk server indeks terpusat (kayak npm/crates.io) yang harus dihosting & dijaga
+// sendiri -- itu beban operasional besar yang belum perlu di tahap ini. Sebagai gantinya
+// dipakai model Git-based (mirip Go modules / Deno): paket = repo Git APAPUN (GitHub,
+// GitLab, Gitea, bahkan server Git pribadi) + satu tag rilis semver ATAU commit hash
+// spesifik. `isoteri` tinggal `git clone` repo itu ke cache lokal, cek isinya sesuai
+// konvensi paket yang SUDAH ada (`src/lib.iso`) -- tidak ada protokol/format baru yang
+// perlu didesain dari nol.
+//
+// Kalau nanti ekosistem sudah ramai dan butuh DISCOVERY (search "paket matematika apa saja
+// yang ada"), baru ditambah index server ringan (misal Cloudflare Worker, konsisten dengan
+// infrastruktur ToFarmer yang sudah dipakai) yang cuma nyimpen metadata nama->URL repo,
+// BUKAN hosting isi paketnya -- migrasi jadi mulus, tidak breaking dependensi yang sudah ada.
+
+/// Direktori cache paket registry, default `~/.isoteri/cache` (bisa dioverride lewat env
+/// `ISOTERI_CACHE_DIR`, berguna buat pengujian/CI supaya tidak menyentuh cache asli user).
+fn direktori_cache() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("ISOTERI_CACHE_DIR") {
+        return std::path::PathBuf::from(dir);
+    }
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".to_string());
+    std::path::Path::new(&home).join(".isoteri").join("cache")
+}
+
+/// Ganti tiap karakter yang bukan alfanumerik/`.`/`-` jadi `_`, supaya URL git & tag/rev
+/// aman dipakai sebagai nama folder cache di semua OS.
+fn sanitasi_nama_cache(s: &str) -> String {
+    s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect()
+}
+
+/// Resolusi dependensi git: pastikan repo `url` pada `tag` (rilis) ATAU `rev` (commit hash)
+/// sudah ada di cache lokal, lalu kembalikan direktori paketnya (siap dijoin dengan
+/// `src/lib.iso` oleh pemanggil, sama seperti dependensi lokal).
+///
+/// CACHE = PIN: kalau folder cache buat kombinasi url+tag/rev ini sudah ada (ditandai folder
+/// `.git` di dalamnya), TIDAK di-fetch ulang -- tag/rev dianggap penunjuk tetap ke isi yang
+/// sama, sama seperti model cache Go modules. Konsekuensinya (didokumentasikan, bukan
+/// disembunyikan, lihat docs/KETERBATASAN.md): kalau upstream memindahkan sebuah tag ke commit
+/// lain (praktik buruk tapi mungkin terjadi), isoteri tidak akan otomatis mendeteksinya --
+/// hapus manual folder cache-nya (atau pakai `rev` commit hash yang memang tidak bisa
+/// dipindah) kalau itu terjadi.
+pub fn resolusi_paket_git(url: &str, tag: Option<&str>, rev: Option<&str>) -> Result<std::path::PathBuf, String> {
+    let versi_label = tag.or(rev).unwrap_or("HEAD");
+    let target = direktori_cache().join(format!("{}-{}", sanitasi_nama_cache(url), sanitasi_nama_cache(versi_label)));
+
+    if target.join(".git").is_dir() {
+        return Ok(target); // sudah pernah diambil -- lihat catatan "CACHE = PIN" di atas
+    }
+
+    let root_cache = target.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| direktori_cache());
+    fs::create_dir_all(&root_cache)
+        .map_err(|e| format!("Tidak bisa membuat direktori cache \"{}\": {}", root_cache.display(), e))?;
+    // Bersihkan sisa percobaan sebelumnya yang gagal di tengah jalan (folder ada tapi bukan
+    // repo git valid) -- kalau tidak, `git clone` menolak folder tujuan yang sudah terisi.
+    if target.exists() {
+        let _ = fs::remove_dir_all(&target);
+    }
+
+    let target_str = target.to_string_lossy().to_string();
+    let hasil_clone = if let Some(t) = tag {
+        // --depth 1 + --branch juga menerima nama TAG (bukan cuma branch) di git, jadi ini
+        // clone dangkal (cepat, hemat bandwidth) buat kasus paling umum: pin ke rilis.
+        std::process::Command::new("git")
+            .args(["clone", "--quiet", "--branch", t, "--depth", "1", url, &target_str])
+            .status()
+    } else {
+        // Commit hash spesifik butuh histori penuh (server git kebanyakan tidak mendukung
+        // shallow-fetch by-arbitrary-sha), jadi clone biasa lalu checkout persis rev-nya.
+        std::process::Command::new("git")
+            .args(["clone", "--quiet", url, &target_str])
+            .status()
+    };
+
+    let status = match hasil_clone {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err("Perintah \"git\" tidak ditemukan di PATH -- instal git dulu buat memakai dependensi registry (git-based).".to_string());
+        }
+        Err(e) => return Err(format!("Gagal menjalankan git clone \"{}\": {}", url, e)),
+    };
+    if !status.success() {
+        let _ = fs::remove_dir_all(&target);
+        return Err(format!(
+            "Gagal git clone \"{}\"{} -- cek URL, koneksi jaringan, dan (kalau pakai tag) apakah tag itu benar ada.",
+            url, tag.map(|t| format!(" (tag \"{}\")", t)).unwrap_or_default()
+        ));
+    }
+
+    if let Some(r) = rev {
+        let status_checkout = std::process::Command::new("git")
+            .args(["-C", &target_str, "checkout", "--quiet", r])
+            .status();
+        match status_checkout {
+            Ok(s) if s.success() => {}
+            Ok(_) => {
+                let _ = fs::remove_dir_all(&target);
+                return Err(format!("Gagal checkout rev \"{}\" di repo \"{}\" -- pastikan commit hash itu benar ada di repo ini.", r, url));
+            }
+            Err(e) => {
+                let _ = fs::remove_dir_all(&target);
+                return Err(format!("Gagal menjalankan git checkout: {}", e));
+            }
+        }
+    }
+
+    Ok(target)
+}
+
+
+//
+// Filosofi: "formatter adalah sumber kebenaran gaya penulisan" -- bukan alat bantu
+// opsional, tapi definisi TUNGGAL soal indentasi/spasi/tanda kurung, supaya tim/komunitas
+// tidak perlu berdebat soal style (persis seperti gofmt/rustfmt/prettier). ini juga fondasi
+// penting buat LSP/VS Code nanti ("format on save" butuh formatter yang sudah ada duluan).
+//
+// PENDEKATAN: cetak ulang dari AST (Stmt/Expr, BUKAN dari CStmt/CExpr yang sudah di-resolve
+// -- itu sudah kehilangan nama variabel asli, diganti nomor slot), bukan sekadar
+// menormalkan whitespace dari teks sumber apa adanya. Ini "sumber kebenaran" yang sesungguhnya:
+// hasilnya SELALU konsisten terlepas dari gaya penulisan asli, dan idempoten (format ulang
+// hasil yang sudah diformat = tidak berubah lagi, lihat verifikasi di test).
+//
+// TANTANGAN UTAMA: parser & lexer PRODUKSI (dipakai compiler) membuang komentar
+// (`catatan: ...`) sepenuhnya, tidak disimpan di AST sama sekali (lihat Lexer::tokenize).
+// Formatter yang naif cetak-ulang-dari-AST akan DIAM-DIAM MENGHAPUS SEMUA KOMENTAR --
+// itu BUG SERIUS buat formatter sungguhan (rustfmt/prettier tidak pernah begitu).
+//
+// Solusinya SENGAJA tidak mengubah Lexer/Parser produksi sama sekali (nol risiko regresi ke
+// compiler): `Lexer::tokenize_dengan_komentar()` (method BARU, terpisah) menghasilkan token
+// stream yang MASIH menyertakan komentar sebagai `Token::Komentar`. Formatter menyaring baris
+// komentarnya jadi peta baris->teks, MEMBUANG token komentar itu dari stream, lalu memberi
+// sisanya ke `Parser::new()` YANG SAMA PERSIS dipakai compiler (tidak diubah sedikit pun) --
+// jadi AST yang dicetak ulang dijamin PERSIS merepresentasikan makna program yang sama.
+// Komentar ditempelkan kembali berdasarkan nomor barisnya sebelum tiap statement yang jatuh
+// setelahnya.
+//
+// KETERBATASAN v1 (didokumentasikan, bukan disembunyikan -- Hukum "jangan diam-diam
+// merusak/kehilangan isi" lebih penting daripada cakupan lengkap):
+//   - Komentar HARUS di baris sendiri. Komentar di baris yang SAMA dengan kode
+//     (`tampilkan x  catatan: ini penjelasan`) DITOLAK dengan pesan jelas (bukan
+//     diam-diam dibuang atau ditaruh di posisi salah).
+//   - Komentar yang jadi baris PALING TERAKHIR di dalam sebuah blok bersarang (tepat
+//     sebelum '}' penutup, dengan tidak ada apa pun lagi setelahnya di SISA program)
+//     akan muncul di akhir keluaran, bukan tepat sebelum '}' itu -- kasus tepi yang jarang,
+//     tapi komentarnya tetap ADA (tidak hilang), cuma posisinya mungkin tidak persis.
+
+const INDENT_FORMAT: &str = "    "; // 4 spasi -- konsisten dgn semua program*.iso di proyek ini
+
+fn prec_binop(op: BinOp) -> u8 {
+    use BinOp::*;
+    match op {
+        Atau => 1,
+        Dan => 2,
+        SamaDengan | TidakSama => 3,
+        LebihBesar | LebihBesarSama | LebihKecil | LebihKecilSama => 4,
+        Tambah | Kurang => 5,
+        Kali | Bagi => 6,
+    }
+}
+fn str_binop(op: BinOp) -> &'static str {
+    use BinOp::*;
+    match op {
+        Tambah => "+", Kurang => "-", Kali => "*", Bagi => "/",
+        SamaDengan => "==", TidakSama => "!=",
+        LebihBesar => ">", LebihBesarSama => ">=", LebihKecil => "<", LebihKecilSama => "<=",
+        Dan => "dan", Atau => "atau",
+    }
+}
+
+fn escape_teks_format(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            '\n' => o.push_str("\\n"),
+            other => o.push(other),
+        }
+    }
+    o
+}
+
+fn format_desimal_literal(f: f64) -> String {
+    let s = format!("{}", f);
+    if s.contains('.') || s.contains('e') || s.contains("inf") || s.contains("NaN") { s } else { format!("{}.0", s) }
+}
+
+fn cetak_daftar_parameter_fmt(params: &[(String, Option<String>)]) -> String {
+    params.iter().map(|(n, t)| match t { Some(t) => format!("{}: {}", n, t), None => n.clone() }).collect::<Vec<_>>().join(", ")
+}
+
+/// `Expr::Binary(Angka(0), Kurang, x)` adalah bentuk desugar dari unary minus `-x` (lihat
+/// Parser::parse_unary) -- dikenali di sini supaya dicetak balik sebagai `-x`, bukan `0 - x`.
+fn sebagai_unary_neg(e: &Expr) -> Option<&Expr> {
+    if let Expr::Binary(l, BinOp::Kurang, r) = e {
+        if let Expr::Angka(0) = **l { return Some(r); }
+    }
+    None
+}
+
+type PetaKomentar = HashMap<usize, Vec<String>>;
+
+fn flush_komentar_sampai(batas_baris: usize, indent: usize, komentar: &PetaKomentar, terpakai: &mut std::collections::HashSet<usize>, out: &mut String) {
+    let mut baris_terurut: Vec<usize> = komentar.keys().copied().filter(|b| *b <= batas_baris && !terpakai.contains(b)).collect();
+    baris_terurut.sort_unstable();
+    for b in baris_terurut {
+        for teks in &komentar[&b] {
+            out.push_str(&INDENT_FORMAT.repeat(indent));
+            out.push_str(teks);
+            out.push('\n');
+        }
+        terpakai.insert(b);
+    }
+}
+
+fn cetak_expr_fmt(e: &Expr, indent: usize, min_prec: u8, komentar: &PetaKomentar, terpakai: &mut std::collections::HashSet<usize>) -> String {
+    if let Some(inner) = sebagai_unary_neg(e) {
+        return format!("-{}", cetak_expr_fmt(inner, indent, 7, komentar, terpakai));
+    }
+    match e {
+        Expr::Angka(n) => n.to_string(),
+        Expr::Desimal(f) => format_desimal_literal(*f),
+        Expr::Teks(s) => format!("\"{}\"", escape_teks_format(s)),
+        Expr::Bool(b) => (if *b { "benar" } else { "salah" }).to_string(),
+        Expr::Ident(s) => s.clone(),
+        Expr::Binary(l, op, r) => {
+            let p = prec_binop(*op);
+            let teks = format!(
+                "{} {} {}",
+                cetak_expr_fmt(l, indent, p, komentar, terpakai),
+                str_binop(*op),
+                cetak_expr_fmt(r, indent, p + 1, komentar, terpakai),
+            );
+            if p < min_prec { format!("({})", teks) } else { teks }
+        }
+        Expr::Panggil(nama, args) => format!("{}({})", nama, args.iter().map(|a| cetak_expr_fmt(a, indent, 0, komentar, terpakai)).collect::<Vec<_>>().join(", ")),
+        Expr::Daftar(items) => format!("[{}]", items.iter().map(|a| cetak_expr_fmt(a, indent, 0, komentar, terpakai)).collect::<Vec<_>>().join(", ")),
+        Expr::Peta(entries) => format!(
+            "{{{}}}",
+            entries.iter().map(|(k, v)| format!("\"{}\": {}", escape_teks_format(k), cetak_expr_fmt(v, indent, 0, komentar, terpakai))).collect::<Vec<_>>().join(", ")
+        ),
+        Expr::Indeks(t, i) => format!("{}[{}]", cetak_expr_fmt(t, indent, 8, komentar, terpakai), cetak_expr_fmt(i, indent, 0, komentar, terpakai)),
+        Expr::Field(t, f) => format!("{}.{}", cetak_expr_fmt(t, indent, 8, komentar, terpakai), f),
+        Expr::BentukLiteral(nama, entries) => {
+            if entries.is_empty() { format!("{} {{}}", nama) }
+            else {
+                format!(
+                    "{} {{ {} }}",
+                    nama,
+                    entries.iter().map(|(k, v)| format!("{}: {}", k, cetak_expr_fmt(v, indent, 0, komentar, terpakai))).collect::<Vec<_>>().join(", ")
+                )
+            }
+        }
+        Expr::FungsiLiteral(params, body) => {
+            let mut s = format!("fungsi({}) {{\n", cetak_daftar_parameter_fmt(params));
+            cetak_blok_fmt(body, indent + 1, komentar, terpakai, &mut s);
+            s.push_str(&INDENT_FORMAT.repeat(indent));
+            s.push('}');
+            s
+        }
+    }
+}
+
+fn cetak_stmt_fmt(s: &Stmt, indent: usize, komentar: &PetaKomentar, terpakai: &mut std::collections::HashSet<usize>, out: &mut String) {
+    match s {
+        Stmt::Ingat(nama, tipe, e) => {
+            out.push_str("ingat ");
+            out.push_str(nama);
+            if let Some(t) = tipe { out.push_str(": "); out.push_str(t); }
+            out.push_str(" = ");
+            out.push_str(&cetak_expr_fmt(e, indent, 0, komentar, terpakai));
+        }
+        Stmt::Ubah(nama, e) => {
+            out.push_str(nama);
+            out.push_str(" = ");
+            out.push_str(&cetak_expr_fmt(e, indent, 0, komentar, terpakai));
+        }
+        Stmt::UbahField(nama, fields, e) => {
+            out.push_str(nama);
+            for f in fields { out.push('.'); out.push_str(f); }
+            out.push_str(" = ");
+            out.push_str(&cetak_expr_fmt(e, indent, 0, komentar, terpakai));
+        }
+        Stmt::BentukDef(nama, fields) => {
+            out.push_str("bentuk ");
+            out.push_str(nama);
+            out.push_str(" {\n");
+            for (i, (fnama, ftipe)) in fields.iter().enumerate() {
+                out.push_str(&INDENT_FORMAT.repeat(indent + 1));
+                out.push_str(fnama);
+                if let Some(t) = ftipe { out.push_str(": "); out.push_str(t); }
+                if i + 1 < fields.len() { out.push(','); }
+                out.push('\n');
+            }
+            out.push_str(&INDENT_FORMAT.repeat(indent));
+            out.push('}');
+        }
+        Stmt::Muat(path) => { out.push_str("muat \""); out.push_str(&escape_teks_format(path)); out.push('"'); }
+        Stmt::Tampilkan(e) => { out.push_str("tampilkan "); out.push_str(&cetak_expr_fmt(e, indent, 0, komentar, terpakai)); }
+        Stmt::Kalau(cond, tb, eb) => {
+            out.push_str("kalau (");
+            out.push_str(&cetak_expr_fmt(cond, indent, 0, komentar, terpakai));
+            out.push_str(") {\n");
+            cetak_blok_fmt(tb, indent + 1, komentar, terpakai, out);
+            out.push_str(&INDENT_FORMAT.repeat(indent));
+            out.push('}');
+            if let Some(eb) = eb {
+                out.push_str(" lainnya {\n");
+                cetak_blok_fmt(eb, indent + 1, komentar, terpakai, out);
+                out.push_str(&INDENT_FORMAT.repeat(indent));
+                out.push('}');
+            }
+        }
+        Stmt::Ulang(cond, body) => {
+            out.push_str("ulang (");
+            out.push_str(&cetak_expr_fmt(cond, indent, 0, komentar, terpakai));
+            out.push_str(") {\n");
+            cetak_blok_fmt(body, indent + 1, komentar, terpakai, out);
+            out.push_str(&INDENT_FORMAT.repeat(indent));
+            out.push('}');
+        }
+        Stmt::UlangSetiap(var, e, body) => {
+            out.push_str("ulang setiap ");
+            out.push_str(var);
+            out.push_str(" dari ");
+            out.push_str(&cetak_expr_fmt(e, indent, 0, komentar, terpakai));
+            out.push_str(" {\n");
+            cetak_blok_fmt(body, indent + 1, komentar, terpakai, out);
+            out.push_str(&INDENT_FORMAT.repeat(indent));
+            out.push('}');
+        }
+        Stmt::UlangSelaras(var, e, body) => {
+            out.push_str("ulang selaras setiap ");
+            out.push_str(var);
+            out.push_str(" dari ");
+            out.push_str(&cetak_expr_fmt(e, indent, 0, komentar, terpakai));
+            out.push_str(" {\n");
+            cetak_blok_fmt(body, indent + 1, komentar, terpakai, out);
+            out.push_str(&INDENT_FORMAT.repeat(indent));
+            out.push('}');
+        }
+        Stmt::FungsiDef(nama, params, body) => {
+            out.push_str("fungsi ");
+            out.push_str(nama);
+            out.push('(');
+            out.push_str(&cetak_daftar_parameter_fmt(params));
+            out.push_str(") {\n");
+            cetak_blok_fmt(body, indent + 1, komentar, terpakai, out);
+            out.push_str(&INDENT_FORMAT.repeat(indent));
+            out.push('}');
+        }
+        Stmt::Kembalikan(e) => { out.push_str("kembalikan "); out.push_str(&cetak_expr_fmt(e, indent, 0, komentar, terpakai)); }
+        Stmt::EkspresiStmt(e) => out.push_str(&cetak_expr_fmt(e, indent, 0, komentar, terpakai)),
+        Stmt::Coba(bc, var, bt) => {
+            out.push_str("coba {\n");
+            cetak_blok_fmt(bc, indent + 1, komentar, terpakai, out);
+            out.push_str(&INDENT_FORMAT.repeat(indent));
+            out.push_str("} tangkap ");
+            out.push_str(var);
+            out.push_str(" {\n");
+            cetak_blok_fmt(bt, indent + 1, komentar, terpakai, out);
+            out.push_str(&INDENT_FORMAT.repeat(indent));
+            out.push('}');
+        }
+    }
+}
+
+fn cetak_blok_fmt(stmts: &[(usize, Stmt)], indent: usize, komentar: &PetaKomentar, terpakai: &mut std::collections::HashSet<usize>, out: &mut String) {
+    for (baris, s) in stmts {
+        flush_komentar_sampai(*baris, indent, komentar, terpakai, out);
+        out.push_str(&INDENT_FORMAT.repeat(indent));
+        cetak_stmt_fmt(s, indent, komentar, terpakai, out);
+        out.push('\n');
+    }
+}
+
+/// Format satu berkas sumber Isoteri (SATU berkas -- `muat` TIDAK diekspansi, beda dari
+/// kompilasi; format satu berkas seharusnya tidak menarik masuk isi berkas lain).
+pub fn format_sumber(sumber: &str) -> Result<String, String> {
+    let mut lexer = Lexer::new(sumber);
+    let token_dgn_komentar = lexer.tokenize_dengan_komentar().map_err(|e| format!("Kesalahan Lexer: {}", e))?;
+
+    let mut baris_ada_kode: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for (t, b) in &token_dgn_komentar {
+        if !matches!(t, Token::Komentar(_)) && *t != Token::Eof { baris_ada_kode.insert(*b); }
+    }
+    let mut komentar: PetaKomentar = HashMap::new();
+    for (t, b) in &token_dgn_komentar {
+        if let Token::Komentar(teks) = t {
+            if baris_ada_kode.contains(b) {
+                return Err(format!(
+                    "Baris {}: formatter belum mendukung komentar di baris yang sama dengan kode (\"{}\") -- pindahkan ke baris tersendiri dulu.",
+                    b, teks
+                ));
+            }
+            komentar.entry(*b).or_default().push(teks.clone());
+        }
+    }
+
+    let token_bersih: Vec<(Token, usize)> = token_dgn_komentar.into_iter().filter(|(t, _)| !matches!(t, Token::Komentar(_))).collect();
+    let mut parser = Parser::new(token_bersih);
+    let program = parser.parse_program().map_err(|e| format!("Kesalahan Parser: {}", e))?;
+
+    let mut out = String::new();
+    let mut terpakai = std::collections::HashSet::new();
+    cetak_blok_fmt(&program, 0, &komentar, &mut terpakai, &mut out);
+    // Komentar yang belum "terpakai" (mis. baris terakhir berkas, atau -- lihat keterbatasan
+    // v1 di atas -- baris terakhir sebuah blok bersarang) tetap DITULISKAN di sini, supaya
+    // TIDAK PERNAH hilang diam-diam walau posisinya mungkin bukan pas di tempat asalnya.
+    flush_komentar_sampai(usize::MAX, 0, &komentar, &mut terpakai, &mut out);
+    Ok(out)
+}
+
+pub fn format_berkas(path: &str) -> Result<String, String> {
+    let sumber = fs::read_to_string(path).map_err(|e| format!("Tidak bisa membaca \"{}\": {}", path, e))?;
+    format_sumber(&sumber)
+}
+
+/// muat modul lain relatif ke posisinya sendiri. `sudah_dimuat` mencegah muat ganda/siklus
+/// (mirip include guard di C) -- file yang sama cuma pernah diekspansi sekali.
+/// Tiap statement hasil ekspansi dibawa bareng LABEL file asalnya (dipakai belakangan oleh
+/// cek_tabrakan_nama buat mendeteksi dua modul beda yang kebetulan pakai nama sama).
+fn ekspansi_muat(
+    stmts: Vec<(usize, Stmt)>,    label_saat_ini: &str,
+    dir_saat_ini: &std::path::Path,
+    sudah_dimuat: &mut std::collections::HashSet<std::path::PathBuf>,
+) -> Result<Vec<(usize, Stmt, Rc<str>)>, String> {
+    let mut hasil = Vec::with_capacity(stmts.len());
+    for (baris, s) in stmts {
+        if let Stmt::Muat(rel_path) = &s {
+            let target = resolusi_muat(rel_path, dir_saat_ini)?;
+            let target_kanonik = fs::canonicalize(&target).unwrap_or_else(|_| target.clone());
+            if sudah_dimuat.contains(&target_kanonik) {
+                continue; // sudah pernah dimuat -- lewati diam-diam (include guard)
+            }
+            sudah_dimuat.insert(target_kanonik);
+
+            let sumber = fs::read_to_string(&target)
+                .map_err(|e| format!("Baris {}: Tidak bisa memuat \"{}\": {}", baris, rel_path, e))?;
+            let mut lexer = Lexer::new(&sumber);
+            let tokens = lexer.tokenize().map_err(|e| format!("[{}] Kesalahan Lexer: {}", target.display(), e))?;
+            let mut parser = Parser::new(tokens);
+            let sub_stmts = parser.parse_program().map_err(|e| format!("[{}] Kesalahan Parser: {}", target.display(), e))?;
+
+            let sub_dir = target.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
+            let label_target = target.display().to_string();
+            hasil.extend(ekspansi_muat(sub_stmts, &label_target, &sub_dir, sudah_dimuat)?);
+        } else {
+            hasil.push((baris, s, Rc::from(label_saat_ini)));
+        }
+    }
+    Ok(hasil)
+}
+
+/// Deteksi nama (fungsi/bentuk/variabel global) yang dideklarasikan di LEBIH DARI SATU file
+/// berbeda hasil 'muat' -- sebelumnya ini gagal diam-diam (yang belakangan menang, nimpa yang
+/// sebelumnya, tanpa peringatan apapun). Sengaja HANYA cek lintas-file: dua deklarasi nama sama
+/// di FILE YANG SAMA tetap dibiarkan (perilaku lama, di luar cakupan perbaikan modul ini).
+fn cek_tabrakan_nama(stmts: &[(usize, Stmt, Rc<str>)]) -> Result<(), String> {
+    let mut asal: HashMap<String, (Rc<str>, &'static str)> = HashMap::new();
+    for (_, s, label) in stmts {
+        let (nama, jenis) = match s {
+            Stmt::FungsiDef(nama, ..) => (nama, "fungsi"),
+            Stmt::BentukDef(nama, ..) => (nama, "bentuk"),
+            Stmt::Ingat(nama, ..) => (nama, "variabel global"),
+            _ => continue,
+        };
+        match asal.get(nama) {
+            Some((label_lama, jenis_lama)) if label_lama.as_ref() != label.as_ref() => {
+                return Err(format!(
+                    "Nama \"{}\" dideklarasikan di dua modul berbeda: {} \"{}\" di [{}], dan {} \"{}\" di [{}]. Ganti salah satu nama supaya gak tabrakan.",
+                    nama, jenis_lama, nama, label_lama, jenis, nama, label
+                ));
+            }
+            _ => { asal.insert(nama.clone(), (label.clone(), jenis)); }
+        }
+    }
+    Ok(())
+}
+
+/// Kumpulkan semua berkas yang terhubung lewat 'muat' (mulai dari `path`) jadi SATU string
+/// sumber gabungan -- dipakai subcommand 'bangun' (AOT bundling, lihat main.rs) buat
+/// menghasilkan satu program mandiri yang bisa ditempel ke binary tanpa perlu berkas .iso
+/// terpisah lagi saat dijalankan. Baris 'muat "..."' di tiap berkas DIHAPUS dari hasil gabungan
+/// (isinya sudah ditempel langsung di tempatnya). Include-guard sama seperti ekspansi_muat biasa.
+///
+/// CATATAN: deteksi baris 'muat "..."' di sini murni TEKSTUAL (baris yang -- setelah di-trim --
+/// diawali `muat "`), bukan lewat parser token penuh, supaya gak perlu pretty-printer AST->teks.
+/// Konsekuensinya: setiap statement 'muat' HARUS berada sendirian di baris-nya sendiri (gaya
+/// yang memang selalu dipakai di semua contoh & tutorial Isoteri) -- kalau digabung dengan
+/// statement lain di baris yang sama, bundler ini gak akan mengenalinya sebagai 'muat'.
+pub fn kumpulkan_sumber_gabungan(path: &str) -> Result<String, String> {
+    let mut sudah = std::collections::HashSet::new();
+    let mut keluaran = String::new();
+    kumpulkan_rekursif(std::path::Path::new(path), &mut sudah, &mut keluaran)?;
+    Ok(keluaran)
+}
+
+fn kumpulkan_rekursif(path: &std::path::Path, sudah: &mut std::collections::HashSet<std::path::PathBuf>, keluaran: &mut String) -> Result<(), String> {
+    let kanon = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if sudah.contains(&kanon) { return Ok(()); } // include guard, sama seperti ekspansi_muat biasa
+    sudah.insert(kanon);
+
+    let sumber = fs::read_to_string(path).map_err(|e| format!("Tidak bisa membaca berkas \"{}\": {}", path.display(), e))?;
+    let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    for baris in sumber.lines() {
+        let terpangkas = baris.trim();
+        if let Some(sisa) = terpangkas.strip_prefix("muat ") {
+            let sisa = sisa.trim();
+            if let Some(isi_kutip) = sisa.strip_prefix('"') {
+                if let Some(akhir) = isi_kutip.find('"') {
+                    let rel_path = &isi_kutip[..akhir];
+                    let target = resolusi_muat(rel_path, &dir)?;
+                    kumpulkan_rekursif(&target, sudah, keluaran)?;
+                    continue;
+                }
+            }
+        }
+        keluaran.push_str(baris);
+        keluaran.push('\n');
+    }
+    Ok(())
+}
+
+
+/// diekspansi lagi -- entah karena memang gak pakai modul, atau karena sudah diekspansi/
+/// digabung sebelumnya, mis. oleh bundler AOT lewat `bangun_bundel`). Dipakai baik oleh CLI
+/// biasa (via jalankan_berkas) maupun oleh binary hasil bundling AOT.
+/// Cuma validasi (lexer+parser+resolver+compiler) TANPA menjalankan programnya -- dipakai
+/// subcommand `bangun` (AOT, lihat main.rs) buat kasih feedback cepat kalau ada error bahasa
+/// Isoteri, sebelum buang waktu manggil `cargo build` yang jauh lebih lambat & pesan errornya
+/// (kalau ada) akan bercampur dengan error Rust yang membingungkan.
+pub fn periksa_sumber(sumber: &str) -> Result<(), String> {
+    let mut lexer = Lexer::new(sumber);
+    let tokens = lexer.tokenize().map_err(|e| format!("Kesalahan Lexer: {}", e))?;
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().map_err(|e| format!("Kesalahan Parser: {}", e))?;
+    let mut resolver = Resolver::new();
+    let top_level = resolver.resolve_top(&program).map_err(|e| format!("Kesalahan Kompilasi: {}", e))?;
+
+    let nama_fungsi: Vec<String> = resolver.fungsi_out.keys().cloned().collect();
+    let fungsi_index: HashMap<String, usize> = nama_fungsi.iter().enumerate().map(|(i, n)| (n.clone(), i)).collect();
+    let mut compiler = Compiler::new(fungsi_index);
+    let _ = compiler.compile_top(&top_level);
+    for nama in &nama_fungsi {
+        let cf = resolver.fungsi_out.get(nama).unwrap();
+        let _ = compiler.compile_fungsi(cf);
+    }
+    Ok(())
+}
+
+pub fn jalankan_sumber(sumber: &str) -> Result<(), String> {
+    let mut lexer = Lexer::new(sumber);
+    let tokens = lexer.tokenize().map_err(|e| format!("Kesalahan Lexer: {}", e))?;
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().map_err(|e| format!("Kesalahan Parser: {}", e))?;
+    jalankan_stmt_list(program)
+}
+
+/// Padanan `jalankan_sumber`, tapi lewat pipeline IR LINEAR (bagian "8b") -- dipakai
+/// `isoteri bangun` (AOT, lihat main.rs `mode_bangun`) supaya binary hasil build jalan
+/// lewat backend bytecode+JIT yang sama-sama generate dari IR, bukan menelusuri
+/// CExpr/CStmt langsung seperti `jalankan_sumber` (jalur lama). Migrasi ini AMAN dipakai
+/// buat AOT (blast radius kecil kalau ada apa-apa -- binary AOT sepenuhnya terpisah
+/// proses dari CLI utama) dan sudah divalidasi ketat lewat `isoteri via-ir` (regresi
+/// 17/17 + kasus rekursif JIT, lihat docs/IR.md) sebelum dipakai di sini.
+pub fn jalankan_sumber_via_ir(sumber: &str) -> Result<(), String> {
+    let mut lexer = Lexer::new(sumber);
+    let tokens = lexer.tokenize().map_err(|e| format!("Kesalahan Lexer: {}", e))?;
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().map_err(|e| format!("Kesalahan Parser: {}", e))?;
+    jalankan_stmt_list_via_ir(program)
+}
+
+/// Jalankan Isoteri mulai dari sebuah berkas `.iso` di disk -- termasuk mengekspansi semua
+/// 'muat' yang ditulis di dalamnya (lihat ekspansi_muat) dan mengecek tabrakan nama lintas
+/// modul (lihat cek_tabrakan_nama). Ini yang dipakai CLI normal (`isoteri program.iso`).
+pub fn jalankan_berkas(path: &str) -> Result<(), String> {
+    let sumber = fs::read_to_string(path).unwrap_or_else(|_| {
+        eprintln!("Peringatan: tidak bisa membaca '{}', pakai skrip contoh bawaan.", path);
+        String::from("ingat nilai = 80\nkalau (nilai >= 75) {\n    tampilkan \"Lulus\"\n} lainnya {\n    tampilkan \"Tidak lulus\"\n}")
+    });
+
+    let mut lexer = Lexer::new(&sumber);
+    let tokens = lexer.tokenize().map_err(|e| format!("Kesalahan Lexer: {}", e))?;
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().map_err(|e| format!("Kesalahan Parser: {}", e))?;
+
+    let entry_path = std::path::Path::new(path);
+    let entry_dir = entry_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
+    let entry_label = entry_path.display().to_string();
+    let mut sudah_dimuat = std::collections::HashSet::new();
+    if let Ok(kanon) = fs::canonicalize(entry_path) { sudah_dimuat.insert(kanon); }
+    let program_berlabel = ekspansi_muat(program, &entry_label, &entry_dir, &mut sudah_dimuat)
+        .map_err(|e| format!("Kesalahan Muat: {}", e))?;
+    cek_tabrakan_nama(&program_berlabel).map_err(|e| format!("Kesalahan Muat: {}", e))?;
+    let program: Vec<(usize, Stmt)> = program_berlabel.into_iter().map(|(baris, s, _)| (baris, s)).collect();
+
+    jalankan_stmt_list(program)
+}
+
+/// Inti pipeline resolve -> compile -> JIT -> eksekusi, dipakai bersama oleh jalankan_sumber
+/// dan jalankan_berkas setelah keduanya menyiapkan Vec<Stmt> yang siap diresolve.
+fn jalankan_stmt_list(program: Vec<(usize, Stmt)>) -> Result<(), String> {
+    let mut resolver = Resolver::new();
+    let top_level = resolver.resolve_top(&program).map_err(|e| format!("Kesalahan Kompilasi: {}", e))?;
+    let top_level = optimisasi_blok(top_level);
+    for cf in resolver.fungsi_out.values_mut() {
+        if let Some(cf) = Rc::get_mut(cf) {
+            cf.body = optimisasi_blok(std::mem::take(&mut cf.body));
+        }
+    }
+
+    let nama_fungsi: Vec<String> = resolver.fungsi_out.keys().cloned().collect();
+    let fungsi_index: HashMap<String, usize> = nama_fungsi.iter().enumerate().map(|(i, n)| (n.clone(), i)).collect();
+
+    let mut compiler = Compiler::new(fungsi_index);
+    let top_kode = compiler.compile_top(&top_level);
+    let mut jit = JitEngine::new();
+    let mut fungsi_vm: Vec<Rc<VMFungsi>> = Vec::with_capacity(nama_fungsi.len());
+    for nama in &nama_fungsi {
+        let cf = resolver.fungsi_out.get(nama).unwrap();
+        let mut vmf = compiler.compile_fungsi(cf);
+        if let Some(mode) = cf.tipe_jit {
+            match jit.kompilasi(cf, mode) {
+                Ok(ptr) => {
+                    vmf.native = Some(match mode {
+                        TipeJit::Angka => NativeFn::Angka(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64) -> i64>(ptr) }),
+                        TipeJit::Desimal => NativeFn::Desimal(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const f64) -> f64>(ptr) }),
+                    });
+                }
+                Err(e) => {
+                    eprintln!("Peringatan: fungsi \"{}\" gagal dikompilasi JIT ({}), pakai bytecode biasa.", nama, e);
+                }
+            }
+        }
+        fungsi_vm.push(Rc::new(vmf));
+    }
+
+    let mut vm = VM::new(resolver.global_count, compiler.konstanta, fungsi_vm, compiler.fungsi_index);
+    vm.jalankan_top(&top_kode).map_err(|e| format!("Kesalahan Runtime: {}", e))
+}
+
+// =====================================================================
+// 8b. ISOTERI IR LINEAR (tiga-alamat, typed) -- lanjutan docs/IR.md poin 2
+// =====================================================================
+//
+// IR v1 (bagian 4b) masih berbentuk POHON (CExpr rekursif) -- cukup buat constant
+// folding & dead code elimination, tapi BELUM cukup buat SIMD/vectorization yang
+// benar (butuh urutan operasi yang eksplisit & linear, bukan pohon) atau buat
+// menyatukan backend JIT dengan backend bytecode (keduanya masih menelusuri
+// CExpr/CStmt sendiri-sendiri secara terpisah).
+//
+// IR LINEAR ini adalah lapisan BARU di antara IR v1 dan backend: representasi
+// tiga-alamat (typed, register virtual) yang di-lower dari CStmt/CExpr, LALU
+// di-lower LAGI jadi Instr (bytecode) supaya bisa langsung dijalankan & diuji
+// terhadap jalur lama -- lihat `isoteri via-ir program.iso` di main.rs dan
+// `runtime/web/README.md` gaya validasinya (bandingkan dua jalur independen,
+// harus identik).
+//
+// PENTING: jalur produksi (jalankan_stmt_list, ekspor_json_dari_sumber) BELUM
+// dipindah ke IR linear ini -- ini FONDASI yang sudah diverifikasi benar, siap
+// dipakai backend JIT/SIMD/AOT berikutnya, tapi migrasi backend produksi itu
+// sendiri didokumentasikan sebagai kerja lanjutan (docs/IR.md poin 3).
+//
+// Register 0..local_slot_count SAMA PERSIS dengan slot lokal yang sudah ada
+// (CExpr::Local(n) langsung jadi register n, TANPA instruksi tambahan) --
+// register di atas itu adalah TEMPORARY BARU yang dialokasikan selama lowering
+// buat menyimpan hasil sub-ekspresi (di jalur stack lama ini implisit ada di
+// stack; di sini eksplisit, itulah maksud "linear/typed").
+//
+// Tipe (IrType) diturunkan secara bottom-up dari literal & slot_tipe yang SUDAH
+// dihitung Resolver buat elig-JIT (bagian "3. RESOLVER") -- bukan type-checker
+// baru dari nol. Simpul yang tipenya belum bisa dipastikan statis (panggilan
+// fungsi, daftar, peta, field, dst) jatuh ke IrType::Dinamis, yang berarti
+// "berlaku seperti Value biasa sekarang" -- aman, cuma belum optimal.
+//
+// Simpul yang BELUM "dilinearkan" murni (SimpanLaluField/UbahField* dgn path
+// nested, dan 'ulang selaras' yang badannya AST mentah) SENGAJA tidak dipaksa
+// masuk representasi register -- dipakaikan escape hatch `IrInstr::Legacy`
+// yang membungkus potongan Instr hasil Compiler lama apa adanya. ini konsisten
+// dengan Hukum 6 "Explicit escape hatch" di docs/FILOSOFI.md: jangan buru-buru
+// menggeneralisasi kasus langka kalau itu menambah risiko buat manfaat kecil.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IrType { Angka, Desimal, Teks, Bool, Dinamis }
+
+#[derive(Debug, Clone)]
+enum IrConst { Angka(i64), Desimal(f64), Teks(String), Bool(bool) }
+
+type Reg = u32;
+
+#[derive(Debug, Clone)]
+enum IrInstr {
+    Const(Reg, IrConst),
+    LoadGlobal(Reg, usize),
+    StoreGlobal(usize, Reg),
+    Move(Reg, Reg),
+    BinOp(Reg, BinOp, Reg, Reg),
+    MakeDaftar(Reg, Vec<Reg>),
+    MakePeta(Reg, Vec<String>, Vec<Reg>),
+    Indeks(Reg, Reg, Reg),
+    AmbilField(Reg, Reg, String),
+    BuatInstans(Reg, String, Vec<String>, Vec<Reg>),
+    BuatFungsi(Reg, usize, Vec<Reg>),
+    PanggilFungsi(Reg, usize, Vec<Reg>),
+    PanggilBawaan(Reg, String, Vec<Reg>),
+    PanggilNilai(Reg, Reg, Vec<Reg>),
+    Tampilkan(Reg),
+    Jump(usize),
+    JumpJikaSalah(Reg, usize),
+    IterMulai(Reg),
+    /// dst = item berikutnya; kalau iterator sudah habis, lompat ke `usize` (di-backpatch).
+    IterLanjut(Reg, usize),
+    /// target tangkap (di-backpatch), register tempat pesan galat ditaruh kalau kena.
+    MulaiCoba(usize, Reg),
+    SelesaiCoba,
+    Kembalikan(Reg),
+    TandaiBaris(usize),
+    /// Escape hatch (lihat catatan di atas modul) -- Instr apa adanya, TANPA lompatan
+    /// internal (baik nested-field-path maupun JalankanSelaras sama-sama straight-line
+    /// dari sisi IR ini), jadi aman disisipkan di posisi berapa pun tanpa rebase offset.
+    Legacy(Vec<Instr>, Option<Reg>),
+}
+
+struct IrLower<'a> {
+    kompiler: &'a mut Compiler, // dipakai ulang buat konstanta & fungsi_index & escape hatch
+    reg_types: Vec<IrType>,     // terindeks per register; tumbuh seiring temp baru dialokasi
+    slot_tipe: &'a [Option<TipeJit>],
+}
+
+impl<'a> IrLower<'a> {
+    fn baru_reg(&mut self, t: IrType) -> Reg {
+        self.reg_types.push(t);
+        (self.reg_types.len() - 1) as u32
+    }
+
+    fn tipe_dari_jit(t: Option<TipeJit>) -> IrType {
+        match t { Some(TipeJit::Angka) => IrType::Angka, Some(TipeJit::Desimal) => IrType::Desimal, None => IrType::Dinamis }
+    }
+
+    /// Lower satu ekspresi -> (register hasil, tipenya). Rekursif, bottom-up.
+    /// Alokasi register tujuan buat satu simpul: kalau `dest` diberikan (destination-passing,
+    /// dipakai `ingat`/`ubah` supaya hasil ekspresi ditulis LANGSUNG ke slot tujuan tanpa lewat
+    /// register perantara + Move), pakai itu; kalau tidak, alokasikan temp baru seperti biasa.
+    fn reg_tujuan(&mut self, dest: Option<Reg>, t: IrType) -> Reg {
+        match dest {
+            Some(r) => {
+                while self.reg_types.len() <= r as usize { self.reg_types.push(IrType::Dinamis); }
+                self.reg_types[r as usize] = t;
+                r
+            }
+            None => self.baru_reg(t),
+        }
+    }
+
+    fn lower_expr(&mut self, e: &CExpr, out: &mut Vec<IrInstr>) -> (Reg, IrType) {
+        self.lower_expr_ke(e, out, None)
+    }
+
+    /// Sama seperti `lower_expr`, tapi kalau `dest` diberikan, hasil ekspresi ditulis LANGSUNG
+    /// ke register itu -- inti dari optimasi register allocation v1 (lihat docs/IR.md):
+    /// menghilangkan pola `BinOp(temp, ...); Move(slot, temp)` yang tadinya muncul di SETIAP
+    /// `ubah x = ...`/`ingat x = ...`, jadi cukup `BinOp(slot, ...)` langsung.
+    fn lower_expr_ke(&mut self, e: &CExpr, out: &mut Vec<IrInstr>, dest: Option<Reg>) -> (Reg, IrType) {
+        match e {
+            CExpr::Angka(n) => { let r = self.reg_tujuan(dest, IrType::Angka); out.push(IrInstr::Const(r, IrConst::Angka(*n))); (r, IrType::Angka) }
+            CExpr::Desimal(f) => { let r = self.reg_tujuan(dest, IrType::Desimal); out.push(IrInstr::Const(r, IrConst::Desimal(*f))); (r, IrType::Desimal) }
+            CExpr::Teks(s) => { let r = self.reg_tujuan(dest, IrType::Teks); out.push(IrInstr::Const(r, IrConst::Teks(s.clone()))); (r, IrType::Teks) }
+            CExpr::Bool(b) => { let r = self.reg_tujuan(dest, IrType::Bool); out.push(IrInstr::Const(r, IrConst::Bool(*b))); (r, IrType::Bool) }
+            CExpr::Global(slot) => { let r = self.reg_tujuan(dest, IrType::Dinamis); out.push(IrInstr::LoadGlobal(r, *slot)); (r, IrType::Dinamis) }
+            CExpr::Local(slot) => {
+                let src = *slot as u32;
+                let t = self.reg_types.get(src as usize).copied().unwrap_or(IrType::Dinamis);
+                match dest {
+                    // `x = y` (beda register) -- satu-satunya kasus yang TETAP butuh Move,
+                    // karena nilainya memang harus benar-benar dipindah, bukan cuma "dihasilkan
+                    // di tempat lain". Kalau dest == src (mis. `x = x`), tidak perlu apa-apa.
+                    Some(d) if d != src => { out.push(IrInstr::Move(d, src)); self.reg_types[d as usize] = t; (d, t) }
+                    _ => (src, t),
+                }
+            }
+            CExpr::Binary(l, op, r) => {
+                let (lr, lt) = self.lower_expr(l, out);
+                let (rr, rt) = self.lower_expr(r, out);
+                let tipe_hasil = tipe_hasil_binop(*op, lt, rt);
+                let dst = self.reg_tujuan(dest, tipe_hasil);
+                out.push(IrInstr::BinOp(dst, *op, lr, rr));
+                (dst, tipe_hasil)
+            }
+            CExpr::Panggil(nama, args) => {
+                let arg_regs: Vec<Reg> = args.iter().map(|a| self.lower_expr(a, out).0).collect();
+                let dst = self.reg_tujuan(dest, IrType::Dinamis);
+                if let Some(&idx) = self.kompiler.fungsi_index.get(nama) {
+                    out.push(IrInstr::PanggilFungsi(dst, idx, arg_regs));
+                } else {
+                    out.push(IrInstr::PanggilBawaan(dst, nama.clone(), arg_regs));
+                }
+                (dst, IrType::Dinamis)
+            }
+            CExpr::Daftar(items) => {
+                let regs: Vec<Reg> = items.iter().map(|i| self.lower_expr(i, out).0).collect();
+                let dst = self.reg_tujuan(dest, IrType::Dinamis);
+                out.push(IrInstr::MakeDaftar(dst, regs));
+                (dst, IrType::Dinamis)
+            }
+            CExpr::Peta(entries) => {
+                let kunci: Vec<String> = entries.iter().map(|(k, _)| k.clone()).collect();
+                let regs: Vec<Reg> = entries.iter().map(|(_, v)| self.lower_expr(v, out).0).collect();
+                let dst = self.reg_tujuan(dest, IrType::Dinamis);
+                out.push(IrInstr::MakePeta(dst, kunci, regs));
+                (dst, IrType::Dinamis)
+            }
+            CExpr::Indeks(t, i) => {
+                let (tr, _) = self.lower_expr(t, out);
+                let (ir, _) = self.lower_expr(i, out);
+                let dst = self.reg_tujuan(dest, IrType::Dinamis);
+                out.push(IrInstr::Indeks(dst, tr, ir));
+                (dst, IrType::Dinamis)
+            }
+            CExpr::Field(t, f) => {
+                let (tr, _) = self.lower_expr(t, out);
+                let dst = self.reg_tujuan(dest, IrType::Dinamis);
+                out.push(IrInstr::AmbilField(dst, tr, f.clone()));
+                (dst, IrType::Dinamis)
+            }
+            CExpr::BentukLiteral(nama, entries) => {
+                let field_nama: Vec<String> = entries.iter().map(|(k, _)| k.clone()).collect();
+                let regs: Vec<Reg> = entries.iter().map(|(_, v)| self.lower_expr(v, out).0).collect();
+                let dst = self.reg_tujuan(dest, IrType::Dinamis);
+                out.push(IrInstr::BuatInstans(dst, nama.clone(), field_nama, regs));
+                (dst, IrType::Dinamis)
+            }
+            CExpr::FungsiLiteral(nama_sintetis, tangkapan) => {
+                let regs: Vec<Reg> = tangkapan.iter().map(|e| self.lower_expr(e, out).0).collect();
+                let idx = *self.kompiler.fungsi_index.get(nama_sintetis)
+                    .unwrap_or_else(|| panic!("Closure \"{}\" tidak terdaftar -- bug internal resolver.", nama_sintetis));
+                let dst = self.reg_tujuan(dest, IrType::Dinamis);
+                out.push(IrInstr::BuatFungsi(dst, idx, regs));
+                (dst, IrType::Dinamis)
+            }
+            CExpr::PanggilNilai(callee, args) => {
+                let (fr, _) = self.lower_expr(callee, out);
+                let arg_regs: Vec<Reg> = args.iter().map(|a| self.lower_expr(a, out).0).collect();
+                let dst = self.reg_tujuan(dest, IrType::Dinamis);
+                out.push(IrInstr::PanggilNilai(dst, fr, arg_regs));
+                (dst, IrType::Dinamis)
+            }
+            // Escape hatch: nested field-path punya urutan Dup/AmbilField yang cukup rumit buat
+            // diregisterkan murni dengan manfaat kecil (kasusnya jarang) -- pakai ulang Compiler
+            // yang sudah teruji, dibungkus utuh sebagai satu blok Legacy straight-line.
+            CExpr::SimpanLaluField(_, _, _) => {
+                let mut kode = Vec::new();
+                self.kompiler.compile_expr(e, &mut kode);
+                let dst = self.reg_tujuan(dest, IrType::Dinamis);
+                out.push(IrInstr::Legacy(kode, Some(dst)));
+                (dst, IrType::Dinamis)
+            }
+        }
+    }
+
+    fn lower_blok(&mut self, stmts: &[(usize, CStmt)], out: &mut Vec<IrInstr>) {
+        for (baris, s) in stmts {
+            out.push(IrInstr::TandaiBaris(*baris));
+            self.lower_stmt(s, out);
+        }
+    }
+
+    fn lower_stmt(&mut self, s: &CStmt, out: &mut Vec<IrInstr>) {
+        match s {
+            CStmt::IngatGlobal(slot, e) | CStmt::UbahGlobal(slot, e) => {
+                let (r, _) = self.lower_expr(e, out);
+                out.push(IrInstr::StoreGlobal(*slot, r));
+            }
+            CStmt::IngatLocal(slot, e) | CStmt::UbahLocal(slot, e) => {
+                self.lower_expr_ke(e, out, Some(*slot as u32));
+            }
+            CStmt::UbahFieldGlobal(_, _, _) | CStmt::UbahFieldLocal(_, _, _) => {
+                // Escape hatch yang sama seperti SimpanLaluField -- lihat catatan di atas.
+                let mut kode = Vec::new();
+                self.kompiler.compile_stmt(s, &mut kode);
+                out.push(IrInstr::Legacy(kode, None));
+            }
+            CStmt::Tampilkan(e) => { let (r, _) = self.lower_expr(e, out); out.push(IrInstr::Tampilkan(r)); }
+            CStmt::Kalau(cond, tb, eb) => {
+                let (cr, _) = self.lower_expr(cond, out);
+                let lompat_salah_idx = out.len();
+                out.push(IrInstr::JumpJikaSalah(cr, 0));
+                self.lower_blok(tb, out);
+                if let Some(eb) = eb {
+                    let lompat_akhir_idx = out.len();
+                    out.push(IrInstr::Jump(0));
+                    let else_mulai = out.len();
+                    if let IrInstr::JumpJikaSalah(_, t) = &mut out[lompat_salah_idx] { *t = else_mulai; }
+                    self.lower_blok(eb, out);
+                    let akhir = out.len();
+                    if let IrInstr::Jump(t) = &mut out[lompat_akhir_idx] { *t = akhir; }
+                } else {
+                    let akhir = out.len();
+                    if let IrInstr::JumpJikaSalah(_, t) = &mut out[lompat_salah_idx] { *t = akhir; }
+                }
+            }
+            CStmt::Ulang(cond, body) => {
+                let mulai = out.len();
+                let (cr, _) = self.lower_expr(cond, out);
+                let lompat_salah_idx = out.len();
+                out.push(IrInstr::JumpJikaSalah(cr, 0));
+                self.lower_blok(body, out);
+                out.push(IrInstr::Jump(mulai));
+                let akhir = out.len();
+                if let IrInstr::JumpJikaSalah(_, t) = &mut out[lompat_salah_idx] { *t = akhir; }
+            }
+            CStmt::UlangSetiapGlobal(slot, e, body) => {
+                let (er, _) = self.lower_expr(e, out);
+                out.push(IrInstr::IterMulai(er));
+                let mulai = out.len();
+                let dst = self.baru_reg(IrType::Dinamis);
+                out.push(IrInstr::IterLanjut(dst, 0));
+                out.push(IrInstr::StoreGlobal(*slot, dst));
+                self.lower_blok(body, out);
+                out.push(IrInstr::Jump(mulai));
+                let akhir = out.len();
+                if let IrInstr::IterLanjut(_, t) = &mut out[mulai] { *t = akhir; }
+            }
+            CStmt::UlangSetiapLocal(slot, e, body) => {
+                let (er, _) = self.lower_expr(e, out);
+                out.push(IrInstr::IterMulai(er));
+                let mulai = out.len();
+                while self.reg_types.len() <= *slot { self.reg_types.push(IrType::Dinamis); }
+                self.reg_types[*slot] = IrType::Dinamis;
+                out.push(IrInstr::IterLanjut(*slot as u32, 0));
+                self.lower_blok(body, out);
+                out.push(IrInstr::Jump(mulai));
+                let akhir = out.len();
+                if let IrInstr::IterLanjut(_, t) = &mut out[mulai] { *t = akhir; }
+            }
+            CStmt::UlangSelaras(e, _, _) => {
+                // Badannya AST Stmt mentah (bukan bytecode) -- lihat catatan modul. Pakai ulang
+                // Compiler apa adanya (menghasilkan satu Instr::JalankanSelaras, straight-line).
+                let mut kode = Vec::new();
+                self.kompiler.compile_stmt(s, &mut kode);
+                let _ = e; // sudah ikut ke dalam `kode` lewat compile_stmt
+                out.push(IrInstr::Legacy(kode, None));
+            }
+            CStmt::CobaGlobal(badan_coba, slot, badan_tangkap) => {
+                let mulai_idx = out.len();
+                let dst_pesan = self.baru_reg(IrType::Teks);
+                out.push(IrInstr::MulaiCoba(0, dst_pesan));
+                self.lower_blok(badan_coba, out);
+                out.push(IrInstr::SelesaiCoba);
+                let lompat_akhir_idx = out.len();
+                out.push(IrInstr::Jump(0));
+                let target_tangkap = out.len();
+                if let IrInstr::MulaiCoba(t, _) = &mut out[mulai_idx] { *t = target_tangkap; }
+                out.push(IrInstr::StoreGlobal(*slot, dst_pesan));
+                self.lower_blok(badan_tangkap, out);
+                let akhir = out.len();
+                if let IrInstr::Jump(t) = &mut out[lompat_akhir_idx] { *t = akhir; }
+            }
+            CStmt::CobaLocal(badan_coba, slot, badan_tangkap) => {
+                let mulai_idx = out.len();
+                // Tulis pesan galat LANGSUNG ke slot tangkap, tidak perlu temp+Move terpisah
+                // (beda dengan sebelumnya) -- registernya sendiri "ditumpangi" MulaiCoba/
+                // penangkap error VM, jadi ini aman: sebelum SelesaiCoba tak ada yang baca
+                // slot itu (badan_coba belum tentu menulisinya buat hal lain).
+                let dst_pesan = self.reg_tujuan(Some(*slot as u32), IrType::Teks);
+                out.push(IrInstr::MulaiCoba(0, dst_pesan));
+                self.lower_blok(badan_coba, out);
+                out.push(IrInstr::SelesaiCoba);
+                let lompat_akhir_idx = out.len();
+                out.push(IrInstr::Jump(0));
+                let target_tangkap = out.len();
+                if let IrInstr::MulaiCoba(t, _) = &mut out[mulai_idx] { *t = target_tangkap; }
+                self.lower_blok(badan_tangkap, out);
+                let akhir = out.len();
+                if let IrInstr::Jump(t) = &mut out[lompat_akhir_idx] { *t = akhir; }
+            }
+            CStmt::Kembalikan(e) => { let (r, _) = self.lower_expr(e, out); out.push(IrInstr::Kembalikan(r)); }
+            CStmt::EkspresiStmt(e) => { self.lower_expr(e, out); }
+        }
+    }
+}
+
+/// Tipe hasil BinOp secara statis, kalau bisa dipastikan dari tipe kedua operand -- dipakai
+/// murni buat metadata IR (register-typing), belum mempengaruhi bytecode yang dihasilkan
+/// backend IR->Instr (itu tetap dinamis/Value seperti sekarang, lihat catatan di atas modul).
+fn tipe_hasil_binop(op: BinOp, l: IrType, r: IrType) -> IrType {
+    use BinOp::*;
+    match op {
+        SamaDengan | TidakSama | LebihBesar | LebihBesarSama | LebihKecil | LebihKecilSama | Dan | Atau => {
+            if l != IrType::Dinamis && r != IrType::Dinamis { IrType::Bool } else { IrType::Dinamis }
+        }
+        Tambah if l == IrType::Teks || r == IrType::Teks => IrType::Teks,
+        Tambah | Kurang | Kali | Bagi => match (l, r) {
+            (IrType::Angka, IrType::Angka) => IrType::Angka,
+            (IrType::Angka, IrType::Desimal) | (IrType::Desimal, IrType::Angka) | (IrType::Desimal, IrType::Desimal) => IrType::Desimal,
+            _ => IrType::Dinamis,
+        },
+    }
+}
+
+/// Lower satu fungsi (body CFungsi) -> (instruksi IR, tipe register, jumlah register total).
+fn lower_fungsi_ke_ir(kompiler: &mut Compiler, cf: &CFungsi) -> (Vec<IrInstr>, Vec<IrType>) {
+    let mut reg_types: Vec<IrType> = (0..cf.local_slot_count)
+        .map(|i| IrLower::tipe_dari_jit(cf.slot_tipe.get(i).copied().flatten()))
+        .collect();
+    let mut out = Vec::new();
+    {
+        let mut lower = IrLower { kompiler, reg_types: std::mem::take(&mut reg_types), slot_tipe: &cf.slot_tipe };
+        lower.lower_blok(&cf.body, &mut out);
+        reg_types = lower.reg_types;
+    }
+    (out, reg_types)
+}
+
+fn lower_top_ke_ir(kompiler: &mut Compiler, top: &[(usize, CStmt)]) -> (Vec<IrInstr>, Vec<IrType>) {
+    let mut out = Vec::new();
+    let reg_types;
+    {
+        let mut lower = IrLower { kompiler, reg_types: Vec::new(), slot_tipe: &[] };
+        lower.lower_blok(top, &mut out);
+        reg_types = lower.reg_types;
+    }
+    (out, reg_types)
+}
+
+/// Backend IR-linear -> Instr (stack bytecode): tiap register jadi "slot lokal" tambahan
+/// (lihat `local_slot_count` yang dikembalikan -- lebih besar dari punya CFungsi asli karena
+/// menampung register temporary juga). Tipe (IrType) SENGAJA diabaikan di sini -- bytecode VM
+/// sudah dinamis (Value bertag) dari sononya, jadi tidak ada untungnya membedakan representasi
+/// per tipe di jalur ini. Nilai tipe itu baru kepakai kalau IR ini suatu saat diberi backend
+/// JIT/SIMD sendiri (lihat docs/IR.md poin 2-3) yang BISA memakai register unboxed native.
+/// Lower IR linear -> Instr (stack bytecode): tiap register jadi "slot lokal" tambahan
+/// (lihat `local_slot_count` yang dikembalikan pemanggil -- lebih besar dari punya CFungsi
+/// asli karena menampung register temporary juga). Tipe (IrType) SENGAJA diabaikan di sini --
+/// bytecode VM sudah dinamis (Value bertag) dari sononya, jadi tidak ada untungnya membedakan
+/// representasi per tipe di jalur ini. Nilai tipe itu baru kepakai kalau IR ini suatu saat
+/// diberi backend JIT/SIMD sendiri (lihat docs/IR.md poin 2-3) yang BISA memakai register
+/// unboxed native. Butuh akses ke `Compiler::tambah_konstanta` buat instruksi `Const`.
+fn ir_ke_instr_dgn_konstanta(kompiler: &mut Compiler, ir: &[IrInstr]) -> Vec<Instr> {
+    // Pass 1: hitung index instruksi Instr AWAL setiap IrInstr (buat rebase target lompatan).
+    let mut ukuran_per_instr: Vec<usize> = Vec::with_capacity(ir.len());
+    for instr in ir {
+        ukuran_per_instr.push(match instr {
+            IrInstr::Const(..) => 2,          // PushK ; StoreLocal
+            IrInstr::LoadGlobal(..) => 2,     // LoadGlobal ; StoreLocal
+            IrInstr::StoreGlobal(..) => 2,    // LoadLocal ; StoreGlobal
+            IrInstr::Move(..) => 2,           // LoadLocal ; StoreLocal
+            IrInstr::BinOp(..) => 4,          // LoadLocal x2 ; BinOp ; StoreLocal
+            IrInstr::MakeDaftar(_, items) => items.len() + 2,
+            IrInstr::MakePeta(_, _, v) => v.len() + 1 + 1,
+            IrInstr::Indeks(..) => 4,
+            IrInstr::AmbilField(..) => 3,
+            IrInstr::BuatInstans(_, _, _, v) => v.len() + 1 + 1,
+            IrInstr::BuatFungsi(_, _, t) => t.len() + 1 + 1,
+            IrInstr::PanggilFungsi(_, _, a) => a.len() + 1 + 1,
+            IrInstr::PanggilBawaan(_, _, a) => a.len() + 1 + 1,
+            IrInstr::PanggilNilai(_, _, a) => a.len() + 2 + 1,
+            IrInstr::Tampilkan(..) => 2,
+            IrInstr::Jump(..) => 1,
+            IrInstr::JumpJikaSalah(..) => 2,
+            IrInstr::IterMulai(..) => 2,
+            IrInstr::IterLanjut(..) => 1,
+            IrInstr::MulaiCoba(..) => 1,
+            IrInstr::SelesaiCoba => 1,
+            IrInstr::Kembalikan(..) => 2,
+            IrInstr::TandaiBaris(..) => 1,
+            IrInstr::Legacy(k, dst) => k.len() + if dst.is_some() { 1 } else { 0 },
+        });
+    }
+    let mut peta_awal = vec![0usize; ir.len() + 1];
+    for i in 0..ir.len() { peta_awal[i + 1] = peta_awal[i] + ukuran_per_instr[i]; }
+
+    let reb = |target: usize| -> usize { peta_awal.get(target).copied().unwrap_or_else(|| peta_awal[ir.len()]) };
+
+    let mut out = Vec::with_capacity(peta_awal[ir.len()]);
+    for instr in ir {
+        match instr {
+            IrInstr::Const(dst, c) => {
+                let v = match c {
+                    IrConst::Angka(n) => Value::Angka(*n),
+                    IrConst::Desimal(f) => Value::Desimal(*f),
+                    IrConst::Teks(s) => Value::Teks(s.clone().into()),
+                    IrConst::Bool(b) => Value::Bool(*b),
+                };
+                let k = kompiler.tambah_konstanta(v);
+                out.push(Instr::PushK(k));
+                out.push(Instr::StoreLocal(*dst as usize));
+            }
+            IrInstr::LoadGlobal(dst, slot) => { out.push(Instr::LoadGlobal(*slot)); out.push(Instr::StoreLocal(*dst as usize)); }
+            IrInstr::StoreGlobal(slot, src) => { out.push(Instr::LoadLocal(*src as usize)); out.push(Instr::StoreGlobal(*slot)); }
+            IrInstr::Move(dst, src) => { out.push(Instr::LoadLocal(*src as usize)); out.push(Instr::StoreLocal(*dst as usize)); }
+            IrInstr::BinOp(dst, op, a, b) => {
+                out.push(Instr::LoadLocal(*a as usize));
+                out.push(Instr::LoadLocal(*b as usize));
+                out.push(Instr::BinOp(*op));
+                out.push(Instr::StoreLocal(*dst as usize));
+            }
+            IrInstr::MakeDaftar(dst, items) => {
+                for r in items { out.push(Instr::LoadLocal(*r as usize)); }
+                out.push(Instr::MakeDaftar(items.len()));
+                out.push(Instr::StoreLocal(*dst as usize));
+            }
+            IrInstr::MakePeta(dst, kunci, nilai) => {
+                for r in nilai { out.push(Instr::LoadLocal(*r as usize)); }
+                out.push(Instr::MakePeta(kunci.clone()));
+                out.push(Instr::StoreLocal(*dst as usize));
+            }
+            IrInstr::Indeks(dst, t, i) => {
+                out.push(Instr::LoadLocal(*t as usize));
+                out.push(Instr::LoadLocal(*i as usize));
+                out.push(Instr::Indeks);
+                out.push(Instr::StoreLocal(*dst as usize));
+            }
+            IrInstr::AmbilField(dst, t, f) => {
+                out.push(Instr::LoadLocal(*t as usize));
+                out.push(Instr::AmbilField(f.clone()));
+                out.push(Instr::StoreLocal(*dst as usize));
+            }
+            IrInstr::BuatInstans(dst, nama, fields, regs) => {
+                for r in regs { out.push(Instr::LoadLocal(*r as usize)); }
+                out.push(Instr::BuatInstans(nama.clone(), fields.clone()));
+                out.push(Instr::StoreLocal(*dst as usize));
+            }
+            IrInstr::BuatFungsi(dst, idx, tangkapan) => {
+                for r in tangkapan { out.push(Instr::LoadLocal(*r as usize)); }
+                out.push(Instr::BuatFungsi(*idx, tangkapan.len()));
+                out.push(Instr::StoreLocal(*dst as usize));
+            }
+            IrInstr::PanggilFungsi(dst, idx, args) => {
+                for r in args { out.push(Instr::LoadLocal(*r as usize)); }
+                out.push(Instr::PanggilFungsi(*idx, args.len()));
+                out.push(Instr::StoreLocal(*dst as usize));
+            }
+            IrInstr::PanggilBawaan(dst, nama, args) => {
+                for r in args { out.push(Instr::LoadLocal(*r as usize)); }
+                out.push(Instr::PanggilBawaan(nama.clone(), args.len()));
+                out.push(Instr::StoreLocal(*dst as usize));
+            }
+            IrInstr::PanggilNilai(dst, f, args) => {
+                out.push(Instr::LoadLocal(*f as usize));
+                for r in args { out.push(Instr::LoadLocal(*r as usize)); }
+                out.push(Instr::PanggilNilai(args.len()));
+                out.push(Instr::StoreLocal(*dst as usize));
+            }
+            IrInstr::Tampilkan(r) => { out.push(Instr::LoadLocal(*r as usize)); out.push(Instr::Tampilkan); }
+            IrInstr::Jump(t) => out.push(Instr::Lompat(reb(*t))),
+            IrInstr::JumpJikaSalah(r, t) => { out.push(Instr::LoadLocal(*r as usize)); out.push(Instr::LompatJikaSalah(reb(*t))); }
+            IrInstr::IterMulai(r) => { out.push(Instr::LoadLocal(*r as usize)); out.push(Instr::IterMulai); }
+            IrInstr::IterLanjut(dst, t) => out.push(Instr::IterLanjutLocal(*dst as usize, reb(*t))),
+            IrInstr::MulaiCoba(t, dst_pesan) => out.push(Instr::MulaiCobaLocal(reb(*t), *dst_pesan as usize)),
+            IrInstr::SelesaiCoba => out.push(Instr::SelesaiCoba),
+            IrInstr::Kembalikan(r) => { out.push(Instr::LoadLocal(*r as usize)); out.push(Instr::Kembalikan); }
+            IrInstr::TandaiBaris(n) => out.push(Instr::TandaiBaris(*n)),
+            IrInstr::Legacy(kode, dst) => {
+                out.extend(kode.iter().cloned());
+                if let Some(dst) = dst { out.push(Instr::StoreLocal(*dst as usize)); }
+            }
+        }
+    }
+    out
+}
+
+/// Jalur validasi (BUKAN jalur produksi -- lihat catatan di atas modul & docs/IR.md):
+/// resolve+optimisasi IR-pohon seperti biasa, TAPI lower tiap fungsi & top-level lewat
+/// IR LINEAR baru sebelum diubah balik jadi Instr, lalu jalankan seperti biasa. Dipanggil
+/// dari `isoteri via-ir program.iso` di main.rs buat dibandingkan byte-per-byte terhadap
+/// `isoteri program.iso` (jalur produksi/lama) -- lihat benchmarks/README kalau ada, atau
+/// jalankan manual: diff <(isoteri p.iso) <(isoteri via-ir p.iso).
+fn target_lompat(instr: &Instr) -> Option<usize> {
+    match instr {
+        Instr::Lompat(t) | Instr::LompatJikaSalah(t) => Some(*t),
+        Instr::IterLanjutLocal(_, t) | Instr::IterLanjutGlobal(_, t) => Some(*t),
+        Instr::MulaiCobaLocal(t, _) | Instr::MulaiCobaGlobal(t, _) => Some(*t),
+        _ => None,
+    }
+}
+
+fn rebase_target(instr: Instr, peta: &[usize]) -> Instr {
+    match instr {
+        Instr::Lompat(t) => Instr::Lompat(peta[t]),
+        Instr::LompatJikaSalah(t) => Instr::LompatJikaSalah(peta[t]),
+        Instr::IterLanjutLocal(s, t) => Instr::IterLanjutLocal(s, peta[t]),
+        Instr::IterLanjutGlobal(s, t) => Instr::IterLanjutGlobal(s, peta[t]),
+        Instr::MulaiCobaLocal(t, s) => Instr::MulaiCobaLocal(peta[t], s),
+        Instr::MulaiCobaGlobal(t, s) => Instr::MulaiCobaGlobal(peta[t], s),
+        lain => lain,
+    }
+}
+
+/// Stack scheduling (lanjutan register allocation v1, lihat docs/IR.md) -- post-pass di atas
+/// `Vec<Instr>` HASIL AKHIR (jump target sudah ter-resolve absolut), bukan di level IR linear
+/// lagi, supaya tidak perlu mengurus reindexing IrInstr yang rumit.
+///
+/// PENTING -- riwayat perbaikan: versi pertama fungsi ini mengizinkan celah SEMBARANG antara
+/// `StoreLocal(r)` dan `LoadLocal(r)` asal tidak ada instruksi kontrol alur di antaranya. Itu
+/// TERBUKTI SALAH: kalau di celah ada instruksi lain yang men-*push* nilai (mis. `LoadLocal(0)`
+/// buat operand LAIN dari BinOp yang sama), nilai `r` yang "dibiarkan nangkring" di stack jadi
+/// ke-dahului nilai baru itu -- urutan operand kebalik (`n <= 1` diam-diam jadi `1 <= n`, lolos
+/// dari validasi 17 program contoh untuk kasus non-rekursif tapi KETAHUAN lewat fungsi rekursif
+/// `fib`/`faktorial` yang hasilnya jadi salah). Versi ini jauh lebih KONSERVATIF: cuma
+/// menghapus pasangan yang BENAR-BENAR BERSEBELAHAN (`StoreLocal(r)` lalu PERSIS instruksi
+/// berikutnya `LoadLocal(r)`, TANPA celah apa pun) -- itu selalu aman karena identik dengan
+/// "simpan lalu langsung ambil lagi tanpa ada yang lain terjadi di antaranya", tidak ada ruang
+/// buat instruksi lain menyerobot urutan stack. Cakupannya lebih kecil dari rencana awal, tapi
+/// terbukti benar lewat regresi 17/17 (lihat docs/IR.md buat detail & rencana lanjutan yang
+/// lebih general tapi tetap correct).
+fn stack_scheduling(instrs: Vec<Instr>, ambang_temp: usize) -> Vec<Instr> {
+    let n = instrs.len();
+    let mut target_masuk: Vec<bool> = vec![false; n + 1];
+    for ins in &instrs {
+        if let Some(t) = target_lompat(ins) {
+            if t <= n { target_masuk[t] = true; }
+        }
+    }
+
+    let mut buang = vec![false; n];
+    for i in 0..n.saturating_sub(1) {
+        if let Instr::StoreLocal(r) = instrs[i] {
+            if r >= ambang_temp && !target_masuk[i] && !target_masuk[i + 1] {
+                if let Instr::LoadLocal(r2) = instrs[i + 1] {
+                    if r2 == r { buang[i] = true; buang[i + 1] = true; }
+                }
+            }
+        }
+    }
+
+    let mut peta_lama_baru = vec![0usize; n + 1];
+    let mut baru_idx = 0;
+    for k in 0..n {
+        peta_lama_baru[k] = baru_idx;
+        if !buang[k] { baru_idx += 1; }
+    }
+    peta_lama_baru[n] = baru_idx;
+
+    instrs.into_iter().enumerate()
+        .filter(|(k, _)| !buang[*k])
+        .map(|(_, ins)| rebase_target(ins, &peta_lama_baru))
+        .collect()
+}
+
+pub fn jalankan_stmt_list_via_ir(program: Vec<(usize, Stmt)>) -> Result<(), String> {
+    let mut resolver = Resolver::new();
+    let top_level = resolver.resolve_top(&program).map_err(|e| format!("Kesalahan Kompilasi: {}", e))?;
+    let top_level = optimisasi_blok(top_level);
+    for cf in resolver.fungsi_out.values_mut() {
+        if let Some(cf) = Rc::get_mut(cf) {
+            cf.body = optimisasi_blok(std::mem::take(&mut cf.body));
+        }
+    }
+
+    let nama_fungsi: Vec<String> = resolver.fungsi_out.keys().cloned().collect();
+    let fungsi_index: HashMap<String, usize> = nama_fungsi.iter().enumerate().map(|(i, n)| (n.clone(), i)).collect();
+
+    let mut compiler = Compiler::new(fungsi_index);
+
+    let (top_ir, top_reg_types) = lower_top_ke_ir(&mut compiler, &top_level);
+    let top_kode = ir_ke_instr_dgn_konstanta(&mut compiler, &top_ir);
+    // Top-level tidak punya "local slot asli" sama sekali (semua lewat Global) -- jadi SEMUA
+    // register (mulai 0) di sini adalah temporary, ambang_temp=0 aman & memaksimalkan peluang
+    // stack scheduling (lihat docs/IR.md, ini justru target utama optimasi ini).
+    let top_kode = stack_scheduling(top_kode, 0);
+
+    let mut fungsi_vm: Vec<Rc<VMFungsi>> = Vec::with_capacity(nama_fungsi.len());
+    let mut jit = JitEngine::new();
+    for nama in &nama_fungsi {
+        let cf = resolver.fungsi_out.get(nama).unwrap().clone();
+        // param_flat (dukungan callback struct-flattened buat petakan/saring/urutkan) dipakai
+        // ULANG dari compile_fungsi yang sudah teruji -- bukan bagian yang coba "dilinearkan"
+        // di v1 ini (skopnya soal urutan operasi, bukan analisis parameter). Cuma .kode &
+        // .local_slot_count dari hasil ini yang DIBUANG & diganti versi IR linear di bawah.
+        let param_flat = compiler.compile_fungsi(&cf).param_flat;
+        let (ir, reg_types) = lower_fungsi_ke_ir(&mut compiler, &cf);
+        let kode = ir_ke_instr_dgn_konstanta(&mut compiler, &ir);
+        let kode = stack_scheduling(kode, cf.local_slot_count);
+        let mut native = None;
+        // Migrasi JIT (docs/IR.md poin 3): fungsi yang SAMA PERSIS lolos elig produksi
+        // (cf.tipe_jit, dihitung Resolver -- tidak dihitung ulang di sini) SEKARANG JUGA
+        // dicoba dikompilasi lewat IR linear yang baru, bukan cuma bytecode. Kalau gagal,
+        // turun ke bytecode biasa (dari `kode` di atas) -- sama seperti perilaku produksi
+        // saat JIT gagal, TIDAK fatal.
+        if let Some(mode) = cf.tipe_jit {
+            match jit.kompilasi_dari_ir(nama, &ir, &reg_types, cf.param_count, cf.local_slot_count, mode) {
+                Ok(ptr) => {
+                    native = Some(match mode {
+                        TipeJit::Angka => NativeFn::Angka(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64) -> i64>(ptr) }),
+                        TipeJit::Desimal => NativeFn::Desimal(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const f64) -> f64>(ptr) }),
+                    });
+                }
+                Err(e) => eprintln!("Peringatan (via-ir): fungsi \"{}\" gagal dikompilasi JIT-dari-IR ({}), pakai bytecode.", nama, e),
+            }
+        }
+        let vmf = VMFungsi {
+            param_count: cf.param_count,
+            local_slot_count: reg_types.len().max(cf.local_slot_count),
+            kode,
+            native,
+            param_flat,
+        };
+        fungsi_vm.push(Rc::new(vmf));
+    }
+
+    let mut vm = VM::new(resolver.global_count, compiler.konstanta, fungsi_vm, compiler.fungsi_index);
+    // Top-level (beda dari body fungsi) TIDAK pernah punya frame lokal yang dialokasikan
+    // otomatis oleh PanggilFungsi (lihat eksekusi_satu) -- locals_stack top-level dimulai
+    // kosong. IR linear butuh register 0..N buat temporary top-level, jadi pre-alokasikan
+    // manual di sini SEBELUM jalan (aman: sama-sama modul ini, lihat definisi VM/VMState).
+    vm.state.locals_stack.resize(top_reg_types.len(), Value::Kosong);
+    vm.jalankan_top(&top_kode).map_err(|e| format!("Kesalahan Runtime (via-ir): {}", e))
+}
+
+pub fn jalankan_berkas_via_ir(path: &str) -> Result<(), String> {
+    let sumber_gabungan = kumpulkan_sumber_gabungan(path)?;
+    periksa_sumber(&sumber_gabungan)?;
+    let mut lexer = Lexer::new(&sumber_gabungan);
+    let tokens = lexer.tokenize().map_err(|e| format!("Kesalahan Lexer: {}", e))?;
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().map_err(|e| format!("Kesalahan Parser: {}", e))?;
+    jalankan_stmt_list_via_ir(program)
+}
+
+// =====================================================================
+// 9. EKSPOR WEB: serialisasi bytecode ke JSON buat dijalankan lewat
+//    runtime/web/isoteri-vm.js (VM tulis-ulang di JavaScript) -- Fase 3
+//    blueprint ("Browser Native") tanpa perlu target wasm32-unknown-unknown
+//    (yang butuh rustup, tidak tersedia di banyak environment CI/sandbox).
+//
+//    Strategi: bytecode Isoteri itu sendiri sudah representasi flat &
+//    portable (Vec<Instr> berisi cuma angka/teks/enum sederhana) -- jadi
+//    dump apa adanya ke JSON, lalu interpreter JS jalanin persis instruksi
+//    yang sama alih-alih meng-compile ulang lewat Cranelift/wasm.
+//
+//    TIDAK diekspor: kode mesin hasil JIT (native fn pointer jelas gak
+//    bisa diserialisasi -- browser tetap pakai jalur bytecode biasa utuh,
+//    yang secara semantik identik, cuma lebih lambat) dan `ulang selaras`
+//    (JalankanSelaras menyimpan AST Stmt mentah, bukan bytecode -- lihat
+//    catatan di instr_ke_json di bawah).
+// =====================================================================
+
+fn value_ke_json(v: &Value) -> serde_json::Value {
+    use serde_json::json;
+    match v {
+        Value::Angka(n) => json!({"t": "Angka", "v": n}),
+        Value::Desimal(f) => json!({"t": "Desimal", "v": f}),
+        Value::Teks(s) => json!({"t": "Teks", "v": s.as_ref()}),
+        Value::Bool(b) => json!({"t": "Bool", "v": b}),
+        Value::Daftar(items) => json!({"t": "Daftar", "v": items.iter().map(value_ke_json).collect::<Vec<_>>()}),
+        Value::Peta(entries) => json!({
+            "t": "Peta",
+            "v": entries.iter().map(|(k, v)| json!([k, value_ke_json(v)])).collect::<Vec<_>>()
+        }),
+        Value::Kosong => json!({"t": "Kosong"}),
+        Value::Instans(nama, entries) => json!({
+            "t": "Instans",
+            "nama": nama.as_ref(),
+            "v": entries.iter().map(|(k, v)| json!([k, value_ke_json(v)])).collect::<Vec<_>>()
+        }),
+        Value::Fungsi(nf) => json!({
+            "t": "Fungsi",
+            "idx": nf.idx,
+            "tangkapan": nf.tangkapan.iter().map(value_ke_json).collect::<Vec<_>>()
+        }),
+    }
+}
+
+fn binop_ke_str(op: BinOp) -> &'static str {
+    use BinOp::*;
+    match op {
+        Tambah => "Tambah", Kurang => "Kurang", Kali => "Kali", Bagi => "Bagi",
+        SamaDengan => "SamaDengan", TidakSama => "TidakSama",
+        LebihBesar => "LebihBesar", LebihBesarSama => "LebihBesarSama",
+        LebihKecil => "LebihKecil", LebihKecilSama => "LebihKecilSama",
+        Dan => "Dan", Atau => "Atau",
+    }
+}
+
+/// Satu instruksi -> array JSON `[opcode, ...operan]`, dipilih di atas object bernama
+/// field supaya payload-nya ringkas (ribuan instruksi per program bukan hal aneh).
+/// Err khusus untuk JalankanSelaras: instruksi ini menyimpan AST Stmt MENTAH (bukan
+/// bytecode -- lihat komentar di enum Instr), jadi gak ada cara aman men-dump-nya jadi
+/// bytecode datar tanpa menduplikasi seluruh interpreter Stmt di sisi JS. 'ulang selaras'
+/// karena itu belum didukung di web runtime -- lihat runtime/web/README.md.
+fn instr_ke_json(instr: &Instr) -> Result<serde_json::Value, String> {
+    use serde_json::json;
+    Ok(match instr {
+        Instr::TandaiBaris(n) => json!(["TandaiBaris", n]),
+        Instr::PushK(i) => json!(["PushK", i]),
+        Instr::LoadGlobal(s) => json!(["LoadGlobal", s]),
+        Instr::StoreGlobal(s) => json!(["StoreGlobal", s]),
+        Instr::LoadLocal(s) => json!(["LoadLocal", s]),
+        Instr::StoreLocal(s) => json!(["StoreLocal", s]),
+        Instr::BinOp(op) => json!(["BinOp", binop_ke_str(*op)]),
+        Instr::Lompat(t) => json!(["Lompat", t]),
+        Instr::LompatJikaSalah(t) => json!(["LompatJikaSalah", t]),
+        Instr::MakeDaftar(n) => json!(["MakeDaftar", n]),
+        Instr::MakePeta(kunci) => json!(["MakePeta", kunci]),
+        Instr::Indeks => json!(["Indeks"]),
+        Instr::AmbilField(f) => json!(["AmbilField", f]),
+        Instr::BuatInstans(nama, fields) => json!(["BuatInstans", nama, fields]),
+        Instr::SetField(f) => json!(["SetField", f]),
+        Instr::Dup => json!(["Dup"]),
+        Instr::Tampilkan => json!(["Tampilkan"]),
+        Instr::Pop => json!(["Pop"]),
+        Instr::PanggilFungsi(idx, argc) => json!(["PanggilFungsi", idx, argc]),
+        Instr::PanggilBawaan(nama, argc) => json!(["PanggilBawaan", nama, argc]),
+        Instr::BuatFungsi(idx, n) => json!(["BuatFungsi", idx, n]),
+        Instr::PanggilNilai(argc) => json!(["PanggilNilai", argc]),
+        Instr::IterMulai => json!(["IterMulai"]),
+        Instr::IterLanjutLocal(slot, target) => json!(["IterLanjutLocal", slot, target]),
+        Instr::IterLanjutGlobal(slot, target) => json!(["IterLanjutGlobal", slot, target]),
+        Instr::JalankanSelaras(..) => {
+            return Err("'ulang selaras' belum didukung di web runtime (lihat runtime/web/README.md) -- pakai 'ulang setiap' biasa kalau butuh jalan di browser.".to_string());
+        }
+        Instr::MulaiCobaLocal(target, slot) => json!(["MulaiCobaLocal", target, slot]),
+        Instr::MulaiCobaGlobal(target, slot) => json!(["MulaiCobaGlobal", target, slot]),
+        Instr::SelesaiCoba => json!(["SelesaiCoba"]),
+        Instr::Kembalikan => json!(["Kembalikan"]),
+    })
+}
+
+fn kode_ke_json(kode: &[Instr]) -> Result<serde_json::Value, String> {
+    kode.iter().map(instr_ke_json).collect::<Result<Vec<_>, _>>().map(serde_json::Value::Array)
+}
+
+/// Pipeline resolve -> compile TANPA jalankan JIT (native fn pointer gak relevan buat
+/// ekspor -- kode bytecode fallback-nya, `VMFungsi::kode`, selalu ada apa pun status JIT-nya,
+/// jadi cukup dump itu; browser konsisten pakai jalur bytecode biasa untuk semua fungsi).
+pub fn ekspor_json_dari_sumber(sumber: &str) -> Result<String, String> {
+    let mut lexer = Lexer::new(sumber);
+    let tokens = lexer.tokenize().map_err(|e| format!("Kesalahan Lexer: {}", e))?;
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().map_err(|e| format!("Kesalahan Parser: {}", e))?;
+
+    let mut resolver = Resolver::new();
+    let top_level = resolver.resolve_top(&program).map_err(|e| format!("Kesalahan Kompilasi: {}", e))?;
+    let top_level = optimisasi_blok(top_level);
+    for cf in resolver.fungsi_out.values_mut() {
+        if let Some(cf) = Rc::get_mut(cf) {
+            cf.body = optimisasi_blok(std::mem::take(&mut cf.body));
+        }
+    }
+
+    let nama_fungsi: Vec<String> = resolver.fungsi_out.keys().cloned().collect();
+    let fungsi_index: HashMap<String, usize> = nama_fungsi.iter().enumerate().map(|(i, n)| (n.clone(), i)).collect();
+
+    let mut compiler = Compiler::new(fungsi_index.clone());
+    let top_kode = compiler.compile_top(&top_level);
+
+    let mut fungsi_json = Vec::with_capacity(nama_fungsi.len());
+    for nama in &nama_fungsi {
+        let cf = resolver.fungsi_out.get(nama).unwrap();
+        let vmf = compiler.compile_fungsi(cf);
+        let param_flat_json: Vec<serde_json::Value> = vmf.param_flat.iter()
+            .map(|pf| match pf {
+                Some(field_urut) => serde_json::Value::Array(field_urut.iter().map(|s| serde_json::Value::String(s.clone())).collect()),
+                None => serde_json::Value::Null,
+            })
+            .collect();
+        fungsi_json.push(serde_json::json!({
+            "nama": nama,
+            "param_count": vmf.param_count,
+            "local_slot_count": vmf.local_slot_count,
+            "kode": kode_ke_json(&vmf.kode).map_err(|e| format!("Fungsi \"{}\": {}", nama, e))?,
+            "param_flat": param_flat_json,
+        }));
+    }
+
+    let keluaran = serde_json::json!({
+        "format": "isoteri-web-bytecode-v1",
+        "global_slot_count": resolver.global_count,
+        "konstanta": compiler.konstanta.iter().map(value_ke_json).collect::<Vec<_>>(),
+        "nama_ke_indeks": fungsi_index,
+        "fungsi": fungsi_json,
+        "top_kode": kode_ke_json(&top_kode).map_err(|e| format!("Program utama: {}", e))?,
+    });
+
+    serde_json::to_string_pretty(&keluaran).map_err(|e| format!("Gagal menyusun JSON: {}", e))
+}
+
+/// Sama seperti `ekspor_json_dari_sumber`, tapi dari path berkas -- mengikuti semua
+/// 'muat' persis seperti `isoteri bangun` (lewat kumpulkan_sumber_gabungan), supaya
+/// proyek multi-file juga bisa diekspor jadi satu bundel bytecode JSON.
+pub fn ekspor_json_dari_berkas(path: &str) -> Result<String, String> {
+    let sumber_gabungan = kumpulkan_sumber_gabungan(path)?;
+    periksa_sumber(&sumber_gabungan)?;
+    ekspor_json_dari_sumber(&sumber_gabungan)
+}

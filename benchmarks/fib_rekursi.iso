@@ -1,0 +1,7 @@
+fungsi fib(n: Angka) {
+    kalau (n <= 1) {
+        kembalikan n
+    }
+    kembalikan fib(n - 1) + fib(n - 2)
+}
+tampilkan fib(38)

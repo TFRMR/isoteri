@@ -1,0 +1,65 @@
+catatan: Uji closure/fungsi anonim
+catatan: --- Closure sederhana di level atas (tanpa tangkapan) ---
+ingat kuadrat = fungsi(n) {
+    kembalikan n * n
+}
+tampilkan "kuadrat(6) = " + kuadrat(6)
+catatan: --- Closure sebagai argumen fungsi lain ---
+fungsi terapkan(f, x) {
+    kembalikan f(x)
+}
+tampilkan "terapkan(kuadrat, 7) = " + terapkan(kuadrat, 7)
+tampilkan "terapkan(fungsi(n){kembalikan n + 100}, 5) = " + terapkan(fungsi(n) {
+    kembalikan n + 100
+}, 5)
+catatan: --- Closure yang MENANGKAP variabel dari fungsi pembungkusnya ---
+fungsi buat_penambah(tambahan) {
+    kembalikan fungsi(n) {
+        kembalikan n + tambahan
+    }
+}
+ingat tambah5 = buat_penambah(5)
+ingat tambah100 = buat_penambah(100)
+tampilkan "tambah5(10) = " + tambah5(10)
+tampilkan "tambah100(10) = " + tambah100(10)
+catatan: pastikan dua closure beda dari buat_penambah yang sama gak saling ganggu
+tampilkan "tambah5(1) = " + tambah5(1)
+catatan: --- Closure nangkep BEBERAPA variabel sekaligus ---
+fungsi buat_kalkulator(a, b) {
+    kembalikan fungsi(op) {
+        kalau (op == "tambah") {
+            kembalikan a + b
+        } lainnya {
+            kalau (op == "kali") {
+                kembalikan a * b
+            } lainnya {
+                kembalikan -1
+            }
+        }
+    }
+}
+ingat kalk = buat_kalkulator(6, 7)
+tampilkan "kalk('tambah') = " + kalk("tambah")
+tampilkan "kalk('kali') = " + kalk("kali")
+catatan: --- Closure disimpan di dalam Daftar ---
+ingat operasi = [fungsi(n) {
+    kembalikan n + 1
+}, fungsi(n) {
+    kembalikan n * 2
+}, fungsi(n) {
+    kembalikan n * n
+}]
+ulang setiap op dari operasi {
+    tampilkan "operasi(5) = " + op(5)
+}
+catatan: --- Closure nested (closure di dalam closure, tangkapan berlapis) ---
+fungsi buat_akumulator_ganda(basis) {
+    kembalikan fungsi(langkah) {
+        kembalikan fungsi(kali) {
+            kembalikan (basis + langkah) * kali
+        }
+    }
+}
+ingat f1 = buat_akumulator_ganda(10)
+ingat f2 = f1(5)
+tampilkan "f2(3) = " + f2(3)

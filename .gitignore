@@ -1,0 +1,24 @@
+# Rust build output
+target/
+
+# Editor / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs / temporary files
+*.log
+*.tmp
+*.swp
+*~
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+
+# Generated browser/demo output
+# Keep source .iso and checked-in .isoweb.json files; ignore only ad-hoc output.
+runtime/web/dist/
+runtime/web/build/

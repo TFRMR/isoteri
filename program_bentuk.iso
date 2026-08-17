@@ -1,0 +1,24 @@
+catatan: Uji coba fitur 'bentuk' (struct/tipe custom)
+bentuk Petani {
+    nama: Teks,
+    lahan: Angka,
+    hasil: Desimal
+}
+ingat budi = Petani { nama: "Budi", lahan: 2, hasil: 15.5 }
+tampilkan budi.nama
+tampilkan budi.lahan
+tampilkan budi.hasil
+tampilkan budi
+budi.hasil = 20.0
+tampilkan budi.hasil
+ingat siti = Petani { hasil: 8.25, nama: "Siti", lahan: 1 }
+tampilkan siti
+fungsi ringkas(p) {
+    kembalikan p.nama + " punya " + p.lahan + " hektar lahan"
+}
+tampilkan ringkas(budi)
+coba {
+    tampilkan budi.tidak_ada
+} tangkap pesan {
+    tampilkan "Tertangkap (sengaja): " + pesan
+}

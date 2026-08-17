@@ -1,0 +1,6 @@
+fungsi kuadratkan(x) {
+    kembalikan x * x
+}
+fungsi kubik(x) {
+    kembalikan x * x * x
+}

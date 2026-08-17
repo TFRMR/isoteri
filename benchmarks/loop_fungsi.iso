@@ -1,0 +1,10 @@
+fungsi hitung(n) {
+    ingat total = 0
+    ingat i = 0
+    ulang (i < n) {
+        total = total + i
+        i = i + 1
+    }
+    kembalikan total
+}
+tampilkan hitung(2000000)

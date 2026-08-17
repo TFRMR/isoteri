@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<title>Isoteri di Browser -- Demo</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; background: #0f1115; color: #e6e6e6; }
+  h1 { font-size: 1.4rem; }
+  pre#keluaran { background: #1a1d24; border: 1px solid #2a2e37; border-radius: 8px; padding: 16px; white-space: pre-wrap; min-height: 120px; }
+  .baris { border-bottom: 1px dashed #2a2e37; padding: 2px 0; }
+  select, button { background: #1a1d24; color: #e6e6e6; border: 1px solid #2a2e37; border-radius: 6px; padding: 6px 10px; }
+  .catatan { color: #9aa0ac; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+  <h1>Isoteri &mdash; Browser Native (Fase 3 + Milestone B)</h1>
+  <p class="catatan">
+    Bytecode Isoteri (hasil <code>isoteri ekspor-web program.iso -o program.isoweb.json</code>)
+    dijalankan langsung di sini oleh <code>isoteri-vm.js</code> -- tanpa server, tanpa WASM.
+  </p>
+
+  <p>
+    <label>Pilih bundel: </label>
+    <select id="pilihan">
+      <option value="program.isoweb.json">program.iso</option>
+      <option value="program_closure.isoweb.json">program_closure.iso</option>
+      <option value="program_bentuk.isoweb.json">program_bentuk.iso</option>
+      <option value="contoh_dom.isoweb.json">contoh_dom.iso (DOM/Event/Storage)</option>
+      <option value="contoh_kanvas_ws.isoweb.json">contoh_kanvas_ws.iso (Canvas/WebSocket)</option>
+    </select>
+    <button id="jalankan">Jalankan</button>
+  </p>
+
+  <p class="catatan">
+    Elemen target buat demo DOM (<code>contoh_dom.iso</code> memilih <code>#judul</code> ini):
+  </p>
+  <h2 id="judul" style="border:1px solid #2a2e37; padding:8px; border-radius:6px;">Awal</h2>
+
+  <p class="catatan">
+    Kanvas target buat demo Canvas (<code>contoh_kanvas_ws.iso</code> memilih <code>#papan</code> ini
+    -- WebSocket-nya akan gagal tersambung karena URL contohnya tidak nyata, itu wajar):
+  </p>
+  <canvas id="papan" width="200" height="120" style="border:1px solid #2a2e37; border-radius:6px; background:#fff;"></canvas>
+
+  <pre id="keluaran"></pre>
+
+  <script src="isoteri-vm.js"></script>
+  <script>
+    const keluaranEl = document.getElementById("keluaran");
+    const pilihanEl = document.getElementById("pilihan");
+
+    async function jalankanBundel(nama) {
+      keluaranEl.textContent = "";
+      const res = await fetch(nama);
+      if (!res.ok) {
+        keluaranEl.textContent = `Gagal memuat "${nama}" (${res.status}). Ekspor dulu lewat:\n  isoteri ekspor-web program.iso -o ${nama}`;
+        return;
+      }
+      const bundle = await res.json();
+      const vm = new IsoteriVM(bundle, {
+        tampilkan: (baris) => {
+          const div = document.createElement("div");
+          div.className = "baris";
+          div.textContent = baris;
+          keluaranEl.appendChild(div);
+        },
+      });
+      try {
+        vm.jalankan();
+      } catch (e) {
+        const div = document.createElement("div");
+        div.className = "baris";
+        div.style.color = "#ff8080";
+        div.textContent = "Kesalahan: " + e.message;
+        keluaranEl.appendChild(div);
+      }
+    }
+
+    document.getElementById("jalankan").addEventListener("click", () => jalankanBundel(pilihanEl.value));
+
+    // Konvensi `<script type="isoteri-web" src="...">`: cari semua tag begini di halaman
+    // dan jalankan otomatis saat dimuat -- ini yang dimaksud blueprint dengan
+    // `<script type=isoteri>` di masa depan (versi sekarang pakai bytecode JSON,
+    // bukan sumber .iso mentah, karena compile masih dilakukan di sisi Rust/CLI).
+    window.addEventListener("DOMContentLoaded", () => {
+      document.querySelectorAll('script[type="isoteri-web"]').forEach((tag) => {
+        if (tag.src) jalankanBundel(tag.getAttribute("src"));
+      });
+    });
+  </script>
+</body>
+</html>

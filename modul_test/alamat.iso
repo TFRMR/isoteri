@@ -1,0 +1,5 @@
+catatan: Modul bentuk Alamat
+bentuk Alamat {
+    desa: Teks,
+    kecamatan: Teks
+}

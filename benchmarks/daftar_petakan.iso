@@ -1,0 +1,12 @@
+fungsi kuadrat(x) {
+    kembalikan x * x
+}
+ingat n = 20000
+ingat data = []
+ingat i = 0
+ulang (i < n) {
+    data = gabung(data, i)
+    i = i + 1
+}
+ingat hasil = petakan(data, "kuadrat")
+tampilkan jumlah(hasil)

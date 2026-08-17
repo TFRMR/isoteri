@@ -1,0 +1,28 @@
+catatan: Uji fungsi & closure baca variabel global (perbaikan technical debt)
+ingat pajak_persen = 10
+ingat nama_desa = "Menoreh"
+fungsi hitung_dengan_pajak(harga) {
+    kembalikan harga + harga * pajak_persen / 100
+}
+tampilkan "hitung_dengan_pajak(1000) = " + hitung_dengan_pajak(1000)
+fungsi sapaan(nama_orang) {
+    kembalikan "Halo " + nama_orang + ", selamat datang di " + nama_desa
+}
+tampilkan sapaan("Budi")
+catatan: closure juga harus bisa baca global
+ingat sapa_closure = fungsi(nama_orang) {
+    kembalikan "Salam dari " + nama_desa + " untuk " + nama_orang
+}
+tampilkan sapa_closure("Siti")
+catatan: campuran -- fungsi baca global DAN parameter DAN closure yang nangkep parameter lokal
+fungsi buat_penghitung_pajak(diskon) {
+    kembalikan fungsi(harga) {
+        ingat setelah_diskon = harga - diskon
+        kembalikan setelah_diskon + setelah_diskon * pajak_persen / 100
+    }
+}
+ingat hitung_promo = buat_penghitung_pajak(100)
+tampilkan "hitung_promo(1000) = " + hitung_promo(1000)
+catatan: pastikan ubah global masih ke-refleksi kalau dibaca ulang lewat fungsi lain (bukan lewat closure yang udah capture)
+pajak_persen = 20
+tampilkan "hitung_dengan_pajak(1000) setelah pajak naik = " + hitung_dengan_pajak(1000)

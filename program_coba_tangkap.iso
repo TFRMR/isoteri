@@ -1,0 +1,38 @@
+catatan: Contoh coba/tangkap - error handling supaya program tidak mati total
+catatan: kalau ada masalah (API down, pembagian nol, dll).
+fungsi bagi_aman(a, b) {
+    coba {
+        kembalikan a / b
+    } tangkap kesalahan {
+        tampilkan "Peringatan: " + kesalahan
+        kembalikan 0
+    }
+}
+tampilkan "Hasil 10 / 2 = " + bagi_aman(10, 2)
+tampilkan "Hasil 10 / 0 = " + bagi_aman(10, 0)
+tampilkan "Program tetap lanjut walau ada pembagian nol di atas"
+catatan: Contoh nyata: ambil data dari API yang mungkin down, program tidak mati
+fungsi ambil_harga_aman(url) {
+    coba {
+        ingat data = unduh(url)
+        kembalikan data
+    } tangkap e {
+        tampilkan "API bermasalah, pakai data cadangan. (" + e + ")"
+        kembalikan "0"
+    }
+}
+ingat harga = ambil_harga_aman("http://alamat-tidak-valid-contoh.invalid/harga")
+tampilkan "Harga yang dipakai: " + harga
+catatan: Nested coba/tangkap -- penangan dalam menangkap dulu, baru penangan luar
+coba {
+    tampilkan "Mulai proses data desa..."
+    coba {
+        ingat x = 100 / 0
+    } tangkap e_dalam {
+        tampilkan "Sub-proses gagal: " + e_dalam + " (dilewati, lanjut proses lain)"
+    }
+    tampilkan "Proses data desa selesai"
+} tangkap e_luar {
+    tampilkan "Tidak akan sampai sini karena sudah ditangani di dalam"
+}
+tampilkan "Semua proses selesai, program berjalan sampai akhir dengan aman."

@@ -1,0 +1,25 @@
+catatan: Uji parameter bentuk flattened dengan ARGUMEN EKSPRESI UMUM (bukan cuma variabel)
+bentuk Titik {
+    x: Angka,
+    y: Angka
+}
+fungsi jarak_kuadrat(p: Titik) {
+    kembalikan p.x * p.x + p.y * p.y
+}
+catatan: 1. argumen literal 'bentuk' langsung (dulu GAGAL kompilasi, sekarang harus jalan)
+tampilkan "literal langsung: " + jarak_kuadrat(Titik { x: 3, y: 4 })
+catatan: 2. argumen hasil panggilan fungsi lain yang mengembalikan bentuk
+fungsi buat_titik(a: Angka, b: Angka) {
+    kembalikan Titik { x: a, y: b }
+}
+tampilkan "hasil fungsi lain: " + jarak_kuadrat(buat_titik(6, 8))
+catatan: 3. variabel biasa -- pastikan jalur cepat lama masih jalan (regresi)
+ingat t = Titik { x: 3, y: 4 }
+tampilkan "variabel biasa: " + jarak_kuadrat(t)
+catatan: 4. pastikan ekspresi TIDAK dievaluasi dua kali (efek samping cuma sekali)
+ingat penghitung = 0
+fungsi titik_dengan_efek(dummy: Angka) {
+    kembalikan Titik { x: dummy, y: dummy }
+}
+catatan: panggil sekali, cek hasil field-nya konsisten (kalau dievaluasi 2x mungkin hasilnya beda kalau ada randomisasi -- di sini kita cek pakai nilai tetap tapi tetap valid sebagai smoke test)
+tampilkan "efek sekali: " + jarak_kuadrat(titik_dengan_efek(5))

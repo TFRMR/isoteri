@@ -1,0 +1,7 @@
+catatan: Modul matematika sederhana
+fungsi kuadrat(n) {
+    kembalikan n * n
+}
+fungsi rata_rata_dua(a: Desimal, b: Desimal) {
+    kembalikan (a + b) / 2.0
+}

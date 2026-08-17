@@ -1,0 +1,33 @@
+catatan: Uji petakan (map), saring (filter), urutkan (sort)
+fungsi kuadrat(n) {
+    kembalikan n * n
+}
+fungsi genap(n) {
+    kembalikan n - n / 2 * 2 == 0
+}
+ingat angka = [5, 3, 8, 1, 9, 2, 7]
+tampilkan "Asli: " + angka
+tampilkan "petakan(kuadrat): " + petakan(angka, "kuadrat")
+tampilkan "saring(genap): " + saring(angka, "genap")
+tampilkan "urutkan(): " + urutkan(angka)
+catatan: urutkan dengan kunci custom -- urutkan daftar Bentuk berdasarkan field
+bentuk Petani {
+    nama: Teks,
+    hasil: Desimal
+}
+fungsi ambil_hasil(p) {
+    kembalikan p.hasil
+}
+ingat petani = [Petani { nama: "Budi", hasil: 15.5 }, Petani { nama: "Siti", hasil: 22.0 }, Petani { nama: "Anto", hasil: 8.25 }]
+ingat terurut = urutkan(petani, "ambil_hasil")
+tampilkan "Urut berdasar hasil panen:"
+ulang setiap p dari terurut {
+    tampilkan "  " + p.nama + ": " + p.hasil
+}
+catatan: kombinasi -- saring lalu petakan lalu urutkan, dan urutkan(daftar Teks)
+ingat nama_desa = ["Girimulyo", "Kokap", "Kalibawang", "Samigaluh"]
+tampilkan "urutkan(nama_desa): " + urutkan(nama_desa)
+fungsi ganda(n) {
+    kembalikan n * 2
+}
+tampilkan "urutkan(petakan(saring(angka, genap), ganda)): " + urutkan(petakan(saring(angka, "genap"), "ganda"))

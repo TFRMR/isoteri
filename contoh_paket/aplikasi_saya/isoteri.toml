@@ -1,0 +1,5 @@
+nama = "aplikasi_saya"
+versi = "0.1.0"
+
+[dependensi]
+matematika = { path = "../lib_matematika" }

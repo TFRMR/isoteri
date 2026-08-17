@@ -1,0 +1,7 @@
+ingat total = 0
+ingat i = 0
+ulang (i < 2000000) {
+    total = total + i
+    i = i + 1
+}
+tampilkan total
