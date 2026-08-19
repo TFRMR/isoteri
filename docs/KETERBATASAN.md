@@ -8,12 +8,18 @@ Kalau kamu menemukan perilaku aneh yang **tidak** ada di daftar ini, kemungkinan
 
 ## Bahasa & Semantik
 
-### Overflow `Angka` diam-diam wrap-around, bukan error
+### Overflow `Angka` -- sekarang error runtime jelas (bytecode VM), TAPI masih wrap diam-diam kalau di-JIT
 ```
-ingat besar = 9223372036854775807   catalog: i64::MAX
-tampilkan besar + 1                  catatan: hasilnya -9223372036854775808, BUKAN error
+ingat besar = 9223372036854775807   catatan: i64::MAX
+tampilkan besar + 1                  catatan: SEKARANG error jelas "Angka meluap (overflow)"
 ```
-Build `--release` Rust mematikan overflow-check secara default. Ini artinya kalkulasi yang melebihi jangkauan `i64` (~9.2 kuintiliun) akan menghasilkan angka yang salah secara diam-diam, bukan crash atau error yang bisa ditangkap. Kalau program kamu berpotensi menghasilkan angka sangat besar (mis. akumulasi token dalam satuan terkecil dalam jumlah masif), pertimbangkan pakai `Desimal` atau tambahkan validasi batas atas secara manual.
+`+`, `-`, `*` buat `Angka` sekarang pakai `checked_add`/`checked_sub`/`checked_mul` di eksekusi normal (bytecode VM) DAN di `ulang selaras`, termasuk kalau overflow-nya kejadian saat compile-time constant-folding (mis. `tampilkan 9223372036854775807 + 1` langsung ketahuan sebelum program jalan). Bonus temuan sambil ngerjain ini: literal angka yang gagal di-parse (kegedean buat `i64`, mis. salah ketik nambahin banyak digit) DULU diam-diam jadi `0` di lexer -- sekarang juga error jelas ("Literal angka ... tidak valid atau di luar jangkauan").
+
+**Batasan yang MASIH ada:** fungsi yang lolos syarat JIT (parameter beranotasi tipe eksplisit, mis. `fungsi f(a: Angka, b: Angka) {...}`, dan badannya murni -- lihat `cek_jit_murni_nilai`) di-compile Cranelift pakai instruksi `iadd`/`isub`/`imul` biasa yang TIDAK trap saat overflow, jadi MASIH wrap-around diam-diam kalau overflow terjadi di jalur itu -- **sudah diverifikasi langsung**: `fungsi f(a: Angka, b: Angka) { kembalikan a + b }` dipanggil dengan `f(9223372036854775807, 1)` hasilnya `-9223372036854775808` (wrap diam-diam), sedangkan fungsi yang SAMA PERSIS tanpa anotasi tipe (`fungsi f(a, b) {...}`, sehingga tidak lolos JIT dan lari ke bytecode VM) hasilnya error "Angka meluap" yang jelas. Ini beda perilaku antara fungsi yang sama tergantung dia kebetulan beranotasi tipe atau tidak -- belum konsisten, butuh kerjaan Cranelift overflow-trapping terpisah buat benar-benar nutup celah ini.
+
+Catatan tambahan: menulis literal `i64::MIN` (`-9223372036854775808`) langsung juga masih kena keterbatasan umum bahasa lain -- `-N` didesugar jadi `0 - N`, dan `N` (`9223372036854775808`) sendiri sudah kelebihan 1 dari `i64::MAX` sebagai literal POSITIF, jadi tetap error kalau ditulis langsung. Solusinya: `ingat x = -9223372036854775807 - 1`.
+
+Catatan lain: `isoteri-vm.js` (runtime browser) merepresentasikan `Angka` sebagai `Number` JS biasa (double 64-bit), BUKAN `i64` asli seperti versi native -- jadi perilaku ekstrimnya beda lagi dari dua yang di atas: bukan wrap-around, tapi kehilangan presisi diam-diam begitu lewat `Number.MAX_SAFE_INTEGER` (2^53). Ini pre-existing (bukan dari perubahan overflow-checking sesi ini), belum diperbaiki -- perlu `BigInt` buat benar-benar menyamai semantik `i64`.
 
 ### Operator modulo (`%`), increment/decrement (`++`/`--`), compound assignment (`+=` dst.) -- didukung
 ```
@@ -57,12 +63,13 @@ Immutable/clone-on-write, konsisten dengan `bentuk` (`objek.field = nilai`) yang
 ### Variabel global harus dideklarasikan sebelum dipakai (tekstual)
 Tidak ada forward-reference untuk `ingat` di level atas — beda dari `fungsi` dan `bentuk` yang boleh dipakai sebelum baris deklarasinya (karena keduanya di-pre-scan sebelum resolusi jalan).
 
-### Deklarasi ulang `ingat` dengan nama sama (di file yang sama) diterima diam-diam
+### Deklarasi ulang `ingat` dengan nama sama (di file/fungsi yang sama) -- sekarang error jelas
 ```
 ingat x = 5
-ingat x = 10     catatan: TIDAK error -- x sekarang 10, deklarasi pertama "hilang"
+ingat x = 10     catatan: SEKARANG error kompilasi jelas, bukan diam-diam ketiban
+x = 10             catatan: begini caranya UBAH nilai x yang sudah ada (tanpa 'ingat')
 ```
-Ini beda dari duplikasi nama `fungsi`/parameter/field `bentuk` (yang sekarang sudah di-cek dan gagal kompilasi) — untuk `ingat`, redeklarasi nama sama di file yang sama sengaja dibiarkan seperti semula, karena mengubahnya berisiko mematahkan pola kode yang sudah ada (mis. reset nilai variabel loop-like) tanpa manfaat yang jelas sepadan.
+Berlaku juga buat parameter fungsi -- `fungsi f(x) { ingat x = 99 ... }` sekarang error juga (nama parameter dianggap sudah "dideklarasikan"). Ini konsisten dengan duplikasi nama `fungsi`/parameter/field `bentuk` yang sudah lebih dulu di-cek. Diuji terhadap seluruh 27 program contoh yang ada -- nol regresi, jadi perubahan ini aman.
 
 ---
 
@@ -150,6 +157,44 @@ Instans `bentuk` yang disimpan di variabel biasa (`ingat x = Titik{...}`) tetap 
 
 ### Field validasi terjadi saat kompilasi, bukan runtime
 Ini sebenarnya keunggulan (error lebih awal, lebih jelas), tapi berarti kamu **tidak bisa** menangkap error field-kurang/field-asing lewat `coba/tangkap` — program gagal build sebelum sempat jalan sama sekali.
+
+---
+
+## Web Runtime (`isoteri ekspor-web` / `isoteri-vm.js`)
+
+### Event handler -- sekarang menerima closure & data event
+```
+dom_ketika(tombol, "klik", fungsi() { tampilkan "diklik" })          catatan: 0 parameter, cara LAMA, tetap jalan
+dom_ketika(input, "input", fungsi(e) { tampilkan e.nilai })          catatan: 1 parameter BARU -- baca data event
+dom_ketika(tombol, "klik", "nama_fungsi")                             catatan: nama Teks, cara LAMA, tetap jalan
+ingat ambang = 10
+dom_ketika(tombol, "klik", fungsi(e) { kalau (hitung > ambang) {...} }) catatan: closure DENGAN capture juga bisa
+```
+`e` adalah instans `Event` dengan field: `tipe` (Teks, nama event mentah), `nilai` (Teks isi `.value` elemen target kalau ada, `Kosong` kalau tidak), `tombol` (Teks tombol keyboard yang ditekan kalau event keyboard, `Kosong` kalau bukan), `target` (`ElemenDOM`, buat dipakai lagi ke `dom_*` lain kalau perlu). Backward-compatible penuh: handler LAMA (0 parameter) terus dipanggil tanpa argumen persis seperti sebelumnya -- fungsi ini otomatis intip berapa parameter handler-nya sebelum manggil.
+
+Fungsi baru buat form input: `dom_nilai(elemen)`/`dom_atur_nilai(elemen, teks)` (baca/tulis `.value`), `dom_dicentang(elemen)`/`dom_atur_dicentang(elemen, bool)` (checkbox), `dom_fokus(elemen)`.
+
+### Timer -- `tunda()`/`interval_mulai()`/`interval_hentikan()`
+```
+tunda(1000, fungsi() { tampilkan "sedetik kemudian" })         catatan: setTimeout, sekali jalan
+ingat id = interval_mulai(500, fungsi() { tampilkan "tik" })    catatan: setInterval, id buat berhenti nanti
+interval_hentikan(id)
+```
+Callback timer terima 0 argumen (Teks nama fungsi ATAU closure, boleh dengan capture). `id` dari `interval_mulai()` itu `Angka` biasa yang bisa disimpan/dilewatkan sebagai variabel.
+
+### Fetch lanjutan -- `unduh_lanjut_async()` (POST/header/status code)
+```
+unduh_lanjut_async(url, {"metode": "POST", "body": teks_json(data), "header": {"Content-Type": "application/json"}},
+    fungsi(r) { tampilkan r.status; tampilkan r.ok; tampilkan urai_json(r.teks) },
+    fungsi(pesan) { tampilkan "gagal: " + pesan })
+```
+`opsi` (Peta) semua kunci opsional: `metode` (default `"GET"`), `body` (Teks), `header` (Peta<Teks,Teks>). Callback sukses terima SATU argumen: instans `Respons` (`status`: Angka, `ok`: Bool, `teks`: Teks -- uraikan sendiri lewat `urai_json()` yang sudah ada kalau JSON). `unduh_async()` versi lama (GET-teks-doang) **tetap ada, tidak berubah**, sekarang juga menerima closure di kedua argumen fungsi-nya (bukan cuma Teks nama fungsi).
+
+### Yang masih belum ada
+- Belum ada bridge clipboard (copy/paste).
+- Belum ada akses ke `History`/routing SPA (`pushState` dst.).
+- `dom_ketika()` belum bisa `removeEventListener` (sekali daftar, nempel selamanya sampai elemen dihapus).
+- Semua penambahan di atas **cuma nyentuh `isoteri-vm.js` (JS murni)**, TIDAK nyentuh interpreter/VM/JIT Rust-nya sama sekali -- nol dampak ke performa jalur native, dan sudah diverifikasi lewat regresi 21 program contoh lewat `jalankan-node.js` (nol gagal, di luar limitasi `tulis_berkas()` yang memang sudah didokumentasikan gak berlaku di web).
 
 ---
 

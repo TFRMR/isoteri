@@ -367,8 +367,36 @@ class IsoteriVM {
   // Element itu sendiri (Value harus tetap serializable/JSON-safe secara umum,
   // dan supaya perbandingan `sama_dengan` dua pegangan ke elemen yang sama
   // tetap masuk akal by-value).
+  /** Setara panggilCallback1Arg TAPI toleran arity 0 ATAU 1 -- dipakai buat event handler
+   *  (dom_ketika, ws_ketika_buka/tutup/error) yang DULU selalu dipanggil TANPA argumen sama
+   *  sekali. Supaya program lama (handler 0-parameter) tetap 100% jalan sekaligus buka jalan
+   *  buat handler baru yang mau baca data event (1 parameter), fungsi ini INTIP dulu berapa
+   *  parameter "asli" callback-nya (di luar tangkapan closure) sebelum manggil:
+   *   - 0 parameter -> panggil TANPA argumen (persis perilaku lama, program lama tak berubah)
+   *   - 1 parameter -> panggil dengan `argOpsional` (data event, mis. nilai input / tombol ditekan)
+   *   - selain itu   -> error jelas
+   */
+  panggilCallbackFleksibel(namaBuiltin, callback, argOpsional) {
+    let idx, tangkapan;
+    if (callback.t === "Teks") {
+      idx = this.namaKeIndeks[callback.v];
+      if (idx === undefined) throw new IsoteriError(`${namaBuiltin}(): fungsi "${callback.v}" tidak ditemukan.`);
+      tangkapan = [];
+    } else if (callback.t === "Fungsi") {
+      idx = callback.idx;
+      tangkapan = callback.tangkapan;
+    } else {
+      throw new IsoteriError(`${namaBuiltin}(): argumen callback harus Teks (nama fungsi) atau closure/fungsi sebagai nilai, ditemukan ${tampilkanStr(callback)}`);
+    }
+    const nParamAsli = this.fungsi[idx].paramFlat.length - tangkapan.length;
+    if (nParamAsli === 0) return this.panggilFungsiDenganArgumen(idx, tangkapan);
+    if (nParamAsli === 1) return this.panggilFungsiDenganArgumen(idx, [...tangkapan, argOpsional]);
+    throw new IsoteriError(`${namaBuiltin}(): fungsi callback harus punya 0 parameter (diabaikan) atau 1 parameter (data event), tapi fungsi ini punya ${nParamAsli}.`);
+  }
+
   panggilDom(nama, args) {
-    const butuhDocument = !nama.startsWith("ws_") && nama !== "unduh_async";
+    const TIDAK_BUTUH_DOCUMENT = new Set(["unduh_async", "unduh_lanjut_async", "tunda", "interval_mulai", "interval_hentikan"]);
+    const butuhDocument = !nama.startsWith("ws_") && !TIDAK_BUTUH_DOCUMENT.has(nama);
     if (butuhDocument && typeof document === "undefined") {
       throw new IsoteriError(`${nama}() butuh browser (ada \`document\`) -- tidak berlaku di Node.js/runtime non-browser.`);
     }
@@ -415,12 +443,6 @@ class IsoteriVM {
       return { t: "Instans", nama: "WebSocket", v: [["_id", teks(id)]] };
     };
     const angkaArg = (v, label) => { if (v.t !== "Angka" && v.t !== "Desimal") throw new IsoteriError(`${nama}(): ${label} harus Angka/Desimal, ditemukan ${tampilkanStr(v)}`); return v.v; };
-    const cariFungsi = (v, label) => {
-      if (v.t !== "Teks") throw new IsoteriError(`${nama}(): ${label} harus Teks berisi nama fungsi (konvensi sama seperti petakan/saring/urutkan).`);
-      const idx = this.namaKeIndeks[v.v];
-      if (idx === undefined) throw new IsoteriError(`${nama}(): fungsi "${v.v}" tidak ditemukan.`);
-      return idx;
-    };
     const teksArg = (v, label) => { if (v.t !== "Teks") throw new IsoteriError(`${nama}(): ${label} harus Teks, ditemukan ${tampilkanStr(v)}`); return v.v; };
 
     switch (nama) {
@@ -445,35 +467,112 @@ class IsoteriVM {
       case "dom_tambah_anak": elemenDari(args[0]).appendChild(elemenDari(args[1])); return args[0];
       case "dom_hapus": elemenDari(args[0]).remove(); return KOSONG;
       case "dom_ketika": {
-        if (args[2].t !== "Teks") throw new IsoteriError('dom_ketika(elemen, nama_event, "nama_fungsi_penangan"): argumen ketiga harus Teks berisi nama fungsi (konvensi sama seperti petakan/saring/urutkan).');
         const el = elemenDari(args[0]);
         const namaEvent = teksArg(args[1], "nama event");
-        const idx = this.namaKeIndeks[args[2].v];
-        if (idx === undefined) throw new IsoteriError(`dom_ketika(): fungsi "${args[2].v}" tidak ditemukan.`);
-        el.addEventListener(namaEvent, () => {
+        const callback = args[2];
+        el.addEventListener(namaEvent, (ev) => {
+          // Bungkus data event yang paling sering dibutuhkan jadi instans 'Event' langsung
+          // bisa diakses field-nya (ev.nilai, ev.tombol, dst) -- desain ini SENGAJA gak minta
+          // pemula manggil fungsi accessor terpisah kayak dom_teks/dom_atribut, cukup akses
+          // field seperti instans 'bentuk' biasa. `target` tetap ElemenDOM biasa kalau perlu
+          // manggil dom_* lain terhadap elemen yang memicu event ini.
+          const nilaiTarget = "value" in ev.target ? String(ev.target.value) : null;
+          const eventInstans = {
+            t: "Instans", nama: "Event",
+            v: [
+              ["tipe", teks(ev.type)],
+              ["nilai", nilaiTarget === null ? KOSONG : teks(nilaiTarget)],
+              ["tombol", ev.key !== undefined ? teks(ev.key) : KOSONG],
+              ["target", bungkusElemen(ev.target)],
+            ],
+          };
           try {
-            this.panggilFungsiDenganArgumen(idx, []);
+            this.panggilCallbackFleksibel("dom_ketika", callback, eventInstans);
           } catch (e) {
             console.error(`Kesalahan di dalam pawang event "${namaEvent}":`, e.message || e);
           }
         });
         return KOSONG;
       }
+      case "dom_nilai": { const el = elemenDari(args[0]); return "value" in el ? teks(String(el.value)) : KOSONG; }
+      case "dom_atur_nilai": { const el = elemenDari(args[0]); el.value = teksArg(args[1], "nilai"); return args[0]; }
+      case "dom_dicentang": { const el = elemenDari(args[0]); return bool(!!el.checked); }
+      case "dom_atur_dicentang": {
+        const el = elemenDari(args[0]);
+        if (args[1].t !== "Bool") throw new IsoteriError(`dom_atur_dicentang(): argumen kedua harus Bool, ditemukan ${tampilkanStr(args[1])}`);
+        el.checked = args[1].v;
+        return args[0];
+      }
+      case "dom_fokus": elemenDari(args[0]).focus(); return args[0];
       case "simpan_lokal": window.localStorage.setItem(teksArg(args[0], "kunci"), tampilkanStr(args[1])); return KOSONG;
       case "ambil_lokal": { const v = window.localStorage.getItem(teksArg(args[0], "kunci")); return v === null ? KOSONG : teks(v); }
       case "hapus_lokal": window.localStorage.removeItem(teksArg(args[0], "kunci")); return KOSONG;
       case "unduh_async": {
         const url = teksArg(args[0], "url");
-        if (args[1].t !== "Teks") throw new IsoteriError('unduh_async(url, "nama_fungsi_sukses", "nama_fungsi_gagal"?): argumen kedua harus Teks berisi nama fungsi.');
-        const idxSukses = this.namaKeIndeks[args[1].v];
-        if (idxSukses === undefined) throw new IsoteriError(`unduh_async(): fungsi "${args[1].v}" tidak ditemukan.`);
-        const idxGagal = args.length > 2 && args[2].t === "Teks" ? this.namaKeIndeks[args[2].v] : undefined;
+        const sukses = args[1], gagal = args.length > 2 ? args[2] : null;
         fetch(url).then((r) => r.text()).then((isi) => {
-          this.panggilFungsiDenganArgumen(idxSukses, [teks(isi)]);
+          this.panggilCallback1Arg("unduh_async", sukses, teks(isi));
         }).catch((e) => {
-          if (idxGagal !== undefined) this.panggilFungsiDenganArgumen(idxGagal, [teks(String(e.message || e))]);
+          if (gagal) this.panggilCallback1Arg("unduh_async", gagal, teks(String(e.message || e)));
           else console.error("unduh_async() gagal (tanpa fungsi_gagal):", e.message || e);
         });
+        return KOSONG;
+      }
+      case "unduh_lanjut_async": {
+        // unduh_lanjut_async(url, opsi, fungsi_sukses, fungsi_gagal?) -- versi lengkap
+        // unduh_async(): 'opsi' Peta opsional berisi "metode" ("POST" dst, default "GET"),
+        // "body" (Teks), "header" (Peta<Teks,Teks>). fungsi_sukses dipanggil dengan SATU
+        // argumen: instans 'Respons' {status: Angka, ok: Bool, teks: Teks}. Uraikan sendiri
+        // lewat urai_json(respons.teks) kalau responsnya JSON.
+        const url = teksArg(args[0], "url");
+        if (args[1].t !== "Peta") throw new IsoteriError('unduh_lanjut_async(url, opsi, fungsi_sukses, fungsi_gagal?): argumen kedua harus Peta, mis. {"metode": "POST", "body": teks_json(data)}.');
+        const cariOpsi = (k) => { const e = args[1].v.find(([kk]) => kk === k); return e ? e[1] : null; };
+        const metode = (() => { const m = cariOpsi("metode"); return m ? teksArg(m, "opsi.metode") : "GET"; })();
+        const body = (() => { const b = cariOpsi("body"); return b ? teksArg(b, "opsi.body") : undefined; })();
+        const headerOpsi = cariOpsi("header");
+        const headers = {};
+        if (headerOpsi) {
+          if (headerOpsi.t !== "Peta") throw new IsoteriError("unduh_lanjut_async(): opsi.header harus Peta<Teks,Teks>.");
+          for (const [k, v] of headerOpsi.v) headers[k] = teksArg(v, `opsi.header["${k}"]`);
+        }
+        const sukses = args[2], gagal = args.length > 3 ? args[3] : null;
+        fetch(url, { method: metode, body, headers }).then(async (r) => {
+          const isi = await r.text();
+          const respons = { t: "Instans", nama: "Respons", v: [["status", angka(r.status)], ["ok", bool(r.ok)], ["teks", teks(isi)]] };
+          this.panggilCallback1Arg("unduh_lanjut_async", sukses, respons);
+        }).catch((e) => {
+          if (gagal) this.panggilCallback1Arg("unduh_lanjut_async", gagal, teks(String(e.message || e)));
+          else console.error("unduh_lanjut_async() gagal (tanpa fungsi_gagal):", e.message || e);
+        });
+        return KOSONG;
+      }
+      case "tunda": {
+        // tunda(ms, fungsi) -- setTimeout, callback 0-parameter (Teks nama fungsi ATAU closure).
+        const ms = angkaArg(args[0], "ms");
+        const callback = args[1];
+        setTimeout(() => {
+          try { this.panggilCallbackFleksibel("tunda", callback, KOSONG); }
+          catch (e) { console.error('Kesalahan di dalam pawang "tunda":', e.message || e); }
+        }, ms);
+        return KOSONG;
+      }
+      case "interval_mulai": {
+        // interval_mulai(ms, fungsi) -> Angka (id, buat interval_hentikan()). setInterval.
+        const ms = angkaArg(args[0], "ms");
+        const callback = args[1];
+        const id = setInterval(() => {
+          try { this.panggilCallbackFleksibel("interval_mulai", callback, KOSONG); }
+          catch (e) { console.error('Kesalahan di dalam pawang "interval_mulai":', e.message || e); }
+        }, ms);
+        if (!this._intervalIdMap) { this._intervalIdMap = new Map(); this._intervalIdCounter = 0; }
+        const idAngka = this._intervalIdCounter++;
+        this._intervalIdMap.set(idAngka, id);
+        return angka(idAngka);
+      }
+      case "interval_hentikan": {
+        const idAngka = angkaArg(args[0], "id");
+        const idAsli = this._intervalIdMap && this._intervalIdMap.get(idAngka);
+        if (idAsli !== undefined) { clearInterval(idAsli); this._intervalIdMap.delete(idAngka); }
         return KOSONG;
       }
 
@@ -512,33 +611,33 @@ class IsoteriVM {
         return teks(["MENYAMBUNG", "TERBUKA", "MENUTUP", "TERTUTUP"][kode] ?? "TIDAK_DIKENAL");
       }
       case "ws_ketika_pesan": {
-        const idx = cariFungsi(args[1], "nama fungsi penangan");
+        const callback = args[1];
         soketDari(args[0]).addEventListener("message", (ev) => {
-          try { this.panggilFungsiDenganArgumen(idx, [teks(String(ev.data))]); }
+          try { this.panggilCallback1Arg("ws_ketika_pesan", callback, teks(String(ev.data))); }
           catch (e) { console.error('Kesalahan di dalam pawang "ws_ketika_pesan":', e.message || e); }
         });
         return args[0];
       }
       case "ws_ketika_buka": {
-        const idx = cariFungsi(args[1], "nama fungsi penangan");
+        const callback = args[1];
         soketDari(args[0]).addEventListener("open", () => {
-          try { this.panggilFungsiDenganArgumen(idx, []); }
+          try { this.panggilCallbackFleksibel("ws_ketika_buka", callback, KOSONG); }
           catch (e) { console.error('Kesalahan di dalam pawang "ws_ketika_buka":', e.message || e); }
         });
         return args[0];
       }
       case "ws_ketika_tutup": {
-        const idx = cariFungsi(args[1], "nama fungsi penangan");
+        const callback = args[1];
         soketDari(args[0]).addEventListener("close", () => {
-          try { this.panggilFungsiDenganArgumen(idx, []); }
+          try { this.panggilCallbackFleksibel("ws_ketika_tutup", callback, KOSONG); }
           catch (e) { console.error('Kesalahan di dalam pawang "ws_ketika_tutup":', e.message || e); }
         });
         return args[0];
       }
       case "ws_ketika_error": {
-        const idx = cariFungsi(args[1], "nama fungsi penangan");
+        const callback = args[1];
         soketDari(args[0]).addEventListener("error", () => {
-          try { this.panggilFungsiDenganArgumen(idx, []); }
+          try { this.panggilCallbackFleksibel("ws_ketika_error", callback, KOSONG); }
           catch (e) { console.error('Kesalahan di dalam pawang "ws_ketika_error":', e.message || e); }
         });
         return args[0];
@@ -559,7 +658,9 @@ const DOM_FUNGSI = new Set([
   "dom_pilih", "dom_pilih_semua", "dom_teks", "dom_atur_teks", "dom_html", "dom_atur_html",
   "dom_atribut", "dom_atur_atribut", "dom_tambah_kelas", "dom_hapus_kelas", "dom_punya_kelas",
   "dom_buat", "dom_tambah_anak", "dom_hapus", "dom_ketika",
-  "simpan_lokal", "ambil_lokal", "hapus_lokal", "unduh_async",
+  "dom_nilai", "dom_atur_nilai", "dom_dicentang", "dom_atur_dicentang", "dom_fokus",
+  "simpan_lokal", "ambil_lokal", "hapus_lokal", "unduh_async", "unduh_lanjut_async",
+  "tunda", "interval_mulai", "interval_hentikan",
   "dom_konteks_2d", "kanvas_isi_gaya", "kanvas_garis_gaya", "kanvas_lebar_garis", "kanvas_font",
   "kanvas_isi_persegi", "kanvas_garis_persegi", "kanvas_bersihkan", "kanvas_isi_teks",
   "kanvas_mulai_jalur", "kanvas_pindah_ke", "kanvas_garis_ke", "kanvas_lingkaran", "kanvas_isi", "kanvas_garis",

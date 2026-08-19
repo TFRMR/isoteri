@@ -113,9 +113,16 @@ impl Lexer {
                     }
                 }
                 if desimal {
-                    push!(Token::AngkaDesimal(angka_str.parse::<f64>().unwrap_or(0.0)));
+                    let n: f64 = angka_str.parse().map_err(|_| format!("Baris {}: Literal desimal \"{}\" tidak valid.", self.baris, angka_str))?;
+                    push!(Token::AngkaDesimal(n));
                 } else {
-                    push!(Token::Angka(angka_str.parse::<i64>().unwrap_or(0)));
+                    // SENGAJA tidak pakai unwrap_or(0): literal yang gagal di-parse (kegedean
+                    // buat i64, mis. lebih dari 9223372036854775807) HARUS jadi error kompilasi
+                    // yang jelas, bukan diam-diam jadi 0 -- itu bakal jadi bug tersembunyi yang
+                    // sangat membingungkan buat pemula (angka yang ditulis salah malah dianggap
+                    // valid tapi hasilnya nol).
+                    let n: i64 = angka_str.parse().map_err(|_| format!("Baris {}: Literal angka \"{}\" tidak valid atau di luar jangkauan Angka (maksimum {}).", self.baris, angka_str, i64::MAX))?;
+                    push!(Token::Angka(n));
                 }
                 continue;
             }
@@ -1062,6 +1069,14 @@ impl Resolver {
     fn resolve_stmt_global(&mut self, s: &Stmt) -> Result<CStmt, String> {
         match s {
             Stmt::Ingat(nama, tipe, e) => {
+                // Deklarasi ulang nama yang SAMA lewat 'ingat' dua kali di scope yang sama
+                // dulunya diterima diam-diam (nilai lama ketiban tanpa peringatan) -- itu bug
+                // tersembunyi yang gampang kejadian pas copy-paste kode. Sekarang error jelas;
+                // kalau memang mau UBAH nilai variabel yang sudah ada, pakai 'nama = nilai'
+                // (tanpa 'ingat') -- itu tetap sah dan tidak kena aturan ini.
+                if self.global_slots.contains_key(nama) {
+                    return Err(format!("Variabel \"{}\" sudah dideklarasikan sebelumnya dengan 'ingat'. Kalau mau mengubah nilainya, pakai '{} = nilai_baru' (tanpa 'ingat').", nama, nama));
+                }
                 if let Some(t) = tipe {
                     cek_tipe(nama, t, e, &self.tipe_var)?;
                     self.tipe_var.insert(nama.clone(), t.clone());
@@ -1403,6 +1418,10 @@ impl<'a> LocalResolver<'a> {
     fn resolve_stmt(&mut self, s: &Stmt) -> Result<CStmt, String> {
         match s {
             Stmt::Ingat(nama, tipe, e) => {
+                // Sama seperti versi global resolver -- lihat catatan lengkap di sana.
+                if self.local_slots.contains_key(nama) {
+                    return Err(format!("Variabel \"{}\" sudah dideklarasikan sebelumnya dengan 'ingat' (atau merupakan nama parameter fungsi). Kalau mau mengubah nilainya, pakai '{} = nilai_baru' (tanpa 'ingat').", nama, nama));
+                }
                 if let Some(t) = tipe {
                     cek_tipe(nama, t, e, &self.tipe_var)?;
                     self.tipe_var.insert(nama.clone(), t.clone());
@@ -1716,21 +1735,21 @@ fn eval_binop(l: Value, op: BinOp, r: Value) -> Result<Value, String> {
     match op {
         Tambah => match (&l, &r) {
             (Value::Teks(_), _) | (_, Value::Teks(_)) => Ok(Value::Teks(format!("{}{}", l, r).into())),
-            (Value::Angka(a), Value::Angka(b)) => Ok(Value::Angka(a + b)),
+            (Value::Angka(a), Value::Angka(b)) => a.checked_add(*b).map(Value::Angka).ok_or_else(|| format!("Angka meluap (overflow): {} + {} melebihi jangkauan Angka (-9223372036854775808..9223372036854775807). Pertimbangkan pakai Desimal kalau nilainya memang bisa sebesar ini.", a, b)),
             (Value::Angka(_), Value::Desimal(_)) | (Value::Desimal(_), Value::Angka(_)) | (Value::Desimal(_), Value::Desimal(_)) => {
                 Ok(Value::Desimal(ke_desimal(&l).unwrap() + ke_desimal(&r).unwrap()))
             }
             _ => Err(format!("Tidak bisa menjumlahkan {} dengan {}", l, r)),
         },
         Kurang => match (&l, &r) {
-            (Value::Angka(a), Value::Angka(b)) => Ok(Value::Angka(a - b)),
+            (Value::Angka(a), Value::Angka(b)) => a.checked_sub(*b).map(Value::Angka).ok_or_else(|| format!("Angka meluap (overflow): {} - {} melebihi jangkauan Angka (-9223372036854775808..9223372036854775807). Pertimbangkan pakai Desimal kalau nilainya memang bisa sebesar ini.", a, b)),
             _ => match (ke_desimal(&l), ke_desimal(&r)) {
                 (Some(a), Some(b)) => Ok(Value::Desimal(a - b)),
                 _ => Err(format!("Operator '-' hanya berlaku untuk Angka, ditemukan {} dan {}", l, r)),
             },
         },
         Kali => match (&l, &r) {
-            (Value::Angka(a), Value::Angka(b)) => Ok(Value::Angka(a * b)),
+            (Value::Angka(a), Value::Angka(b)) => a.checked_mul(*b).map(Value::Angka).ok_or_else(|| format!("Angka meluap (overflow): {} * {} melebihi jangkauan Angka (-9223372036854775808..9223372036854775807). Pertimbangkan pakai Desimal kalau nilainya memang bisa sebesar ini.", a, b)),
             _ => match (ke_desimal(&l), ke_desimal(&r)) {
                 (Some(a), Some(b)) => Ok(Value::Desimal(a * b)),
                 _ => Err(format!("Operator '*' hanya berlaku untuk Angka, ditemukan {} dan {}", l, r)),
@@ -1903,15 +1922,19 @@ fn optimisasi_expr(e: CExpr) -> CExpr {
 /// Coba lipat `l op r` jadi satu literal kalau dua-duanya sudah literal SEKARANG (setelah
 /// anak-anaknya sendiri dilipat lebih dulu -- lihat optimisasi_expr, jadi ini otomatis
 /// menangani ekspresi bersarang seperti `(2 + 3) * 4` lewat rekursi biasa).
-/// Pakai wrapping_* (bukan checked_*) buat Angka supaya perilaku overflow-nya identik
-/// dengan operasi i64 biasa di VM (release build = wrapping, bukan panic).
+/// Pakai checked_* (BUKAN wrapping_*) buat Angka: kalau overflow, JANGAN dilipat -- biarkan
+/// CExpr::Binary aslinya diteruskan apa adanya ke runtime, yang sekarang (lihat eval_binop)
+/// akan melempar error "Angka meluap" yang jelas, lengkap dengan info baris. Ini bikin
+/// perilaku overflow KONSISTEN baik ekspresi konstan (`9223372036854775807 + 1`) maupun hasil
+/// runtime (`x + 1` di mana x kebetulan segede itu) -- sama-sama error, bukan salah satunya
+/// diam-diam wrap dan satunya error.
 fn lipat_binop(l: &CExpr, op: BinOp, r: &CExpr) -> Option<CExpr> {
     use BinOp::*;
     match (l, r) {
         (CExpr::Angka(a), CExpr::Angka(b)) => match op {
-            Tambah => Some(CExpr::Angka(a.wrapping_add(*b))),
-            Kurang => Some(CExpr::Angka(a.wrapping_sub(*b))),
-            Kali => Some(CExpr::Angka(a.wrapping_mul(*b))),
+            Tambah => a.checked_add(*b).map(CExpr::Angka),
+            Kurang => a.checked_sub(*b).map(CExpr::Angka),
+            Kali => a.checked_mul(*b).map(CExpr::Angka),
             Bagi => if *b != 0 { Some(CExpr::Angka(a / b)) } else { None }, // biarkan runtime yang lempar error div-nol, lengkap dgn baris
             Modulo => if *b != 0 { Some(CExpr::Angka(a % b)) } else { None }, // sama, biarkan runtime lempar error modulo-nol
             SamaDengan => Some(CExpr::Bool(a == b)),
@@ -2933,21 +2956,21 @@ fn eval_binop_selaras(l: ValorSelaras, op: BinOp, r: ValorSelaras) -> Result<Val
     match op {
         Tambah => match (&l, &r) {
             (ValorSelaras::Teks(_), _) | (_, ValorSelaras::Teks(_)) => Ok(ValorSelaras::Teks(format!("{}{}", l, r))),
-            (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => Ok(ValorSelaras::Angka(a + b)),
+            (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => a.checked_add(*b).map(ValorSelaras::Angka).ok_or_else(|| format!("Angka meluap (overflow): {} + {} melebihi jangkauan Angka.", a, b)),
             _ => match (ke_desimal_selaras(&l), ke_desimal_selaras(&r)) {
                 (Some(a), Some(b)) => Ok(ValorSelaras::Desimal(a + b)),
                 _ => Err(format!("Tidak bisa menjumlahkan {} dengan {}", l, r)),
             },
         },
         Kurang => match (&l, &r) {
-            (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => Ok(ValorSelaras::Angka(a - b)),
+            (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => a.checked_sub(*b).map(ValorSelaras::Angka).ok_or_else(|| format!("Angka meluap (overflow): {} - {} melebihi jangkauan Angka.", a, b)),
             _ => match (ke_desimal_selaras(&l), ke_desimal_selaras(&r)) {
                 (Some(a), Some(b)) => Ok(ValorSelaras::Desimal(a - b)),
                 _ => Err(format!("Operator '-' hanya untuk Angka, ditemukan {} dan {}", l, r)),
             },
         },
         Kali => match (&l, &r) {
-            (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => Ok(ValorSelaras::Angka(a * b)),
+            (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => a.checked_mul(*b).map(ValorSelaras::Angka).ok_or_else(|| format!("Angka meluap (overflow): {} * {} melebihi jangkauan Angka.", a, b)),
             _ => match (ke_desimal_selaras(&l), ke_desimal_selaras(&r)) {
                 (Some(a), Some(b)) => Ok(ValorSelaras::Desimal(a * b)),
                 _ => Err(format!("Operator '*' hanya untuk Angka, ditemukan {} dan {}", l, r)),
