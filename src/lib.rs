@@ -3169,6 +3169,54 @@ fn panggil_fungsi_1_arg(pustaka: &Pustaka, state: &mut VMState, idx: usize, arg:
     panggil_fungsi_dengan_argumen(pustaka, state, idx, argumen)
 }
 
+/// Panggil satu "callback 1-argumen" buat petakan()/saring()/urutkan() -- terima DUA bentuk
+/// sebagai argumen kedua: nama fungsi (Teks, cara lama yang tetap didukung persis seperti
+/// sebelumnya) ATAU closure first-class (Value::Fungsi -- closure literal inline
+/// 'fungsi(x) {...}', closure bernama tersimpan di variabel, atau nama fungsi biasa yang
+/// dilewatkan sebagai NILAI tanpa tanda kutip). Kalau closure-nya punya tangkapan (capture),
+/// itu otomatis "transparan" buat pemanggil builtin -- yang perlu dipikirkan cuma argumen
+/// terakhir (si item daftar), sisanya sudah beres di belakang layar lewat NilaiFungsi::tangkapan.
+fn panggil_callback_1_arg(pustaka: &Pustaka, state: &mut VMState, nama_builtin: &str, callback: &Value, arg: Value) -> Result<Value, String> {
+    match callback {
+        Value::Teks(s) => {
+            let idx = *pustaka.nama_ke_indeks.get(s.as_ref())
+                .ok_or_else(|| format!("{}(): fungsi \"{}\" tidak ditemukan.", nama_builtin, s))?;
+            panggil_fungsi_1_arg(pustaka, state, idx, arg)
+        }
+        Value::Fungsi(nf) => {
+            let f = &pustaka.fungsi[nf.idx];
+            let n_tangkapan = nf.tangkapan.len();
+            let n_param_asli = f.param_flat.len().saturating_sub(n_tangkapan);
+            if n_param_asli != 1 {
+                return Err(format!("{}(): closure callback butuh tepat 1 parameter (item-nya sendiri) di luar variabel yang ditangkap, tapi closure ini punya {}.", nama_builtin, n_param_asli));
+            }
+            // Param TERAKHIR di param_flat yang relevan (bukan slot tangkapan) -- lihat catatan
+            // urutan slot di NilaiFungsi & resolve_fungsi_umum ("tangkapan dulu, baru parameter").
+            let argumen_asli = match f.param_flat.last().and_then(|x| x.as_ref()) {
+                Some(field_urut) => {
+                    let entries = match &arg {
+                        Value::Instans(_, entries) => entries,
+                        lain => return Err(format!("{}(): closure callback ini butuh instans 'bentuk', ditemukan {}", nama_builtin, lain)),
+                    };
+                    let mut v = Vec::with_capacity(field_urut.len());
+                    for fnama in field_urut {
+                        let val = entries.iter().find(|(k, _)| k == fnama).map(|(_, val)| val.clone())
+                            .ok_or_else(|| format!("Instans tidak punya field \"{}\" yang dibutuhkan closure callback.", fnama))?;
+                        v.push(val);
+                    }
+                    v
+                }
+                None => vec![arg],
+            };
+            let mut argumen_lengkap = nf.tangkapan.clone();
+            argumen_lengkap.extend(argumen_asli);
+            panggil_fungsi_dengan_argumen(pustaka, state, nf.idx, argumen_lengkap)
+        }
+        lain => Err(format!("{}(): argumen kedua harus Teks (nama fungsi) atau closure/fungsi sebagai nilai, ditemukan {}", nama_builtin, lain)),
+    }
+}
+
+
 /// Versi umum panggil_fungsi_1_arg buat sembarang jumlah argumen -- dipakai buat memanggil
 /// Value::Fungsi (closure) lewat Instr::PanggilNilai. `argumen` sudah termasuk tangkapan
 /// closure DI DEPAN (kalau ada), diikuti argumen dari titik pemanggilan, persis sesuai urutan
@@ -3439,25 +3487,20 @@ fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_
                     let args_start = state.stack.len() - argc;
                     let hasil = match nama.as_str() {
                         "petakan" | "saring" if *argc == 2 => {
-                            let fungsi_nama = match &state.stack[args_start + 1] {
-                                Value::Teks(s) => s.to_string(),
-                                lain => return Err(format!("{}(daftar, nama_fungsi): argumen kedua harus Teks berisi nama fungsi, ditemukan {}", nama, lain)),
-                            };
+                            let callback = state.stack[args_start + 1].clone();
                             let daftar = match &state.stack[args_start] {
                                 Value::Daftar(d) => (**d).clone(),
-                                lain => return Err(format!("{}(daftar, nama_fungsi): argumen pertama harus Daftar, ditemukan {}", nama, lain)),
+                                lain => return Err(format!("{}(daftar, fungsi): argumen pertama harus Daftar, ditemukan {}", nama, lain)),
                             };
-                            let idx = *pustaka.nama_ke_indeks.get(&fungsi_nama)
-                                .ok_or_else(|| format!("{}(): fungsi \"{}\" tidak ditemukan.", nama, fungsi_nama))?;
                             state.stack.truncate(args_start);
                             if nama == "petakan" {
                                 let mut hasil_daftar = Vec::with_capacity(daftar.len());
-                                for item in daftar { hasil_daftar.push(panggil_fungsi_1_arg(pustaka, state, idx, item)?); }
+                                for item in daftar { hasil_daftar.push(panggil_callback_1_arg(pustaka, state, "petakan", &callback, item)?); }
                                 Value::Daftar(Rc::new(hasil_daftar))
                             } else {
                                 let mut hasil_daftar = Vec::with_capacity(daftar.len());
                                 for item in daftar {
-                                    match panggil_fungsi_1_arg(pustaka, state, idx, item.clone())? {
+                                    match panggil_callback_1_arg(pustaka, state, "saring", &callback, item.clone())? {
                                         Value::Bool(true) => hasil_daftar.push(item),
                                         Value::Bool(false) => {}
                                         lain => return Err(format!("saring(): fungsi penyaring harus mengembalikan Bool, ditemukan {}", lain)),
@@ -3467,22 +3510,15 @@ fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_
                             }
                         }
                         "urutkan" if *argc == 1 || *argc == 2 => {
-                            let fungsi_kunci = if *argc == 2 {
-                                match &state.stack[args_start + 1] {
-                                    Value::Teks(s) => Some(s.to_string()),
-                                    lain => return Err(format!("urutkan(daftar, nama_fungsi): argumen kedua harus Teks berisi nama fungsi, ditemukan {}", lain)),
-                                }
-                            } else { None };
+                            let callback = if *argc == 2 { Some(state.stack[args_start + 1].clone()) } else { None };
                             let daftar = match &state.stack[args_start] {
                                 Value::Daftar(d) => (**d).clone(),
                                 lain => return Err(format!("urutkan(): argumen pertama harus Daftar, ditemukan {}", lain)),
                             };
                             state.stack.truncate(args_start);
-                            let hasil_daftar = if let Some(fnama) = fungsi_kunci {
-                                let idx = *pustaka.nama_ke_indeks.get(&fnama)
-                                    .ok_or_else(|| format!("urutkan(): fungsi \"{}\" tidak ditemukan.", fnama))?;
+                            let hasil_daftar = if let Some(cb) = callback {
                                 let mut berkunci = Vec::with_capacity(daftar.len());
-                                for item in daftar { let kunci = panggil_fungsi_1_arg(pustaka, state, idx, item.clone())?; berkunci.push((kunci, item)); }
+                                for item in daftar { let kunci = panggil_callback_1_arg(pustaka, state, "urutkan", &cb, item.clone())?; berkunci.push((kunci, item)); }
                                 let mut kesalahan = None;
                                 berkunci.sort_by(|(ka, _), (kb, _)| bandingkan_nilai(ka, kb).unwrap_or_else(|e| { kesalahan = Some(e); std::cmp::Ordering::Equal }));
                                 if let Some(e) = kesalahan { return Err(e); }

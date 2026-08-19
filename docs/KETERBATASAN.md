@@ -90,12 +90,18 @@ Kalau `n` di scope pembungkus berubah SETELAH closure-nya dibuat, closure-nya te
 ### Closure dengan capture tidak pernah dikompilasi JIT
 Closure yang menangkap variabel apa pun dari scope pembungkusnya otomatis jalan lewat bytecode VM, meski semua tipe datanya numerik. Cuma closure **tanpa capture sama sekali** (biasanya closure level atas) yang berpeluang dikompilasi JIT, dengan syarat sama seperti fungsi biasa (lihat [REFERENSI.md](REFERENSI.md#kompilasi-jit)).
 
-### `petakan()`/`saring()`/`urutkan()` belum menerima closure langsung
+### `petakan()`/`saring()`/`urutkan()` -- sekarang menerima closure langsung
 ```
-petakan(daftar, fungsi(n) { kembalikan n * n })   catatan: TIDAK didukung
-petakan(daftar, "kuadrat")                          catatan: HARUS begini -- nama fungsi sebagai Teks
+petakan(daftar, fungsi(n) { kembalikan n * n })   catatan: bisa, closure inline
+ingat genap = fungsi(n) { kembalikan n % 2 == 0 }
+saring(daftar, genap)                               catatan: bisa, closure lewat variabel
+petakan(daftar, "kuadrat")                          catatan: cara lama tetap bisa, nama fungsi via Teks
+ingat ambang = 3
+saring(daftar, fungsi(n) { kembalikan n > ambang }) catatan: bisa, closure DENGAN capture juga jalan
 ```
-Meski closure sekarang jadi nilai first-class di bahasa ini, tiga fungsi bawaan ini masih dibangun di atas mekanisme "panggil fungsi lewat nama string", dari sebelum closure ada. Secara teknis closure BISA dilewatkan sebagai argumen fungsi biasa (`terapkan(f, x)` di mana `f` closure — ini jalan), tapi khusus tiga fungsi bawaan ini secara spesifik masih terbatas ke nama string. Ini peluang perbaikan yang belum dikerjakan.
+Argumen kedua ketiga fungsi ini sekarang menerima Teks (nama fungsi, cara lama) ATAU closure first-class (`Value::Fungsi`) sekaligus -- kalau closure-nya punya tangkapan (capture), itu otomatis disambung transparan di belakang layar, jadi yang perlu dipikirkan pengguna cuma argumen terakhir (item daftarnya). Jalan di semua jalur eksekusi termasuk `via-ir`/AOT/web export (numpang di `PanggilBawaan`, sudah lewat escape hatch `Legacy`).
+
+Yang **masih belum** bisa: melewatkan nama fungsi top-level TANPA tanda kutip sebagai nilai (mis. `petakan(daftar, kuadrat)` tanpa closure literal atau string) -- `kuadrat` di situ akan dicari sebagai variabel dan gagal, karena fungsi top-level bukan first-class value secara otomatis. Kalau perlu, bungkus jadi closure kecil: `petakan(daftar, fungsi(x) { kembalikan kuadrat(x) })`, atau tetap pakai bentuk Teks lama `petakan(daftar, "kuadrat")`.
 
 ---
 

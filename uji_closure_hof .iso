@@ -1,0 +1,29 @@
+ingat angka_daftar = [1, 2, 3, 4, 5]
+
+catatan: closure inline langsung, tanpa nama fungsi string
+ingat kuadrat_semua = petakan(angka_daftar, fungsi(x) { kembalikan x * x })
+tampilkan kuadrat_semua
+
+catatan: closure disimpan di variabel dulu
+ingat genap = fungsi(x) { kembalikan x % 2 == 0 }
+ingat hasil_saring = saring(angka_daftar, genap)
+tampilkan hasil_saring
+
+catatan: closure DENGAN capture (tangkapan) -- ini yang paling penting diuji
+ingat ambang = 3
+ingat lebih_besar_dari_ambang = fungsi(x) { kembalikan x > ambang }
+tampilkan saring(angka_daftar, lebih_besar_dari_ambang)
+
+catatan: urutkan pakai closure dgn capture (urutkan turun = kunci negatif)
+ingat urut_turun = urutkan(angka_daftar, fungsi(x) { kembalikan 0 - x })
+tampilkan urut_turun
+
+catatan: backward-compat -- cara lama (nama fungsi via Teks) HARUS tetap jalan
+fungsi tigax(n) { kembalikan n * 3 }
+tampilkan petakan(angka_daftar, "tigax")
+
+catatan: closure dgn 2 variabel capture sekaligus
+ingat a = 10
+ingat b = 100
+ingat gabung_ab = fungsi(x) { kembalikan x + a + b }
+tampilkan petakan([1,2,3], gabung_ab)

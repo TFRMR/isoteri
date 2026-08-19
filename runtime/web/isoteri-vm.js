@@ -290,17 +290,46 @@ class IsoteriVM {
     return this.panggilFungsiDenganArgumen(idx, argumen);
   }
 
+  /** Setara panggil_callback_1_arg() (Rust) -- terima Teks (nama fungsi, cara lama) ATAU
+   *  closure first-class ({t:"Fungsi", idx, tangkapan}) sebagai callback petakan()/saring()/
+   *  urutkan(). Lihat catatan lengkap di versi Rust (src/lib.rs) soal urutan tangkapan+param. */
+  panggilCallback1Arg(namaBuiltin, callback, arg) {
+    if (callback.t === "Teks") {
+      const idx = this.namaKeIndeks[callback.v];
+      if (idx === undefined) throw new IsoteriError(`${namaBuiltin}(): fungsi "${callback.v}" tidak ditemukan.`);
+      return this.panggilFungsi1Arg(idx, arg);
+    }
+    if (callback.t === "Fungsi") {
+      const f = this.fungsi[callback.idx];
+      const nTangkapan = callback.tangkapan.length;
+      const nParamAsli = f.paramFlat.length - nTangkapan;
+      if (nParamAsli !== 1) throw new IsoteriError(`${namaBuiltin}(): closure callback butuh tepat 1 parameter (item-nya sendiri) di luar variabel yang ditangkap, tapi closure ini punya ${nParamAsli}.`);
+      const fieldUrut = f.paramFlat[f.paramFlat.length - 1];
+      let argumenAsli;
+      if (fieldUrut) {
+        if (arg.t !== "Instans") throw new IsoteriError(`${namaBuiltin}(): closure callback ini butuh instans 'bentuk', ditemukan ${tampilkanStr(arg)}`);
+        argumenAsli = fieldUrut.map((fnama) => {
+          const entri = arg.v.find(([k]) => k === fnama);
+          if (!entri) throw new IsoteriError(`Instans tidak punya field "${fnama}" yang dibutuhkan closure callback.`);
+          return entri[1];
+        });
+      } else {
+        argumenAsli = [arg];
+      }
+      return this.panggilFungsiDenganArgumen(callback.idx, [...callback.tangkapan, ...argumenAsli]);
+    }
+    throw new IsoteriError(`${namaBuiltin}(): argumen kedua harus Teks (nama fungsi) atau closure/fungsi sebagai nilai, ditemukan ${tampilkanStr(callback)}`);
+  }
+
   panggilBawaan(nama, args) {
     if ((nama === "petakan" || nama === "saring") && args.length === 2) {
-      if (args[1].t !== "Teks") throw new IsoteriError(`${nama}(daftar, nama_fungsi): argumen kedua harus Teks berisi nama fungsi, ditemukan ${tampilkanStr(args[1])}`);
-      if (args[0].t !== "Daftar") throw new IsoteriError(`${nama}(daftar, nama_fungsi): argumen pertama harus Daftar, ditemukan ${tampilkanStr(args[0])}`);
-      const idx = this.namaKeIndeks[args[1].v];
-      if (idx === undefined) throw new IsoteriError(`${nama}(): fungsi "${args[1].v}" tidak ditemukan.`);
+      if (args[0].t !== "Daftar") throw new IsoteriError(`${nama}(daftar, fungsi): argumen pertama harus Daftar, ditemukan ${tampilkanStr(args[0])}`);
+      const callback = args[1];
       if (nama === "petakan") {
-        return daftar(args[0].v.map((item) => this.panggilFungsi1Arg(idx, item)));
+        return daftar(args[0].v.map((item) => this.panggilCallback1Arg("petakan", callback, item)));
       }
       return daftar(args[0].v.filter((item) => {
-        const r = this.panggilFungsi1Arg(idx, item);
+        const r = this.panggilCallback1Arg("saring", callback, item);
         if (r.t !== "Bool") throw new IsoteriError(`saring(): fungsi penyaring harus mengembalikan Bool, ditemukan ${tampilkanStr(r)}`);
         return r.v;
       }));
@@ -308,10 +337,8 @@ class IsoteriVM {
     if (nama === "urutkan" && (args.length === 1 || args.length === 2)) {
       if (args[0].t !== "Daftar") throw new IsoteriError(`urutkan(): argumen pertama harus Daftar, ditemukan ${tampilkanStr(args[0])}`);
       if (args.length === 2) {
-        if (args[1].t !== "Teks") throw new IsoteriError(`urutkan(daftar, nama_fungsi): argumen kedua harus Teks berisi nama fungsi, ditemukan ${tampilkanStr(args[1])}`);
-        const idx = this.namaKeIndeks[args[1].v];
-        if (idx === undefined) throw new IsoteriError(`urutkan(): fungsi "${args[1].v}" tidak ditemukan.`);
-        const berkunci = args[0].v.map((item) => [this.panggilFungsi1Arg(idx, item), item]);
+        const callback = args[1];
+        const berkunci = args[0].v.map((item) => [this.panggilCallback1Arg("urutkan", callback, item), item]);
         berkunci.sort((a, b) => bandingkanNilai(a[0], b[0]));
         return daftar(berkunci.map(([, v]) => v));
       }
