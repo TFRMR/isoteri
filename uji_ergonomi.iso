@@ -1,0 +1,38 @@
+fungsi klasifikasi(n) {
+    kalau (n < 0) {
+        kembalikan "negatif"
+    } lainnya kalau (n == 0) {
+        kembalikan "nol"
+    } lainnya kalau (n < 10) {
+        kembalikan "satuan"
+    } lainnya {
+        kembalikan "besar"
+    }
+}
+
+tampilkan klasifikasi(-5)
+tampilkan klasifikasi(0)
+tampilkan klasifikasi(7)
+tampilkan klasifikasi(99)
+
+ingat i = 0
+ulang (i < 10) {
+    i = i + 1
+    kalau (i == 3) {
+        lanjut
+    }
+    kalau (i == 7) {
+        putus
+    }
+    tampilkan i
+}
+tampilkan "selesai loop pertama"
+
+ingat daftar_angka = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+ulang setiap x dari daftar_angka {
+    kalau (x > 5) {
+        putus
+    }
+    tampilkan x
+}
+tampilkan "selesai loop kedua"

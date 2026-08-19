@@ -1,0 +1,24 @@
+ingat daftar_angka = [10, 20, 30, 40]
+daftar_angka[0] = 99
+daftar_angka[2] = daftar_angka[2] + 5
+tampilkan daftar_angka
+ingat matriks = [[1, 2], [3, 4]]
+matriks[0][1] = 100
+matriks[1][0] = matriks[1][0] + 50
+tampilkan matriks
+ingat peta_nilai = {"a": 1, "b": 2}
+peta_nilai["a"] = 999
+peta_nilai["c"] = 3
+tampilkan peta_nilai
+bentuk Tim {
+    anggota
+}
+ingat tim = Tim { anggota: ["andi", "budi"] }
+tim.anggota[0] = "citra"
+tampilkan tim.anggota
+ingat i = 0
+ulang (i < 4) {
+    daftar_angka[i] = daftar_angka[i] * 2
+    i = i + 1
+}
+tampilkan daftar_angka

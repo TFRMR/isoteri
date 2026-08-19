@@ -134,6 +134,21 @@ class IsoteriVM {
         S.push(indeksValue(t, i));
         return { selesai: false, pc: pc + 1 };
       }
+      case "IndeksTahanIdx": {
+        // Sama seperti "Indeks", TAPI idx tidak dibuang -- ditaruh balik di bawah hasil baca.
+        // Dipakai compile_set_jalur (Rust) buat descend assignment berantai; lihat catatan
+        // lengkap di definisi Instr::IndeksTahanIdx (src/lib.rs).
+        const i = S.pop(), t = S.pop();
+        const v = indeksValue(t, i);
+        S.push(i);
+        S.push(v);
+        return { selesai: false, pc: pc + 1 };
+      }
+      case "SetIndeks": {
+        const nilaiBaru = S.pop(), i = S.pop(), t = S.pop();
+        S.push(setIndeksValue(t, i, nilaiBaru));
+        return { selesai: false, pc: pc + 1 };
+      }
       case "AmbilField": {
         const t = S.pop();
         if (t.t !== "Instans") throw new IsoteriError(`Akses field ".${instr[1]}" hanya berlaku untuk instans 'bentuk', ditemukan ${tampilkanStr(t)}`);
@@ -237,6 +252,7 @@ class IsoteriVM {
         return { selesai: false, pc: pc + 1 };
       }
       case "SelesaiCoba": this.handlerStack.pop(); return { selesai: false, pc: pc + 1 };
+      case "TutupHandler": this.handlerStack.pop(); return { selesai: false, pc: pc + 1 };
       case "Kembalikan": return { selesai: true, nilai: S.pop() };
       default:
         throw new IsoteriError(`Instruksi tidak didukung di web runtime: ${op}`);
@@ -613,6 +629,19 @@ function evalBinOp(l, op, r) {
         return desimal(keDesimal(l) / keDesimal(r));
       }
       throw new IsoteriError(`Operator '/' hanya berlaku untuk Angka, ditemukan ${tampilkanStr(l)} dan ${tampilkanStr(r)}`);
+    case "Modulo":
+      // JS '%' sudah truncated-division remainder (sama seperti Rust '%' di isoteri-vm asli),
+      // jadi tanda hasil buat operand negatif konsisten antara browser & native -- tidak perlu
+      // penyesuaian tambahan seperti Bagi (yang butuh Math.trunc karena '/' JS itu float).
+      if (l.t === "Angka" && r.t === "Angka") {
+        if (r.v === 0) throw new IsoteriError("Tidak bisa modulo dengan nol.");
+        return angka(l.v % r.v);
+      }
+      if (keDesimal(l) !== null && keDesimal(r) !== null) {
+        if (keDesimal(r) === 0) throw new IsoteriError("Tidak bisa modulo dengan nol.");
+        return desimal(keDesimal(l) % keDesimal(r));
+      }
+      throw new IsoteriError(`Operator '%' hanya berlaku untuk Angka, ditemukan ${tampilkanStr(l)} dan ${tampilkanStr(r)}`);
     case "SamaDengan": return bool(nilaiSama(l, r));
     case "TidakSama": return bool(!nilaiSama(l, r));
     case "LebihBesar": return bandingkan(l, r, (a, b) => a > b);
@@ -637,6 +666,25 @@ function indeksValue(t, i) {
     return entri[1];
   }
   throw new IsoteriError(`Tidak bisa mengindeks ${tampilkanStr(t)} dengan ${tampilkanStr(i)}`);
+}
+
+/** Setara set_indeks_value di Rust -- tulis satu elemen Daftar/Peta, immutable/clone-on-write
+ *  (array/objek BARU, bukan mutasi in-place -- konsisten dengan SetField). Peta: kunci belum
+ *  ada -> insert. Daftar: indeks harus sudah ada (di luar jangkauan -> error, tidak auto-extend). */
+function setIndeksValue(t, i, nilai) {
+  if (t.t === "Daftar" && i.t === "Angka") {
+    if (i.v < 0) throw new IsoteriError(`Indeks tidak boleh negatif: ${i.v}`);
+    if (i.v >= t.v.length) throw new IsoteriError(`Indeks ${i.v} di luar jangkauan (panjang daftar: ${t.v.length}) -- tidak bisa mengubah elemen yang belum ada, pakai fungsi bawaan 'tambah()' buat menambah elemen baru.`);
+    const baru = t.v.slice();
+    baru[i.v] = nilai;
+    return daftar(baru);
+  }
+  if (t.t === "Peta" && i.t === "Teks") {
+    const ada = t.v.some(([k]) => k === i.v);
+    const baru = ada ? t.v.map(([k, v]) => (k === i.v ? [k, nilai] : [k, v])) : [...t.v, [i.v, nilai]];
+    return peta(baru);
+  }
+  throw new IsoteriError(`Tidak bisa mengubah indeks [${tampilkanStr(i)}] pada nilai ${tampilkanStr(t)} (bukan Daftar dgn indeks Angka atau Peta dgn kunci Teks).`);
 }
 
 /** Setara impl Display for Value di Rust -- HARUS identik supaya output tampilkan() sama persis. */

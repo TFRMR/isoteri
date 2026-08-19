@@ -15,28 +15,44 @@ tampilkan besar + 1                  catatan: hasilnya -9223372036854775808, BUK
 ```
 Build `--release` Rust mematikan overflow-check secara default. Ini artinya kalkulasi yang melebihi jangkauan `i64` (~9.2 kuintiliun) akan menghasilkan angka yang salah secara diam-diam, bukan crash atau error yang bisa ditangkap. Kalau program kamu berpotensi menghasilkan angka sangat besar (mis. akumulasi token dalam satuan terkecil dalam jumlah masif), pertimbangkan pakai `Desimal` atau tambahkan validasi batas atas secara manual.
 
-### Tidak ada operator modulo (`%`), increment/decrement, atau compound assignment
-Tidak ada `%`, `++`, `--`, `+=`, `-=`, dst. Tulis eksplisit:
+### Operator modulo (`%`), increment/decrement (`++`/`--`), compound assignment (`+=` dst.) -- didukung
 ```
-ingat sisa = a - (a / b) * b        catatan: pengganti a % b
-x = x + 1                            catatan: pengganti x++
+tampilkan 17 % 5        catatan: 2
+x += 1                    catatan: sama seperti x = x + 1
+x++                       catatan: sama seperti x = x + 1 (HANYA statement baris sendiri, bukan ekspresi)
+rek.saldo -= 30           catatan: compound assignment field juga didukung, termasuk nested
 ```
+Semuanya gula sintaksis murni di parser (didesugar ke bentuk `nama = nama <op> nilai`), kecuali `%` yang jadi `BinOp` baru sungguhan (butuh entry di semua jalur: eval, formatter, tipe inferensi, IR, JSON export web). Modulo dengan pembagi 0 melempar error runtime jelas, sama seperti pembagian. `%` TIDAK di-JIT (sama seperti `/`, butuh cek pembagi-nol saat runtime) -- fungsi yang memakainya otomatis fallback ke bytecode VM biasa, tetap benar cuma lebih lambat dari fungsi murni aritmatika lain.
 
-### Tidak ada `putus`/`lanjut` (break/continue)
-Semua bentuk loop (`ulang`, `ulang setiap`, `ulang selaras`) tidak punya cara keluar/lompat lebih awal selain lewat kondisi loop-nya sendiri atau `kembalikan` (kalau di dalam fungsi).
+Efek samping yang perlu diketahui: karena `+=`/`++`/`--` didesugar TOTAL tanpa jejak di AST, `isoteri format` akan menormalisasi balik ke bentuk eksplisit (`total += 5` -> `total = total + 5`) -- ini bukan bug, cuma gula sintaksisnya memang tidak "diingat" formatter. `++`/`--` cuma didukung buat variabel (`i++`), belum buat field (`objek.field++`).
 
-### Tidak ada `lainnya kalau` (else-if) bawaan
-Harus nested manual:
+### `putus`/`lanjut` (break/continue) -- didukung di eksekusi normal, belum di `via-ir`/AOT
+Sudah bisa dipakai di `ulang` dan `ulang setiap` (loop terdekat, boleh bersarang, aman dipakai di dalam `coba/tangkap`):
 ```
-kalau (a) { ... } lainnya { kalau (b) { ... } lainnya { ... } }
+ulang (i < 10) {
+    i = i + 1
+    kalau (i == 3) { lanjut }   catatan: lompat ke iterasi berikutnya
+    kalau (i == 7) { putus }    catatan: keluar loop
+    tampilkan i
+}
 ```
+Belum bisa dipakai lewat `isoteri via-ir` atau `isoteri bangun` (AOT) -- keduanya lewat jalur IR terpisah yang belum diimplementasikan buat dua statement ini, akan panik dengan pesan jelas kalau dicoba. Pakai `isoteri jalankan` (mode biasa) untuk sekarang. `ulang selaras` (loop paralel) juga belum mendukung `putus`/`lanjut` -- evaluatornya memang sudah dibatasi terpisah.
 
-### Tidak ada assignment lewat indeks
+### `lainnya kalau` (else-if) -- didukung
 ```
-daftar[0] = 99      catatan: TIDAK didukung
-peta["x"] = 99        catatan: TIDAK didukung
+kalau (a) { ... } lainnya kalau (b) { ... } lainnya { ... }
 ```
-Bandingkan dengan `bentuk`, yang assignment field-nya (`objek.field = nilai`, termasuk bersarang) **didukung**. Untuk `Daftar`/`Peta`, harus bangun struktur baru (mis. lewat `gabung()`, `petakan()`, atau membangun ulang manual).
+Ini gula sintaksis murni di parser (desugar jadi `Kalau` bersarang di dalam `lainnya`), jalan di semua jalur eksekusi termasuk `via-ir`/AOT/web export.
+
+### Assignment lewat indeks -- didukung
+```
+daftar[0] = 99                catatan: bisa
+peta["x"] = 99                  catatan: bisa, kunci baru otomatis ditambahkan (insert-or-update)
+matriks[0][1] = 100            catatan: nested/berapa level pun boleh
+objek.daftar[0] = "citra"     catatan: campur field + indeks juga boleh
+daftar[0] += 5                  catatan: compound assignment lewat indeks juga jalan
+```
+Immutable/clone-on-write, konsisten dengan `bentuk` (`objek.field = nilai`) yang memang sudah didukung sejak awal -- assignment indeks membangun `Daftar`/`Peta` BARU di baliknya, bukan mutasi in-place. `Peta`: kunci yang belum ada otomatis di-insert. `Daftar`: indeks harus sudah ada (di luar jangkauan -> error runtime jelas, TIDAK auto-extend -- pakai `tambah()` buat menambah elemen). Jalan di semua jalur eksekusi termasuk `via-ir`/AOT/web export (numpang di mekanisme "escape hatch" yang sama dengan assignment field, karena instruksinya straight-line tanpa lompatan internal).
 
 ### Variabel global harus dideklarasikan sebelum dipakai (tekstual)
 Tidak ada forward-reference untuk `ingat` di level atas — beda dari `fungsi` dan `bentuk` yang boleh dipakai sebelum baris deklarasinya (karena keduanya di-pre-scan sebelum resolusi jalan).

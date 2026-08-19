@@ -11,6 +11,7 @@ use std::rc::Rc;
 pub enum Token {
     Ingat, Kalau, Lainnya, Ulang, Tampilkan, Fungsi, Kembalikan, Muat,
     Dan, Atau, Benar, Salah, Setiap, Dari, Selaras, Coba, Tangkap, Bentuk,
+    Putus, Lanjut,
 
     Identifikator(String),
     Teks(String),
@@ -19,7 +20,15 @@ pub enum Token {
 
     SamaDengan, SamaDenganDua, TidakSama,
     LebihBesar, LebihBesarSamaDengan, LebihKecil, LebihKecilSamaDengan,
-    Tambah, Kurang, Kali, Bagi,
+    Tambah, Kurang, Kali, Bagi, Persen,
+    /// Compound assignment (+= -= *= /=) -- gula sintaksis MURNI di parser, langsung didesugar
+    /// jadi 'nama = nama <op> nilai' (lihat parse_stmt). Tidak ada varian Stmt/CStmt/Instr baru
+    /// buat ini sama sekali, jadi otomatis jalan di semua jalur eksekusi termasuk web export.
+    TambahSama, KurangSama, KaliSama, BagiSama,
+    /// ++/-- -- sama, gula sintaksis murni, didesugar jadi 'nama = nama + 1' / 'nama = nama - 1'.
+    /// Cuma didukung sebagai STATEMENT ('i++' baris sendiri), bukan ekspresi ('x = i++' tidak
+    /// didukung) -- itu jaga supaya tetap sederhana dan gak nambah kerumitan urutan evaluasi.
+    PlusPlus, MinusMinus,
     Titik, TitikDua,
     KurungBuka, KurungTutup, KurawalBuka, KurawalTutup,
     KurungSikuBuka, KurungSikuTutup, Koma,
@@ -138,6 +147,8 @@ impl Lexer {
                     "coba" => Token::Coba,
                     "tangkap" => Token::Tangkap,
                     "bentuk" => Token::Bentuk,
+                    "putus" | "berhenti" => Token::Putus,
+                    "lanjut" | "lanjutkan" => Token::Lanjut,
                     _ => Token::Identifikator(kata),
                 };
                 push!(token);
@@ -149,10 +160,19 @@ impl Lexer {
                 '!' => { if self.intip() == '=' { push!(Token::TidakSama); self.posisi += 2; } else { return Err(format!("Karakter '!' tidak dikenal pada baris {}", self.baris)); } }
                 '>' => { if self.intip() == '=' { push!(Token::LebihBesarSamaDengan); self.posisi += 2; } else { push!(Token::LebihBesar); self.posisi += 1; } }
                 '<' => { if self.intip() == '=' { push!(Token::LebihKecilSamaDengan); self.posisi += 2; } else { push!(Token::LebihKecil); self.posisi += 1; } }
-                '+' => { push!(Token::Tambah); self.posisi += 1; }
-                '-' => { push!(Token::Kurang); self.posisi += 1; }
-                '*' => { push!(Token::Kali); self.posisi += 1; }
-                '/' => { push!(Token::Bagi); self.posisi += 1; }
+                '+' => {
+                    if self.intip() == '=' { push!(Token::TambahSama); self.posisi += 2; }
+                    else if self.intip() == '+' { push!(Token::PlusPlus); self.posisi += 2; }
+                    else { push!(Token::Tambah); self.posisi += 1; }
+                }
+                '-' => {
+                    if self.intip() == '=' { push!(Token::KurangSama); self.posisi += 2; }
+                    else if self.intip() == '-' { push!(Token::MinusMinus); self.posisi += 2; }
+                    else { push!(Token::Kurang); self.posisi += 1; }
+                }
+                '*' => { if self.intip() == '=' { push!(Token::KaliSama); self.posisi += 2; } else { push!(Token::Kali); self.posisi += 1; } }
+                '/' => { if self.intip() == '=' { push!(Token::BagiSama); self.posisi += 2; } else { push!(Token::Bagi); self.posisi += 1; } }
+                '%' => { push!(Token::Persen); self.posisi += 1; }
                 '.' => { push!(Token::Titik); self.posisi += 1; }
                 ':' => { push!(Token::TitikDua); self.posisi += 1; }
                 '(' => { push!(Token::KurungBuka); self.posisi += 1; }
@@ -193,8 +213,17 @@ pub enum Expr {
     FungsiLiteral(Vec<(String, Option<String>)>, Vec<(usize, Stmt)>),
 }
 
+/// Satu langkah dalam rantai lvalue assignment SETELAH nama variabel awal --
+/// mis. 'daftar[0]' -> [Indeks(Angka 0)], 'matriks[0][1]' -> [Indeks(0), Indeks(1)],
+/// 'objek.daftar[0]' -> [Field("daftar"), Indeks(0)]. Dipakai KHUSUS buat sisi kiri
+/// assignment (lihat Stmt::UbahJalur) -- beda dari Expr::Indeks/Expr::Field yang dipakai buat
+/// sisi kanan/baca biasa, meskipun secara bentuk mirip (memang sengaja, biar gampang saling
+/// dikonversi lewat Parser::bangun_expr_dari_jalur).
+#[derive(Debug, Clone)]
+pub enum Jalur { Field(String), Indeks(Expr) }
+
 #[derive(Debug, Clone, Copy)]
-pub enum BinOp { Tambah, Kurang, Kali, Bagi, SamaDengan, TidakSama, LebihBesar, LebihBesarSama, LebihKecil, LebihKecilSama, Dan, Atau }
+pub enum BinOp { Tambah, Kurang, Kali, Bagi, Modulo, SamaDengan, TidakSama, LebihBesar, LebihBesarSama, LebihKecil, LebihKecilSama, Dan, Atau }
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
@@ -214,6 +243,17 @@ pub enum Stmt {
     Kembalikan(Expr),
     EkspresiStmt(Expr),
     Coba(Vec<(usize, Stmt)>, String, Vec<(usize, Stmt)>),
+    /// 'daftar[0] = x', 'peta["k"] = x', 'matriks[0][1] = x', 'objek.daftar[0] = x', dst. --
+    /// rantai Jalur (Field/Indeks campur, boleh berapa level) di atas satu variabel dasar.
+    /// Dipisah dari UbahField (yang cuma field murni) supaya UbahField yang sudah lama
+    /// stabil TIDAK disentuh sama sekali -- lihat Parser::parse_stmt, rute ini cuma dipakai
+    /// kalau rantainya mengandung MINIMAL satu '[...]'.
+    UbahJalur(String, Vec<Jalur>, Expr),
+    /// 'putus' -- keluar paksa dari loop terdekat yang membungkusnya (ulang/ulang setiap).
+    /// Divalidasi resolver: error kompilasi kalau dipakai di luar loop.
+    Putus,
+    /// 'lanjut' -- lompat ke iterasi berikutnya loop terdekat yang membungkusnya.
+    Lanjut,
 }
 
 pub struct Parser { tokens: Vec<Token>, baris_token: Vec<usize>, posisi: usize, no_literal: bool }
@@ -281,7 +321,20 @@ impl Parser {
                 let cond = self.parse_expr()?;
                 self.harap(&Token::KurungTutup)?;
                 let then_block = self.parse_block()?;
-                let else_block = if *self.sekarang() == Token::Lainnya { self.maju(); Some(self.parse_block()?) } else { None };
+                let else_block = if *self.sekarang() == Token::Lainnya {
+                    self.maju();
+                    if *self.sekarang() == Token::Kalau {
+                        // 'lainnya kalau (...) {...}' -- gula sintaksis murni: rantai ini
+                        // diparse ULANG lewat parse_stmt() (rekursif ke arm Token::Kalau di
+                        // atas), lalu dibungkus jadi blok satu-statement. Tidak ada varian AST
+                        // baru buat else-if -- CStmt/compiler/VM/JIT sama sekali tidak berubah,
+                        // karena secara struktur ini tetap 'Kalau' bersarang di dalam 'lainnya'.
+                        let baris = self.baris_sekarang();
+                        Some(vec![(baris, self.parse_stmt()?)])
+                    } else {
+                        Some(self.parse_block()?)
+                    }
+                } else { None };
                 Ok(Stmt::Kalau(cond, then_block, else_block))
             }
             Token::Ulang => {
@@ -344,6 +397,8 @@ impl Parser {
                 Ok(Stmt::BentukDef(nama, fields))
             }
             Token::Kembalikan => { self.maju(); Ok(Stmt::Kembalikan(self.parse_expr()?)) }
+            Token::Putus => { self.maju(); Ok(Stmt::Putus) }
+            Token::Lanjut => { self.maju(); Ok(Stmt::Lanjut) }
             Token::Coba => {
                 self.maju();
                 let badan_coba = self.parse_block()?;
@@ -356,28 +411,139 @@ impl Parser {
                 if self.tokens.get(self.posisi + 1) == Some(&Token::SamaDengan) {
                     self.maju(); self.maju();
                     Ok(Stmt::Ubah(nama, self.parse_expr()?))
+                } else if let Some(op) = Self::op_compound(self.tokens.get(self.posisi + 1)) {
+                    // 'nama += nilai' dst. -- desugar MURNI: 'nama = nama <op> (nilai)'. Tanda
+                    // kurung di sekitar rhs jaga presedensi (mis. 'x += 1 + 2' harus jadi
+                    // 'x = x + (1 + 2)', bukan '(x + 1) + 2' -- meskipun kebetulan sama untuk +,
+                    // ini penting buat '/=' dan '-=': 'x -= 1 + 2' harus 'x - (1+2)' bukan '(x-1)+2'.
+                    self.maju(); self.maju();
+                    let rhs = self.parse_expr()?;
+                    Ok(Stmt::Ubah(nama.clone(), Expr::Binary(Box::new(Expr::Ident(nama)), op, Box::new(rhs))))
+                } else if self.tokens.get(self.posisi + 1) == Some(&Token::PlusPlus) || self.tokens.get(self.posisi + 1) == Some(&Token::MinusMinus) {
+                    // 'nama++' / 'nama--' -- HANYA sebagai statement baris sendiri, desugar jadi
+                    // 'nama = nama + 1' / 'nama = nama - 1'. Tidak didukung sebagai ekspresi
+                    // (mis. 'x = i++' TIDAK bisa) -- disengaja, jaga urutan evaluasi tetap simpel.
+                    let op = if self.tokens.get(self.posisi + 1) == Some(&Token::PlusPlus) { BinOp::Tambah } else { BinOp::Kurang };
+                    self.maju(); self.maju();
+                    Ok(Stmt::Ubah(nama.clone(), Expr::Binary(Box::new(Expr::Ident(nama)), op, Box::new(Expr::Angka(1)))))
                 } else {
-                    // Intip ke depan: pola "nama.f1.f2...fk = nilai"? Rantai '.identifier' boleh
-                    // berapa pun panjangnya, asal berujung tepat di token '='.
-                    let mut la = self.posisi + 1;
-                    let mut fields = Vec::new();
-                    while self.tokens.get(la) == Some(&Token::Titik) {
-                        match self.tokens.get(la + 1) {
-                            Some(Token::Identifikator(f)) => { fields.push(f.clone()); la += 2; }
-                            _ => break,
-                        }
-                    }
-                    if !fields.is_empty() && self.tokens.get(la) == Some(&Token::SamaDengan) {
+                    // Intip ke depan TANPA mengonsumsi: rantai '.field'/'[expr]' campur, berapa
+                    // pun panjangnya, berujung di mana? (Skip isi '[...]' pakai penghitung
+                    // kedalaman kurung siku, karena index-nya sendiri boleh ekspresi apa pun
+                    // termasuk '[...]' bersarang, mis. 'matriks[baris[0]]'.)
+                    let akhir_rantai = self.intip_akhir_rantai_jalur(self.posisi + 1);
+                    let compound_di_akhir = Self::op_compound(self.tokens.get(akhir_rantai));
+                    let assign_di_akhir = self.tokens.get(akhir_rantai) == Some(&Token::SamaDengan);
+                    if akhir_rantai > self.posisi + 1 && (assign_di_akhir || compound_di_akhir.is_some()) {
                         self.maju(); // nama
-                        for _ in 0..fields.len() { self.maju(); self.maju(); } // tiap '.field'
-                        self.maju(); // '='
-                        Ok(Stmt::UbahField(nama, fields, self.parse_expr()?))
+                        let jalur = self.parse_rantai_jalur()?;
+                        let nilai = if let Some(op) = compound_di_akhir {
+                            self.maju(); // token compound (+= dst.)
+                            let rhs = self.parse_expr()?;
+                            let nilai_lama = Self::bangun_expr_dari_jalur(Expr::Ident(nama.clone()), &jalur);
+                            Expr::Binary(Box::new(nilai_lama), op, Box::new(rhs))
+                        } else {
+                            self.maju(); // '='
+                            self.parse_expr()?
+                        };
+                        Ok(Self::buat_ubah_jalur(nama, jalur, nilai))
                     } else {
                         Ok(Stmt::EkspresiStmt(self.parse_expr()?))
                     }
                 }
             }
             lain => Err(format!("Pernyataan tidak dikenal, ditemukan token: {:?}", lain)),
+        }
+    }
+
+    /// Helper buat parse_stmt: kalau token ini salah satu compound-assignment (+= -= *= /=),
+    /// balikin BinOp yang sesuai buat didesugar. Bukan bagian dari grammar ekspresi biasa
+    /// (compound assignment CUMA sah di posisi statement, persis kayak '=' polos).
+    fn op_compound(t: Option<&Token>) -> Option<BinOp> {
+        match t {
+            Some(Token::TambahSama) => Some(BinOp::Tambah),
+            Some(Token::KurangSama) => Some(BinOp::Kurang),
+            Some(Token::KaliSama) => Some(BinOp::Kali),
+            Some(Token::BagiSama) => Some(BinOp::Bagi),
+            _ => None,
+        }
+    }
+
+    /// Dari posisi token SETELAH nama variabel awal, intip (TANPA konsumsi) sejauh mana rantai
+    /// '.field'/'[expr]' berlanjut, balikin indeks token TEPAT SESUDAHNYA. Kalau hasilnya sama
+    /// dengan `mulai`, artinya bukan rantai sama sekali (langsung token lain, mis. operator
+    /// biner) -- itu ditangani caller sebagai fallback ke ekspresi biasa.
+    fn intip_akhir_rantai_jalur(&self, mulai: usize) -> usize {
+        let mut la = mulai;
+        loop {
+            match self.tokens.get(la) {
+                Some(Token::Titik) => match self.tokens.get(la + 1) {
+                    Some(Token::Identifikator(_)) => { la += 2; }
+                    _ => break,
+                },
+                Some(Token::KurungSikuBuka) => {
+                    let mut depth = 1;
+                    la += 1;
+                    while depth > 0 {
+                        match self.tokens.get(la) {
+                            Some(Token::KurungSikuBuka) => { depth += 1; la += 1; }
+                            Some(Token::KurungSikuTutup) => { depth -= 1; la += 1; }
+                            Some(Token::Eof) | None => return la, // malformed -- biar error jelas nanti muncul dari parser ekspresi biasa
+                            _ => la += 1,
+                        }
+                    }
+                }
+                _ => break,
+            }
+        }
+        la
+    }
+
+    /// Parse rantai '.field'/'[expr]' (identifier awal SUDAH dikonsumsi pemanggil) jadi
+    /// Vec<Jalur> -- versi "tulis" dari loop postfix yang sama di parse_unary (yang membangun
+    /// Expr buat "baca"). Presedensi/urutan levelnya identik, cuma bentuk hasilnya beda.
+    fn parse_rantai_jalur(&mut self) -> Result<Vec<Jalur>, String> {
+        let mut jalur = Vec::new();
+        loop {
+            if *self.sekarang() == Token::KurungSikuBuka {
+                self.maju();
+                let idx = self.dalam_kurung(|p| p.parse_expr())?;
+                self.harap(&Token::KurungSikuTutup)?;
+                jalur.push(Jalur::Indeks(idx));
+            } else if *self.sekarang() == Token::Titik {
+                self.maju();
+                let f = self.harap_identifier()?;
+                jalur.push(Jalur::Field(f));
+            } else {
+                break;
+            }
+        }
+        Ok(jalur)
+    }
+
+    /// Bangun balik Expr baca-biasa dari (basis, jalur) -- dipakai buat menyusun "nilai lama"
+    /// pas compound-assignment lewat jalur (mis. 'daftar[0] += 1' butuh baca 'daftar[0]' dulu).
+    fn bangun_expr_dari_jalur(basis: Expr, jalur: &[Jalur]) -> Expr {
+        let mut e = basis;
+        for j in jalur {
+            e = match j {
+                Jalur::Field(f) => Expr::Field(Box::new(e), f.clone()),
+                Jalur::Indeks(idx) => Expr::Indeks(Box::new(e), Box::new(idx.clone())),
+            };
+        }
+        e
+    }
+
+    /// Rute Stmt yang tepat buat satu assignment jalur -- kalau semua levelnya Field murni
+    /// (tanpa Indeks sama sekali), tetap pakai Stmt::UbahField LAMA (kode itu sudah stabil
+    /// lama, tidak disentuh sama sekali oleh perubahan ini). Cuma kalau ADA minimal satu
+    /// level Indeks, baru dirutekan ke Stmt::UbahJalur (mekanisme baru).
+    fn buat_ubah_jalur(nama: String, jalur: Vec<Jalur>, nilai: Expr) -> Stmt {
+        if jalur.iter().all(|j| matches!(j, Jalur::Field(_))) {
+            let fields: Vec<String> = jalur.into_iter().map(|j| match j { Jalur::Field(f) => f, _ => unreachable!() }).collect();
+            Stmt::UbahField(nama, fields, nilai)
+        } else {
+            Stmt::UbahJalur(nama, jalur, nilai)
         }
     }
 
@@ -445,7 +611,7 @@ impl Parser {
     fn parse_factor(&mut self) -> Result<Expr, String> {
         let mut kiri = self.parse_unary()?;
         loop {
-            let op = match self.sekarang() { Token::Kali => BinOp::Kali, Token::Bagi => BinOp::Bagi, _ => break };
+            let op = match self.sekarang() { Token::Kali => BinOp::Kali, Token::Bagi => BinOp::Bagi, Token::Persen => BinOp::Modulo, _ => break };
             self.maju();
             kiri = Expr::Binary(Box::new(kiri), op, Box::new(self.parse_unary()?));
         }
@@ -580,11 +746,16 @@ pub enum CExpr {
 #[derive(Debug, Clone, Copy)]
 pub enum SlotSasaran { Lokal(usize), Global(usize) }
 
+/// Versi CExpr dari Jalur (AST mentah) -- resolved, indeksnya sudah CExpr (bukan Expr lagi).
+#[derive(Debug, Clone)]
+pub enum CJalur { Field(String), Indeks(CExpr) }
+
 #[derive(Debug, Clone)]
 pub enum CStmt {
     IngatGlobal(usize, CExpr), UbahGlobal(usize, CExpr),
     IngatLocal(usize, CExpr), UbahLocal(usize, CExpr),
     UbahFieldGlobal(usize, Vec<String>, CExpr), UbahFieldLocal(usize, Vec<String>, CExpr),
+    UbahJalurGlobal(usize, Vec<CJalur>, CExpr), UbahJalurLocal(usize, Vec<CJalur>, CExpr),
     Tampilkan(CExpr),
     Kalau(CExpr, Vec<(usize, CStmt)>, Option<Vec<(usize, CStmt)>>),
     Ulang(CExpr, Vec<(usize, CStmt)>),
@@ -595,6 +766,8 @@ pub enum CStmt {
     CobaLocal(Vec<(usize, CStmt)>, usize, Vec<(usize, CStmt)>),
     Kembalikan(CExpr),
     EkspresiStmt(CExpr),
+    Putus,
+    Lanjut,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -619,6 +792,11 @@ fn variabel_bebas_stmt(s: &Stmt, terikat: &mut std::collections::HashSet<String>
     match s {
         Stmt::Ingat(nama, _, e) => { variabel_bebas_expr(e, terikat, bebas); terikat.insert(nama.clone()); }
         Stmt::Ubah(nama, e) => { if !terikat.contains(nama) { bebas.insert(nama.clone()); } variabel_bebas_expr(e, terikat, bebas); }
+        Stmt::UbahJalur(nama, jalur, e) => {
+            if !terikat.contains(nama) { bebas.insert(nama.clone()); }
+            for j in jalur { if let Jalur::Indeks(idx) = j { variabel_bebas_expr(idx, terikat, bebas); } }
+            variabel_bebas_expr(e, terikat, bebas);
+        }
         Stmt::UbahField(nama, _, e) => { if !terikat.contains(nama) { bebas.insert(nama.clone()); } variabel_bebas_expr(e, terikat, bebas); }
         Stmt::BentukDef(..) | Stmt::Muat(_) => {}
         Stmt::Tampilkan(e) => variabel_bebas_expr(e, terikat, bebas),
@@ -641,6 +819,7 @@ fn variabel_bebas_stmt(s: &Stmt, terikat: &mut std::collections::HashSet<String>
             terikat.insert(var.clone());
             for (_, s) in bt { variabel_bebas_stmt(s, terikat, bebas); }
         }
+        Stmt::Putus | Stmt::Lanjut => {}
     }
 }
 
@@ -761,7 +940,7 @@ fn infer_tipe(e: &Expr, tipe_var: &HashMap<String, String>) -> Option<String> {
                     (Some("Angka"), Some("Desimal")) | (Some("Desimal"), Some("Angka")) | (Some("Desimal"), Some("Desimal")) => Some("Desimal".to_string()),
                     _ => None,
                 },
-                BinOp::Kurang | BinOp::Kali | BinOp::Bagi => match (tl.as_deref(), tr.as_deref()) {
+                BinOp::Kurang | BinOp::Kali | BinOp::Bagi | BinOp::Modulo => match (tl.as_deref(), tr.as_deref()) {
                     (Some("Angka"), Some("Angka")) => Some("Angka".to_string()),
                     (Some("Angka"), Some("Desimal")) | (Some("Desimal"), Some("Angka")) | (Some("Desimal"), Some("Desimal")) => Some("Desimal".to_string()),
                     _ => None,
@@ -797,10 +976,14 @@ pub struct Resolver {
     /// dari nama fungsi -> info parameter mana yang "flattened" (lihat CFungsi::param_flat).
     /// Dipakai saat meresolve PANGGILAN ke fungsi itu (bukan saat meresolve fungsi itu sendiri).
     param_flat_info: HashMap<String, Vec<Option<(String, Vec<String>)>>>,
+    /// Berapa lapis 'ulang'/'ulang setiap' yang sedang membungkus statement yang lagi
+    /// diresolve -- dipakai buat validasi 'putus'/'lanjut' cuma boleh dipakai di dalam loop.
+    /// TIDAK dinaikkan oleh 'ulang selaras' (evaluator terpisah, punya validasi sendiri).
+    loop_depth: usize,
 }
 
 impl Resolver {
-    pub fn new() -> Self { Resolver { global_slots: HashMap::new(), global_count: 0, fungsi_out: HashMap::new(), tipe_var: HashMap::new(), bentuk_skema: HashMap::new(), closure_counter: 0, param_flat_info: HashMap::new() } }
+    pub fn new() -> Self { Resolver { global_slots: HashMap::new(), global_count: 0, fungsi_out: HashMap::new(), tipe_var: HashMap::new(), bentuk_skema: HashMap::new(), closure_counter: 0, param_flat_info: HashMap::new(), loop_depth: 0 } }
 
     fn slot_global(&mut self, nama: &str) -> usize {
         if let Some(&i) = self.global_slots.get(nama) { i } else {
@@ -917,13 +1100,17 @@ impl Resolver {
             }
             Stmt::Ulang(cond, body) => {
                 let c = self.resolve_expr_global(cond)?;
+                self.loop_depth += 1;
                 let b = self.resolve_blok_global(body)?;
+                self.loop_depth -= 1;
                 Ok(CStmt::Ulang(c, b))
             }
             Stmt::UlangSetiap(var, e, body) => {
                 let ce = self.resolve_expr_global(e)?;
                 let slot = self.slot_global(var);
+                self.loop_depth += 1;
                 let b = self.resolve_blok_global(body)?;
+                self.loop_depth -= 1;
                 Ok(CStmt::UlangSetiapGlobal(slot, ce, b))
             }
             Stmt::UlangSelaras(var, e, body) => {
@@ -944,8 +1131,25 @@ impl Resolver {
                 let slot = *self.global_slots.get(nama).ok_or_else(|| format!("Variabel \"{}\" belum dideklarasikan dengan 'ingat'.", nama))?;
                 Ok(CStmt::UbahFieldGlobal(slot, field.clone(), ce))
             }
+            Stmt::UbahJalur(nama, jalur, e) => {
+                let ce = self.resolve_expr_global(e)?;
+                let cjalur: Vec<CJalur> = jalur.iter().map(|j| Ok(match j {
+                    Jalur::Field(f) => CJalur::Field(f.clone()),
+                    Jalur::Indeks(idx) => CJalur::Indeks(self.resolve_expr_global(idx)?),
+                })).collect::<Result<_, String>>()?;
+                let slot = *self.global_slots.get(nama).ok_or_else(|| format!("Variabel \"{}\" belum dideklarasikan dengan 'ingat'.", nama))?;
+                Ok(CStmt::UbahJalurGlobal(slot, cjalur, ce))
+            }
             Stmt::FungsiDef(..) | Stmt::BentukDef(..) => unreachable!(),
             Stmt::Muat(_) => Err("'muat' cuma boleh dipakai di level atas program (bukan di dalam kalau/ulang).".to_string()),
+            Stmt::Putus => {
+                if self.loop_depth == 0 { return Err("'putus' hanya boleh dipakai di dalam 'ulang' atau 'ulang setiap'.".to_string()); }
+                Ok(CStmt::Putus)
+            }
+            Stmt::Lanjut => {
+                if self.loop_depth == 0 { return Err("'lanjut' hanya boleh dipakai di dalam 'ulang' atau 'ulang setiap'.".to_string()); }
+                Ok(CStmt::Lanjut)
+            }
         }
     }
 
@@ -1113,7 +1317,7 @@ fn resolve_fungsi_umum(
         }
     }
     let param_count = local_count; // total SLOT (bukan parameter logis) yang diisi pemanggil
-    let mut lr = LocalResolver { local_slots, struct_params, local_count, tipe_var, slot_tipe, bentuk_skema, global_slots, param_flat_info, fungsi_out, closure_counter };
+    let mut lr = LocalResolver { local_slots, struct_params, local_count, tipe_var, slot_tipe, bentuk_skema, global_slots, param_flat_info, fungsi_out, closure_counter, loop_depth: 0 };
     let cbody = lr.resolve_block(body)?;
 
     let tipe_seragam: Option<TipeJit> = if param_count == 0 {
@@ -1158,6 +1362,8 @@ struct LocalResolver<'a> {
     /// closure yang didefinisikan DI DALAM fungsi ini juga bisa terdaftar dgn nama sintetis unik.
     fungsi_out: &'a mut HashMap<String, Rc<CFungsi>>,
     closure_counter: &'a mut usize,
+    /// Sama seperti Resolver::loop_depth (lihat catatan di sana), versi lokal buat badan fungsi.
+    loop_depth: usize,
 }
 
 impl<'a> LocalResolver<'a> {
@@ -1228,11 +1434,19 @@ impl<'a> LocalResolver<'a> {
                 let e = match eb { Some(b) => Some(self.resolve_block(b)?), None => None };
                 Ok(CStmt::Kalau(c, t, e))
             }
-            Stmt::Ulang(cond, body) => { let c = self.resolve_expr(cond)?; let b = self.resolve_block(body)?; Ok(CStmt::Ulang(c, b)) }
+            Stmt::Ulang(cond, body) => {
+                let c = self.resolve_expr(cond)?;
+                self.loop_depth += 1;
+                let b = self.resolve_block(body)?;
+                self.loop_depth -= 1;
+                Ok(CStmt::Ulang(c, b))
+            }
             Stmt::UlangSetiap(var, e, body) => {
                 let ce = self.resolve_expr(e)?;
                 let slot = self.slot_local(var);
+                self.loop_depth += 1;
                 let b = self.resolve_block(body)?;
+                self.loop_depth -= 1;
                 Ok(CStmt::UlangSetiapLocal(slot, ce, b))
             }
             Stmt::UlangSelaras(var, e, body) => {
@@ -1258,9 +1472,31 @@ impl<'a> LocalResolver<'a> {
                     Err(format!("Variabel \"{}\" belum dideklarasikan dengan 'ingat'.", nama))
                 }
             }
+            Stmt::UbahJalur(nama, jalur, e) => {
+                let ce = self.resolve_expr(e)?;
+                let cjalur: Vec<CJalur> = jalur.iter().map(|j| Ok(match j {
+                    Jalur::Field(f) => CJalur::Field(f.clone()),
+                    Jalur::Indeks(idx) => CJalur::Indeks(self.resolve_expr(idx)?),
+                })).collect::<Result<_, String>>()?;
+                if let Some(&slot) = self.local_slots.get(nama) {
+                    Ok(CStmt::UbahJalurLocal(slot, cjalur, ce))
+                } else if let Some(&slot) = self.global_slots.get(nama) {
+                    Ok(CStmt::UbahJalurGlobal(slot, cjalur, ce))
+                } else {
+                    Err(format!("Variabel \"{}\" belum dideklarasikan dengan 'ingat'.", nama))
+                }
+            }
             Stmt::FungsiDef(..) => Err("Fungsi di dalam fungsi belum didukung di Fase ini.".to_string()),
             Stmt::BentukDef(..) => Err("'bentuk' hanya boleh dideklarasikan di level atas program.".to_string()),
             Stmt::Muat(_) => Err("'muat' cuma boleh dipakai di level atas program (bukan di dalam fungsi).".to_string()),
+            Stmt::Putus => {
+                if self.loop_depth == 0 { return Err("'putus' hanya boleh dipakai di dalam 'ulang' atau 'ulang setiap'.".to_string()); }
+                Ok(CStmt::Putus)
+            }
+            Stmt::Lanjut => {
+                if self.loop_depth == 0 { return Err("'lanjut' hanya boleh dipakai di dalam 'ulang' atau 'ulang setiap'.".to_string()); }
+                Ok(CStmt::Lanjut)
+            }
         }
     }
     fn resolve_expr(&mut self, e: &Expr) -> Result<CExpr, String> {
@@ -1509,6 +1745,15 @@ fn eval_binop(l: Value, op: BinOp, r: Value) -> Result<Value, String> {
                 _ => Err(format!("Operator '/' hanya berlaku untuk Angka, ditemukan {} dan {}", l, r)),
             },
         },
+        Modulo => match (&l, &r) {
+            (Value::Angka(_), Value::Angka(0)) => Err("Tidak bisa modulo dengan nol.".to_string()),
+            (Value::Angka(a), Value::Angka(b)) => Ok(Value::Angka(a % b)),
+            _ => match (ke_desimal(&l), ke_desimal(&r)) {
+                (Some(_), Some(b)) if b == 0.0 => Err("Tidak bisa modulo dengan nol.".to_string()),
+                (Some(a), Some(b)) => Ok(Value::Desimal(a % b)),
+                _ => Err(format!("Operator '%' hanya berlaku untuk Angka, ditemukan {} dan {}", l, r)),
+            },
+        },
         SamaDengan => Ok(Value::Bool(nilai_sama(&l, &r))),
         TidakSama => Ok(Value::Bool(!nilai_sama(&l, &r))),
         LebihBesar => bandingkan(l, r, |a, b| a > b),
@@ -1530,6 +1775,33 @@ fn indeks_value(t: Value, i: Value) -> Result<Value, String> {
             entries.iter().find(|(kk, _)| kk.as_str() == k.as_ref()).map(|(_, v)| v.clone()).ok_or_else(|| format!("Kunci \"{}\" tidak ditemukan di Peta.", k))
         }
         (t, i) => Err(format!("Tidak bisa mengindeks {} dengan {}", t, i)),
+    }
+}
+
+/// Tulis satu elemen Daftar/Peta -- versi "tulis" dari indeks_value, immutable/clone-on-write
+/// (sama seperti SetField/Instans). Dipakai Instr::SetIndeks. Lihat catatan lengkap di
+/// definisi Instr::SetIndeks soal semantik Peta (insert-or-update) vs Daftar (harus in-bound).
+fn set_indeks_value(t: Value, i: Value, nilai: Value) -> Result<Value, String> {
+    match (t, i) {
+        (Value::Daftar(d), Value::Angka(n)) => {
+            if n < 0 { return Err(format!("Indeks tidak boleh negatif: {}", n)); }
+            let idx = n as usize;
+            if idx >= d.len() {
+                return Err(format!("Indeks {} di luar jangkauan (panjang daftar: {}) -- tidak bisa mengubah elemen yang belum ada, pakai fungsi bawaan 'tambah()' buat menambah elemen baru.", n, d.len()));
+            }
+            let mut baru = (*d).clone();
+            baru[idx] = nilai;
+            Ok(Value::Daftar(Rc::new(baru)))
+        }
+        (Value::Peta(entries), Value::Teks(k)) => {
+            let mut baru = (*entries).clone();
+            match baru.iter_mut().find(|(kk, _)| kk.as_str() == k.as_ref()) {
+                Some(slot) => slot.1 = nilai,
+                None => baru.push((k.to_string(), nilai)), // kunci baru -> insert (bukan error), konsisten dgn ekspektasi peta dinamis
+            }
+            Ok(Value::Peta(Rc::new(baru)))
+        }
+        (t, i) => Err(format!("Tidak bisa mengubah indeks [{}] pada nilai {} (bukan Daftar dgn indeks Angka atau Peta dgn kunci Teks).", i, t)),
     }
 }
 
@@ -1571,6 +1843,13 @@ fn optimisasi_blok(stmts: Vec<(usize, CStmt)>) -> Vec<(usize, CStmt)> {
     keluar
 }
 
+fn optimisasi_jalur(jalur: Vec<CJalur>) -> Vec<CJalur> {
+    jalur.into_iter().map(|j| match j {
+        CJalur::Field(f) => CJalur::Field(f),
+        CJalur::Indeks(e) => CJalur::Indeks(optimisasi_expr(e)),
+    }).collect()
+}
+
 fn optimisasi_stmt(s: CStmt) -> CStmt {
     match s {
         CStmt::IngatGlobal(slot, e) => CStmt::IngatGlobal(slot, optimisasi_expr(e)),
@@ -1579,6 +1858,8 @@ fn optimisasi_stmt(s: CStmt) -> CStmt {
         CStmt::UbahLocal(slot, e) => CStmt::UbahLocal(slot, optimisasi_expr(e)),
         CStmt::UbahFieldGlobal(slot, path, e) => CStmt::UbahFieldGlobal(slot, path, optimisasi_expr(e)),
         CStmt::UbahFieldLocal(slot, path, e) => CStmt::UbahFieldLocal(slot, path, optimisasi_expr(e)),
+        CStmt::UbahJalurGlobal(slot, jalur, e) => CStmt::UbahJalurGlobal(slot, optimisasi_jalur(jalur), optimisasi_expr(e)),
+        CStmt::UbahJalurLocal(slot, jalur, e) => CStmt::UbahJalurLocal(slot, optimisasi_jalur(jalur), optimisasi_expr(e)),
         CStmt::Tampilkan(e) => CStmt::Tampilkan(optimisasi_expr(e)),
         CStmt::Kalau(c, tb, eb) => CStmt::Kalau(optimisasi_expr(c), optimisasi_blok(tb), eb.map(optimisasi_blok)),
         CStmt::Ulang(c, b) => CStmt::Ulang(optimisasi_expr(c), optimisasi_blok(b)),
@@ -1591,6 +1872,8 @@ fn optimisasi_stmt(s: CStmt) -> CStmt {
         CStmt::CobaLocal(bc, slot, bt) => CStmt::CobaLocal(optimisasi_blok(bc), slot, optimisasi_blok(bt)),
         CStmt::Kembalikan(e) => CStmt::Kembalikan(optimisasi_expr(e)),
         CStmt::EkspresiStmt(e) => CStmt::EkspresiStmt(optimisasi_expr(e)),
+        CStmt::Putus => CStmt::Putus,
+        CStmt::Lanjut => CStmt::Lanjut,
     }
 }
 
@@ -1630,6 +1913,7 @@ fn lipat_binop(l: &CExpr, op: BinOp, r: &CExpr) -> Option<CExpr> {
             Kurang => Some(CExpr::Angka(a.wrapping_sub(*b))),
             Kali => Some(CExpr::Angka(a.wrapping_mul(*b))),
             Bagi => if *b != 0 { Some(CExpr::Angka(a / b)) } else { None }, // biarkan runtime yang lempar error div-nol, lengkap dgn baris
+            Modulo => if *b != 0 { Some(CExpr::Angka(a % b)) } else { None }, // sama, biarkan runtime lempar error modulo-nol
             SamaDengan => Some(CExpr::Bool(a == b)),
             TidakSama => Some(CExpr::Bool(a != b)),
             LebihBesar => Some(CExpr::Bool(a > b)),
@@ -1646,6 +1930,7 @@ fn lipat_binop(l: &CExpr, op: BinOp, r: &CExpr) -> Option<CExpr> {
                 Kurang => Some(CExpr::Desimal(a - b)),
                 Kali => Some(CExpr::Desimal(a * b)),
                 Bagi => if b != 0.0 { Some(CExpr::Desimal(a / b)) } else { None },
+                Modulo => if b != 0.0 { Some(CExpr::Desimal(a % b)) } else { None },
                 SamaDengan => Some(CExpr::Bool(a == b)),
                 TidakSama => Some(CExpr::Bool(a != b)),
                 LebihBesar => Some(CExpr::Bool(a > b)),
@@ -1687,6 +1972,19 @@ enum Instr {
     MakeDaftar(usize),
     MakePeta(Vec<String>),
     Indeks,
+    /// Sama seperti Indeks (baca container[idx]), TAPI nilai idx-nya TIDAK dibuang -- ditaruh
+    /// balik ke stack di bawah hasil baca. Stack sebelum: [..., container, idx]. Stack
+    /// sesudah: [..., idx, elemen]. Dipakai KHUSUS oleh Compiler::compile_set_jalur buat
+    /// "descend" ke level lebih dalam pas assignment berantai (mis. 'matriks[0][1] = x'),
+    /// karena idx level ini masih dibutuhkan lagi belakangan buat Instr::SetIndeks di level
+    /// yang sama -- lihat komentar lengkap di compile_set_jalur.
+    IndeksTahanIdx,
+    /// Tulis satu elemen Daftar/Peta, hasilkan container BARU (immutable/clone-on-write,
+    /// konsisten dengan SetField). Stack sebelum: [..., container, idx, nilai_baru]. Stack
+    /// sesudah: [..., container_baru]. Peta: kunci yang belum ada otomatis ditambahkan
+    /// (insert-or-update); Daftar: indeks harus sudah ada (di luar jangkauan -> error runtime,
+    /// TIDAK auto-extend -- pakai fungsi bawaan 'tambah()' buat menambah elemen baru).
+    SetIndeks,
     AmbilField(String),
     BuatInstans(String, Vec<String>),
     SetField(String),
@@ -1710,6 +2008,12 @@ enum Instr {
     MulaiCobaLocal(usize, usize),
     MulaiCobaGlobal(usize, usize),
     SelesaiCoba,
+    /// Tutup PAKSA satu handler 'coba/tangkap' teratas tanpa menjalankan blok 'tangkap'-nya --
+    /// dipakai HANYA saat 'putus'/'lanjut' melompat keluar dari dalam blok 'coba' yang masih
+    /// aktif di tengah loop (lihat Compiler::coba_depth). Beda dari SelesaiCoba (yang dieksekusi
+    /// di akhir jalur normal blok coba): ini dipicu jalur lompatan awal, jadi handler_stack
+    /// harus ditutup manual di sini supaya tidak "bocor" ikut aktif ke kode setelah loop.
+    TutupHandler,
     TandaiBaris(usize),
     Kembalikan,
 }
@@ -1741,13 +2045,42 @@ struct VMFungsi {
     param_flat: Vec<Option<Vec<String>>>,
 }
 
+/// Konteks satu loop yang lagi dikompilasi -- dipush saat masuk 'ulang'/'ulang setiap',
+/// dipop saat keluar. Ditumpuk (Vec) supaya loop bersarang tetap benar: 'putus'/'lanjut'
+/// selalu merujuk loop TERDEKAT (puncak tumpukan).
+struct LoopCtx {
+    /// Alamat instruksi tujuan 'lanjut' -- sudah pasti diketahui saat body loop mulai
+    /// dikompilasi (titik cek kondisi/iterasi), jadi 'lanjut' langsung emit Lompat ke sini
+    /// tanpa perlu backpatch.
+    continue_target: usize,
+    /// Indeks tiap instruksi placeholder Instr::Lompat(0) yang dihasilkan 'putus' -- alamat
+    /// aslinya (akhir loop) belum diketahui sampai seluruh body selesai dikompilasi, jadi
+    /// di-backpatch belakangan (sama seperti pola if/else/coba yang sudah ada).
+    break_patches: Vec<usize>,
+    /// Nilai Compiler::coba_depth pada saat loop ini mulai -- dipakai 'putus'/'lanjut' buat
+    /// menghitung berapa banyak Instr::TutupHandler perlu disisipkan sebelum lompat (lihat
+    /// catatan di Compiler::coba_depth).
+    coba_depth_saat_masuk: usize,
+}
+
 /// Compiler: mengubah CStmt/CExpr (AST yang sudah di-resolve ke slot) menjadi instruksi bytecode flat.
 /// Ini dikerjakan SEKALI di awal (bukan tiap eksekusi), lalu VM tinggal menjalankan array instruksi
 /// lewat loop dispatch yang rapat -- jauh lebih cepat dari menyusuri pohon AST berulang-ulang.
-struct Compiler { konstanta: Vec<Value>, fungsi_index: HashMap<String, usize> }
+struct Compiler {
+    konstanta: Vec<Value>, fungsi_index: HashMap<String, usize>,
+    loop_stack: Vec<LoopCtx>,
+    /// Berapa lapis blok 'coba' aktif yang SEDANG dikompilasi (bukan cuma dilewati) --
+    /// dinaikkan tepat sebelum compile_blok(badan_coba), diturunkan tepat sesudahnya (badan
+    /// 'tangkap' TIDAK dihitung karena try-nya sudah selesai/handler sudah dipop di titik itu).
+    /// Kalau 'putus'/'lanjut' terjadi pas nilai ini lebih besar dari LoopCtx::coba_depth_saat_masuk
+    /// loop yang dituju, berarti dia melompat keluar dari tengah 'coba' aktif -- perlu
+    /// Instr::TutupHandler sebanyak selisihnya, biar handler_stack VM tidak bocor ikut aktif
+    /// ke kode setelah loop (lihat catatan TutupHandler).
+    coba_depth: usize,
+}
 
 impl Compiler {
-    fn new(fungsi_index: HashMap<String, usize>) -> Self { Compiler { konstanta: Vec::new(), fungsi_index } }
+    fn new(fungsi_index: HashMap<String, usize>) -> Self { Compiler { konstanta: Vec::new(), fungsi_index, loop_stack: Vec::new(), coba_depth: 0 } }
 
     fn tambah_konstanta(&mut self, v: Value) -> usize {
         self.konstanta.push(v);
@@ -1788,6 +2121,48 @@ impl Compiler {
         self.compile_expr(value, out);
         for f in path.iter().rev() {
             out.push(Instr::SetField(f.clone()));
+        }
+    }
+
+    /// Compile assignment berantai (Field/Indeks campur, mis. 'a.b[0].c = x' atau
+    /// 'matriks[0][1] = x') -- PRAKONDISI: nilai container buat level jalur[0] SUDAH ada di
+    /// puncak stack sebelum instruksi hasil fungsi ini mulai dijalankan (caller yang push).
+    /// POSTKONDISI: puncak stack diganti container level jalur[0] yang BARU (hasil delta
+    /// diterapkan) -- tinggi stack di bawahnya tidak berubah. Sifat "cuma ganti puncak" ini
+    /// yang bikin pemanggilan rekursif ke level lebih dalam bisa langsung disisipkan begitu
+    /// saja di tengah, tanpa perlu tracking offset macam-macam.
+    ///
+    /// Field, non-leaf (masih ada level di bawahnya):
+    ///   [C] --Dup--> [C,C] --AmbilField(f)--> [C,INNER] --rekursi--> [C,NEW_INNER] --SetField(f)--> [NEW_C]
+    /// Indeks, non-leaf:
+    ///   [C] --Dup--> [C,C] --idx--> [C,C,IDX] --IndeksTahanIdx--> [C,IDX,INNER] --rekursi--> [C,IDX,NEW_INNER] --SetIndeks--> [NEW_C]
+    /// (leaf, jalur.len()==1, tinggal compile nilai baru & SetField/SetIndeks langsung)
+    fn compile_set_jalur(&mut self, jalur: &[CJalur], value: &CExpr, out: &mut Vec<Instr>) {
+        match &jalur[0] {
+            CJalur::Field(f) => {
+                if jalur.len() == 1 {
+                    self.compile_expr(value, out);
+                    out.push(Instr::SetField(f.clone()));
+                } else {
+                    out.push(Instr::Dup);
+                    out.push(Instr::AmbilField(f.clone()));
+                    self.compile_set_jalur(&jalur[1..], value, out);
+                    out.push(Instr::SetField(f.clone()));
+                }
+            }
+            CJalur::Indeks(idx) => {
+                if jalur.len() == 1 {
+                    self.compile_expr(idx, out);
+                    self.compile_expr(value, out);
+                    out.push(Instr::SetIndeks);
+                } else {
+                    out.push(Instr::Dup);
+                    self.compile_expr(idx, out);
+                    out.push(Instr::IndeksTahanIdx);
+                    self.compile_set_jalur(&jalur[1..], value, out);
+                    out.push(Instr::SetIndeks);
+                }
+            }
         }
     }
 
@@ -1861,6 +2236,16 @@ impl Compiler {
                 self.compile_ubah_field_path(path, e, out);
                 out.push(Instr::StoreLocal(*slot));
             }
+            CStmt::UbahJalurGlobal(slot, jalur, e) => {
+                out.push(Instr::LoadGlobal(*slot));
+                self.compile_set_jalur(jalur, e, out);
+                out.push(Instr::StoreGlobal(*slot));
+            }
+            CStmt::UbahJalurLocal(slot, jalur, e) => {
+                out.push(Instr::LoadLocal(*slot));
+                self.compile_set_jalur(jalur, e, out);
+                out.push(Instr::StoreLocal(*slot));
+            }
             CStmt::Tampilkan(e) => { self.compile_expr(e, out); out.push(Instr::Tampilkan); }
             CStmt::Kalau(cond, tb, eb) => {
                 self.compile_expr(cond, out);
@@ -1885,30 +2270,39 @@ impl Compiler {
                 self.compile_expr(cond, out);
                 let lompat_salah_idx = out.len();
                 out.push(Instr::LompatJikaSalah(0));
+                self.loop_stack.push(LoopCtx { continue_target: mulai, break_patches: Vec::new(), coba_depth_saat_masuk: self.coba_depth });
                 self.compile_blok(body, out);
+                let ctx = self.loop_stack.pop().unwrap();
                 out.push(Instr::Lompat(mulai));
                 let akhir = out.len();
                 out[lompat_salah_idx] = Instr::LompatJikaSalah(akhir);
+                for idx in ctx.break_patches { out[idx] = Instr::Lompat(akhir); }
             }
             CStmt::UlangSetiapGlobal(slot, e, body) => {
                 self.compile_expr(e, out);
                 out.push(Instr::IterMulai);
                 let mulai = out.len();
                 out.push(Instr::IterLanjutGlobal(*slot, 0));
+                self.loop_stack.push(LoopCtx { continue_target: mulai, break_patches: Vec::new(), coba_depth_saat_masuk: self.coba_depth });
                 self.compile_blok(body, out);
+                let ctx = self.loop_stack.pop().unwrap();
                 out.push(Instr::Lompat(mulai));
                 let akhir = out.len();
                 out[mulai] = Instr::IterLanjutGlobal(*slot, akhir);
+                for idx in ctx.break_patches { out[idx] = Instr::Lompat(akhir); }
             }
             CStmt::UlangSetiapLocal(slot, e, body) => {
                 self.compile_expr(e, out);
                 out.push(Instr::IterMulai);
                 let mulai = out.len();
                 out.push(Instr::IterLanjutLocal(*slot, 0));
+                self.loop_stack.push(LoopCtx { continue_target: mulai, break_patches: Vec::new(), coba_depth_saat_masuk: self.coba_depth });
                 self.compile_blok(body, out);
+                let ctx = self.loop_stack.pop().unwrap();
                 out.push(Instr::Lompat(mulai));
                 let akhir = out.len();
                 out[mulai] = Instr::IterLanjutLocal(*slot, akhir);
+                for idx in ctx.break_patches { out[idx] = Instr::Lompat(akhir); }
             }
             CStmt::UlangSelaras(e, var, body) => {
                 self.compile_expr(e, out);
@@ -1917,7 +2311,9 @@ impl Compiler {
             CStmt::CobaGlobal(badan_coba, slot, badan_tangkap) => {
                 let mulai_idx = out.len();
                 out.push(Instr::MulaiCobaGlobal(0, *slot));
+                self.coba_depth += 1;
                 self.compile_blok(badan_coba, out);
+                self.coba_depth -= 1;
                 out.push(Instr::SelesaiCoba);
                 let lompat_akhir_idx = out.len();
                 out.push(Instr::Lompat(0));
@@ -1930,7 +2326,9 @@ impl Compiler {
             CStmt::CobaLocal(badan_coba, slot, badan_tangkap) => {
                 let mulai_idx = out.len();
                 out.push(Instr::MulaiCobaLocal(0, *slot));
+                self.coba_depth += 1;
                 self.compile_blok(badan_coba, out);
+                self.coba_depth -= 1;
                 out.push(Instr::SelesaiCoba);
                 let lompat_akhir_idx = out.len();
                 out.push(Instr::Lompat(0));
@@ -1942,6 +2340,18 @@ impl Compiler {
             }
             CStmt::Kembalikan(e) => { self.compile_expr(e, out); out.push(Instr::Kembalikan); }
             CStmt::EkspresiStmt(e) => { self.compile_expr(e, out); out.push(Instr::Pop); }
+            CStmt::Putus => {
+                let ctx = self.loop_stack.last().expect("resolver sudah memvalidasi 'putus' cuma ada di dalam loop");
+                for _ in ctx.coba_depth_saat_masuk..self.coba_depth { out.push(Instr::TutupHandler); }
+                let idx = out.len();
+                out.push(Instr::Lompat(0));
+                self.loop_stack.last_mut().unwrap().break_patches.push(idx);
+            }
+            CStmt::Lanjut => {
+                let ctx = self.loop_stack.last().expect("resolver sudah memvalidasi 'lanjut' cuma ada di dalam loop");
+                for _ in ctx.coba_depth_saat_masuk..self.coba_depth { out.push(Instr::TutupHandler); }
+                out.push(Instr::Lompat(ctx.continue_target));
+            }
         }
     }
 }
@@ -2235,6 +2645,7 @@ impl<'a, 'b> KompilerBadanIr<'a, 'b> {
                         }
                     },
                     Bagi => unreachable!("Bagi seharusnya sudah disaring cek_jit_murni_nilai"),
+                    Modulo => unreachable!("Modulo seharusnya sudah disaring cek_jit_murni_nilai (butuh cek pembagi-nol saat runtime, sama seperti Bagi -- lihat cek_jit_murni_nilai)"),
                 };
                 self.set(*dst, hasil);
                 false
@@ -2549,6 +2960,15 @@ fn eval_binop_selaras(l: ValorSelaras, op: BinOp, r: ValorSelaras) -> Result<Val
                 (Some(_), Some(b)) if b == 0.0 => Err("Tidak bisa membagi dengan nol.".to_string()),
                 (Some(a), Some(b)) => Ok(ValorSelaras::Desimal(a / b)),
                 _ => Err(format!("Operator '/' hanya untuk Angka, ditemukan {} dan {}", l, r)),
+            },
+        },
+        Modulo => match (&l, &r) {
+            (ValorSelaras::Angka(_), ValorSelaras::Angka(0)) => Err("Tidak bisa modulo dengan nol.".to_string()),
+            (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => Ok(ValorSelaras::Angka(a % b)),
+            _ => match (ke_desimal_selaras(&l), ke_desimal_selaras(&r)) {
+                (Some(_), Some(b)) if b == 0.0 => Err("Tidak bisa modulo dengan nol.".to_string()),
+                (Some(a), Some(b)) => Ok(ValorSelaras::Desimal(a % b)),
+                _ => Err(format!("Operator '%' hanya untuk Angka, ditemukan {} dan {}", l, r)),
             },
         },
         SamaDengan | TidakSama | LebihBesar | LebihBesarSama | LebihKecil | LebihKecilSama => {
@@ -2893,6 +3313,21 @@ fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_
                     state.stack.push(indeks_value(t, i)?);
                     *pc += 1;
                 }
+                Instr::IndeksTahanIdx => {
+                    let i = state.stack.pop().unwrap();
+                    let t = state.stack.pop().unwrap();
+                    let v = indeks_value(t, i.clone())?;
+                    state.stack.push(i);
+                    state.stack.push(v);
+                    *pc += 1;
+                }
+                Instr::SetIndeks => {
+                    let nilai_baru = state.stack.pop().unwrap();
+                    let i = state.stack.pop().unwrap();
+                    let t = state.stack.pop().unwrap();
+                    state.stack.push(set_indeks_value(t, i, nilai_baru)?);
+                    *pc += 1;
+                }
                 Instr::AmbilField(field) => {
                     let t = state.stack.pop().unwrap();
                     match &t {
@@ -3115,6 +3550,12 @@ fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_
                 }
                 Instr::SelesaiCoba => {
                     state.handler_stack.pop(); // blok 'coba' selesai TANPA error, buang penangannya
+                    *pc += 1;
+                }
+                Instr::TutupHandler => {
+                    // Sama seperti SelesaiCoba (pop satu handler), tapi dipicu 'putus'/'lanjut'
+                    // yang melompat keluar tengah blok 'coba' -- lihat catatan di definisi Instr.
+                    state.handler_stack.pop();
                     *pc += 1;
                 }
                 Instr::Kembalikan => {
@@ -3891,13 +4332,13 @@ fn prec_binop(op: BinOp) -> u8 {
         SamaDengan | TidakSama => 3,
         LebihBesar | LebihBesarSama | LebihKecil | LebihKecilSama => 4,
         Tambah | Kurang => 5,
-        Kali | Bagi => 6,
+        Kali | Bagi | Modulo => 6,
     }
 }
 fn str_binop(op: BinOp) -> &'static str {
     use BinOp::*;
     match op {
-        Tambah => "+", Kurang => "-", Kali => "*", Bagi => "/",
+        Tambah => "+", Kurang => "-", Kali => "*", Bagi => "/", Modulo => "%",
         SamaDengan => "==", TidakSama => "!=",
         LebihBesar => ">", LebihBesarSama => ">=", LebihKecil => "<", LebihKecilSama => "<=",
         Dan => "dan", Atau => "atau",
@@ -4018,6 +4459,21 @@ fn cetak_stmt_fmt(s: &Stmt, indent: usize, komentar: &PetaKomentar, terpakai: &m
             out.push_str(" = ");
             out.push_str(&cetak_expr_fmt(e, indent, 0, komentar, terpakai));
         }
+        Stmt::UbahJalur(nama, jalur, e) => {
+            out.push_str(nama);
+            for j in jalur {
+                match j {
+                    Jalur::Field(f) => { out.push('.'); out.push_str(f); }
+                    Jalur::Indeks(idx) => {
+                        out.push('[');
+                        out.push_str(&cetak_expr_fmt(idx, indent, 0, komentar, terpakai));
+                        out.push(']');
+                    }
+                }
+            }
+            out.push_str(" = ");
+            out.push_str(&cetak_expr_fmt(e, indent, 0, komentar, terpakai));
+        }
         Stmt::BentukDef(nama, fields) => {
             out.push_str("bentuk ");
             out.push_str(nama);
@@ -4042,10 +4498,19 @@ fn cetak_stmt_fmt(s: &Stmt, indent: usize, komentar: &PetaKomentar, terpakai: &m
             out.push_str(&INDENT_FORMAT.repeat(indent));
             out.push('}');
             if let Some(eb) = eb {
-                out.push_str(" lainnya {\n");
-                cetak_blok_fmt(eb, indent + 1, komentar, terpakai, out);
-                out.push_str(&INDENT_FORMAT.repeat(indent));
-                out.push('}');
+                // Rantai 'lainnya kalau' didesugar parser jadi blok satu-statement berisi
+                // Stmt::Kalau lagi (lihat parse_stmt) -- deteksi pola itu di sini supaya
+                // formatter mencetaknya balik sebagai 'lainnya kalau (...)', bukan
+                // 'lainnya { kalau (...) { ... } }' yang secara makna sama tapi bukan gaya asli.
+                if let [(_, Stmt::Kalau(..))] = eb.as_slice() {
+                    out.push_str(" lainnya ");
+                    cetak_stmt_fmt(&eb[0].1, indent, komentar, terpakai, out);
+                } else {
+                    out.push_str(" lainnya {\n");
+                    cetak_blok_fmt(eb, indent + 1, komentar, terpakai, out);
+                    out.push_str(&INDENT_FORMAT.repeat(indent));
+                    out.push('}');
+                }
             }
         }
         Stmt::Ulang(cond, body) => {
@@ -4088,6 +4553,8 @@ fn cetak_stmt_fmt(s: &Stmt, indent: usize, komentar: &PetaKomentar, terpakai: &m
         }
         Stmt::Kembalikan(e) => { out.push_str("kembalikan "); out.push_str(&cetak_expr_fmt(e, indent, 0, komentar, terpakai)); }
         Stmt::EkspresiStmt(e) => out.push_str(&cetak_expr_fmt(e, indent, 0, komentar, terpakai)),
+        Stmt::Putus => out.push_str("putus"),
+        Stmt::Lanjut => out.push_str("lanjut"),
         Stmt::Coba(bc, var, bt) => {
             out.push_str("coba {\n");
             cetak_blok_fmt(bc, indent + 1, komentar, terpakai, out);
@@ -4613,8 +5080,12 @@ impl<'a> IrLower<'a> {
             CStmt::IngatLocal(slot, e) | CStmt::UbahLocal(slot, e) => {
                 self.lower_expr_ke(e, out, Some(*slot as u32));
             }
-            CStmt::UbahFieldGlobal(_, _, _) | CStmt::UbahFieldLocal(_, _, _) => {
+            CStmt::UbahFieldGlobal(_, _, _) | CStmt::UbahFieldLocal(_, _, _)
+            | CStmt::UbahJalurGlobal(_, _, _) | CStmt::UbahJalurLocal(_, _, _) => {
                 // Escape hatch yang sama seperti SimpanLaluField -- lihat catatan di atas.
+                // UbahJalur (assignment via indeks) AMAN lewat sini karena compile_set_jalur
+                // cuma menghasilkan instruksi lurus (Dup/Indeks/IndeksTahanIdx/SetField/
+                // SetIndeks) TANPA lompatan internal apa pun -- persis prasyarat Legacy.
                 let mut kode = Vec::new();
                 self.kompiler.compile_stmt(s, &mut kode);
                 out.push(IrInstr::Legacy(kode, None));
@@ -4715,6 +5186,14 @@ impl<'a> IrLower<'a> {
             }
             CStmt::Kembalikan(e) => { let (r, _) = self.lower_expr(e, out); out.push(IrInstr::Kembalikan(r)); }
             CStmt::EkspresiStmt(e) => { self.lower_expr(e, out); }
+            CStmt::Putus | CStmt::Lanjut => {
+                // KETERBATASAN SAAT INI: jalur 'via-ir' (dipakai `isoteri via-ir` dan AOT lewat
+                // `isoteri bangun`) belum mengimplementasikan 'putus'/'lanjut'. Eksekusi normal
+                // (`isoteri jalankan`/`isoteri uji`/`isoteri ekspor-web`) TIDAK lewat sini sama
+                // sekali -- itu semua langsung pakai Compiler (lihat jalankan_berkas), jadi sudah
+                // didukung penuh. Panik di sini jelas lebih baik daripada diam-diam salah lompat.
+                panic!("'putus'/'lanjut' belum didukung di jalur eksperimental 'via-ir' (dipakai 'isoteri via-ir' dan 'isoteri bangun'). Jalankan programnya lewat 'isoteri jalankan' (mode biasa) untuk sekarang -- lihat docs/KETERBATASAN.md.");
+            }
         }
     }
 }
@@ -4729,7 +5208,7 @@ fn tipe_hasil_binop(op: BinOp, l: IrType, r: IrType) -> IrType {
             if l != IrType::Dinamis && r != IrType::Dinamis { IrType::Bool } else { IrType::Dinamis }
         }
         Tambah if l == IrType::Teks || r == IrType::Teks => IrType::Teks,
-        Tambah | Kurang | Kali | Bagi => match (l, r) {
+        Tambah | Kurang | Kali | Bagi | Modulo => match (l, r) {
             (IrType::Angka, IrType::Angka) => IrType::Angka,
             (IrType::Angka, IrType::Desimal) | (IrType::Desimal, IrType::Angka) | (IrType::Desimal, IrType::Desimal) => IrType::Desimal,
             _ => IrType::Dinamis,
@@ -5104,7 +5583,7 @@ fn value_ke_json(v: &Value) -> serde_json::Value {
 fn binop_ke_str(op: BinOp) -> &'static str {
     use BinOp::*;
     match op {
-        Tambah => "Tambah", Kurang => "Kurang", Kali => "Kali", Bagi => "Bagi",
+        Tambah => "Tambah", Kurang => "Kurang", Kali => "Kali", Bagi => "Bagi", Modulo => "Modulo",
         SamaDengan => "SamaDengan", TidakSama => "TidakSama",
         LebihBesar => "LebihBesar", LebihBesarSama => "LebihBesarSama",
         LebihKecil => "LebihKecil", LebihKecilSama => "LebihKecilSama",
@@ -5133,6 +5612,8 @@ fn instr_ke_json(instr: &Instr) -> Result<serde_json::Value, String> {
         Instr::MakeDaftar(n) => json!(["MakeDaftar", n]),
         Instr::MakePeta(kunci) => json!(["MakePeta", kunci]),
         Instr::Indeks => json!(["Indeks"]),
+        Instr::IndeksTahanIdx => json!(["IndeksTahanIdx"]),
+        Instr::SetIndeks => json!(["SetIndeks"]),
         Instr::AmbilField(f) => json!(["AmbilField", f]),
         Instr::BuatInstans(nama, fields) => json!(["BuatInstans", nama, fields]),
         Instr::SetField(f) => json!(["SetField", f]),
@@ -5152,6 +5633,7 @@ fn instr_ke_json(instr: &Instr) -> Result<serde_json::Value, String> {
         Instr::MulaiCobaLocal(target, slot) => json!(["MulaiCobaLocal", target, slot]),
         Instr::MulaiCobaGlobal(target, slot) => json!(["MulaiCobaGlobal", target, slot]),
         Instr::SelesaiCoba => json!(["SelesaiCoba"]),
+        Instr::TutupHandler => json!(["TutupHandler"]),
         Instr::Kembalikan => json!(["Kembalikan"]),
     })
 }
