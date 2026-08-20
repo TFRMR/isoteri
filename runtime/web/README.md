@@ -106,13 +106,18 @@ dom_tambah_anak(judul, baru)                 catatan: appendChild
 dom_hapus(baru)                              catatan: .remove()
 ```
 
-**Event** -- konvensi SAMA seperti `petakan`/`saring`/`urutkan`: nama
-fungsi penangan lewat Teks, bukan referensi first-class (bahasa belum
-punya sintaks buat itu -- lihat catatan di `IsoteriVM.panggilDom`):
+**Event** -- bisa closure (dengan capture) ATAU nama fungsi lewat Teks, dan
+sekarang dapat SATU argumen opsional berisi data event (backward-compatible
+penuh dengan handler 0-parameter lama):
 ```isoteri
-fungsi ketika_diklik() { tampilkan "Diklik!" }
-dom_ketika(tombol, "klik", "ketika_diklik")
+dom_ketika(tombol, "klik", fungsi() { tampilkan "Diklik!" })      catatan: 0 parameter, gaya lama
+dom_ketika(input, "input", fungsi(e) { tampilkan e.nilai })       catatan: 1 parameter -- baca data event
+dom_ketika(tombol, "klik", "nama_fungsi")                           catatan: Teks, gaya lama, tetap jalan
 ```
+`e` adalah instans `Event` dengan field `tipe`, `nilai` (isi `.value` target
+kalau ada), `tombol` (tombol keyboard kalau event keyboard), `target`
+(`ElemenDOM`). Form input: `dom_nilai`/`dom_atur_nilai`/`dom_dicentang`/
+`dom_atur_dicentang`/`dom_fokus`.
 
 **Storage** (localStorage):
 ```isoteri
@@ -121,16 +126,82 @@ ambil_lokal("kunci")     catatan: -> Teks atau Kosong kalau belum ada
 hapus_lokal("kunci")
 ```
 
+**Timer**:
+```isoteri
+tunda(1000, fungsi() { tampilkan "sedetik kemudian" })          catatan: setTimeout
+ingat id = interval_mulai(500, fungsi() { tampilkan "tik" })     catatan: setInterval
+interval_hentikan(id)
+```
+
 **Fetch** (async, beda dari `unduh()` yang sengaja TIDAK didukung karena
 sinkron -- lihat bagian "Yang BELUM didukung" di atas):
 ```isoteri
-fungsi saat_sukses(isi) { tampilkan isi }
-fungsi saat_gagal(pesan) { tampilkan "Gagal: " + pesan }
-unduh_async("https://api.contoh.com/data", "saat_sukses", "saat_gagal")
+unduh_async("https://api.contoh.com/data", fungsi(isi) { tampilkan isi })   catatan: GET-teks, sederhana
+unduh_lanjut_async("https://api.contoh.com/data",
+    {"metode": "POST", "body": teks_json(data), "header": {"Content-Type": "application/json"}},
+    fungsi(r) { tampilkan r.status; tampilkan urai_json(r.teks) },
+    fungsi(pesan) { tampilkan "gagal: " + pesan })
 ```
 
 Lihat `runtime/web/contoh_dom.iso` buat contoh lengkap semua fungsi di atas,
+dan `runtime/web/contoh_event_form_timer/` (buka `index.html` lewat local
+server) buat demo interaktif event closure + data event + form input + timer
+sekaligus dalam satu halaman.
 dan `docs/IR.md`/`docs/FILOSOFI.md` buat status Milestone B secara umum.
+
+## Router, State Management, Component System (di atas Milestone B)
+
+Fondasi buat aplikasi web kompleks (dashboard, CRUD, e-commerce
+skala-menengah), semua murni JavaScript di `isoteri-vm.js`, nol perubahan
+ke compiler/VM Rust:
+
+```isoteri
+catatan: Router -- hash-based (#/path), zero-config di hosting statis apa pun
+rute_daftar([
+    {"pola": "/", "tampilkan": "render_beranda"},
+    {"pola": "/produk/:id", "tampilkan": "render_produk"},
+    {"pola": "*", "tampilkan": "render_404"}
+])
+rute_mulai()
+rute_navigasi("/produk/7")
+rute_sekarang()              catatan: {path, params}
+
+catatan: State Management -- pub/sub sederhana
+ingat toko = state_buat(0)
+state_langgan(toko, fungsi(n) { dom_atur_teks(el, "" + n) })
+state_atur(toko, 5)
+state_ubah(toko, fungsi(lama) { kembalikan lama + 1 })
+
+catatan: Component System -- render-ulang-penuh + event delegation lewat data-aksi
+ingat komp = komponen_buat({
+    "state_awal": 0,
+    "render": fungsi(props, state) {
+        kembalikan "<button data-aksi='tambah'>" + state + "</button>"
+    },
+    "aksi": { "tambah": fungsi(props, state, e) { kembalikan state + 1 } },
+    "dipasang": fungsi(props, state) { tampilkan "siap" }
+})
+ingat inst = komponen_pasang(komp, dom_pilih("#app"))
+```
+
+**Filosofi Component System (disengaja):** render-ulang-penuh (HTML string
+lewat `innerHTML`), BUKAN virtual-DOM diffing kayak React. Cukup buat skala
+dashboard/CRUD, bukan pengganti diffing sungguhan buat UI sangat besar &
+dalam. Event lewat atribut `data-aksi="nama"` (opsional
+`data-peristiwa="input"`/`"change"`/`"submit"`/`"keyup"`, default `"click"`)
+karena `render` cuma menghasilkan teks HTML, bukan pointer fungsi hidup —
+handler aksi dapat `(props, state, event)`, nilai kembaliannya jadi state
+baru (pola reducer). Detail lengkap & trade-off di `docs/KETERBATASAN.md`.
+
+Contoh interaktif lengkap (buka `index.html` masing-masing lewat local
+server, mis. `python3 -m http.server`):
+- `runtime/web/contoh_router_state/` -- Router + State Management (navigasi antar "halaman", hitung kunjungan)
+- `runtime/web/contoh_komponen/` -- Component System (Todo List: state, render, aksi, lifecycle hooks)
+
+**Temuan performa penting:** `isoteri-vm.js` TIDAK punya JIT (beda dari
+native Rust yang punya Cranelift) -- diverifikasi langsung, `fib(38)` yang
+selesai <5 detik di native masih belum selesai setelah 90 detik di browser.
+Komputasi berat sebaiknya tetap di native/API, bukan langsung di browser.
 
 ## Canvas 2D & WebSocket (lanjutan Milestone B)
 

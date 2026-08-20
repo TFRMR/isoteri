@@ -21,6 +21,21 @@
 
 class IsoteriError extends Error {}
 
+/** Ubah pola rute Isoteri (mis. "/produk/:id", "/", "/berita/*") jadi RegExp + daftar nama
+ *  parameter dinamis dalam urutan kemunculan -- dipakai rute_daftar()/_ruteCocokkanDanJalankan().
+ *  ':nama' menangkap satu segmen path (tanpa '/'); '*' di akhir menangkap sisa path (termasuk '/'). */
+function kompilasiPolaRute(pola) {
+  const bagian = pola.split("/").filter((s) => s.length > 0);
+  const namaParam = [];
+  const regexBagian = bagian.map((b) => {
+    if (b === "*") { namaParam.push("*"); return "(.*)"; }
+    if (b.startsWith(":")) { namaParam.push(b.slice(1)); return "([^/]+)"; }
+    return b.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  });
+  const regex = new RegExp("^/" + regexBagian.join("/") + "/?$");
+  return { regex, namaParam };
+}
+
 class IsoteriVM {
   /**
    * @param {object} bundle - hasil parse JSON dari `isoteri ekspor-web`.
@@ -52,6 +67,20 @@ class IsoteriVM {
     this.iterStack = []; // {items: Value[], pos: number}[]
     this.handlerStack = []; // {stackBase, target, slotKind:'Local'|'Global', slot}[]
     this.barisSekarang = 0;
+
+    // State router (lihat rute_*): daftar rute terdaftar + listener hashchange yang aktif
+    // (kalau ada) supaya bisa dilepas lagi kalau VM ini dibuang / rute_mulai() dipanggil ulang.
+    this._rute = [];
+    this._ruteHashListener = null;
+    this._ruteSaatIni = { path: "/", params: [] };
+
+    // State manajemen state (lihat state_buat/state_atur/dst.): tiap "toko" (store) punya id,
+    // nilai (Value Isoteri, immutable/clone-on-write persis kayak semantik bahasa aslinya), dan
+    // daftar pelanggan (subscriber -- closure/nama fungsi 1-parameter yang dipanggil ulang tiap
+    // nilainya berubah, dapat nilai BARU). Disimpan per-instance VM (bukan global JS) supaya
+    // beberapa VM independen (kalau ada) gak saling tabrakan.
+    this._stateToko = new Map(); // id (Angka JS) -> { nilai: Value, pelanggan: Value[] }
+    this._stateIdCounter = 0;
   }
 
   jalankan() {
@@ -116,6 +145,11 @@ class IsoteriVM {
       case "LompatJikaSalah": {
         const v = S.pop();
         return { selesai: false, pc: truthy(v) ? pc + 1 : instr[1] };
+      }
+      case "Tidak": {
+        const v = S.pop();
+        S.push(bool(!truthy(v)));
+        return { selesai: false, pc: pc + 1 };
       }
       case "MakeDaftar": {
         const n = instr[1];
@@ -321,6 +355,107 @@ class IsoteriVM {
     throw new IsoteriError(`${namaBuiltin}(): argumen kedua harus Teks (nama fungsi) atau closure/fungsi sebagai nilai, ditemukan ${tampilkanStr(callback)}`);
   }
 
+  /** Generalisasi panggilCallback1Arg buat N argumen TETAP (tanpa dukungan bongkar-'bentuk'
+   *  flattened -- itu optimisasi khusus jalur numerik performa tinggi, gak relevan buat
+   *  callback UI/komponen). Dipakai hook komponen (render/dipasang/diperbarui/dilepas/aksi)
+   *  yang butuh lebih dari 1 argumen (props, state, dst). */
+  panggilCallbackNArg(namaBuiltin, callback, argsArray) {
+    let idx, tangkapan;
+    if (callback.t === "Teks") {
+      idx = this.namaKeIndeks[callback.v];
+      if (idx === undefined) throw new IsoteriError(`${namaBuiltin}(): fungsi "${callback.v}" tidak ditemukan.`);
+      tangkapan = [];
+    } else if (callback.t === "Fungsi") {
+      idx = callback.idx;
+      tangkapan = callback.tangkapan;
+    } else {
+      throw new IsoteriError(`${namaBuiltin}(): argumen callback harus Teks (nama fungsi) atau closure/fungsi sebagai nilai, ditemukan ${tampilkanStr(callback)}`);
+    }
+    const nParamAsli = this.fungsi[idx].paramFlat.length - tangkapan.length;
+    if (nParamAsli !== argsArray.length) throw new IsoteriError(`${namaBuiltin}(): fungsi callback butuh tepat ${argsArray.length} parameter, tapi fungsi ini punya ${nParamAsli}.`);
+    return this.panggilFungsiDenganArgumen(idx, [...tangkapan, ...argsArray]);
+  }
+
+  /** Bungkus elemen DOM asli jadi Value ElemenDOM Isoteri (`{_id: "elN"}` + didaftarkan ke
+   *  domRegistry) -- versi class-method dari closure `bungkusElemen` lokal di panggilDom(),
+   *  dipakai komponen internals yang butuh ini DI LUAR satu pemanggilan panggilDom() (mis.
+   *  event delegation komponen yang listener-nya nempel lama setelah komponen_pasang() selesai). */
+  _bungkusElemenDom(el) {
+    if (!this._domIdCounter) this._domIdCounter = 0;
+    const id = `el${this._domIdCounter++}`;
+    this.domRegistry.set(id, el);
+    return { t: "Instans", nama: "ElemenDOM", v: [["_id", teks(id)]] };
+  }
+
+  /** Bungkus native DOM Event jadi instans 'Event' Isoteri -- field sama persis seperti yang
+   *  dibangun dom_ketika() (tipe/nilai/tombol/target), diekstrak jadi method supaya bisa
+   *  dipakai ulang oleh event-delegation komponen (lihat _komponenPasangDelegasi). */
+  _bungkusEventDom(ev, targetEl) {
+    const nilaiTarget = "value" in targetEl ? String(targetEl.value) : null;
+    return {
+      t: "Instans", nama: "Event",
+      v: [
+        ["tipe", teks(ev.type)],
+        ["nilai", nilaiTarget === null ? KOSONG : teks(nilaiTarget)],
+        ["tombol", ev.key !== undefined ? teks(ev.key) : KOSONG],
+        ["target", this._bungkusElemenDom(targetEl)],
+      ],
+    };
+  }
+
+  /** Render ulang satu instans komponen: panggil "render"(props, state), tulis hasilnya
+   *  (harus Teks/HTML) ke wadah lewat innerHTML, lalu panggil hook "dipasang" (kalau ini
+   *  render PERTAMA) atau "diperbarui" (render selanjutnya). Dipanggil dari komponen_pasang()
+   *  (render pertama) dan tiap kali state berubah (aksi, komponen_atur_state/ubah_state) atau
+   *  props diganti (komponen_atur_props). */
+  _komponenRenderUlang(inst) {
+    const html = this.panggilCallbackNArg('komponen "render"', inst.definisi.render, [inst.props, inst.state]);
+    if (html.t !== "Teks") throw new IsoteriError(`komponen "render" harus mengembalikan Teks (HTML), ditemukan ${tampilkanStr(html)}`);
+    inst.wadah.innerHTML = html.v;
+    if (!inst.sudahDipasang) {
+      inst.sudahDipasang = true;
+      if (inst.definisi.dipasang) {
+        try { this.panggilCallbackNArg('komponen "dipasang"', inst.definisi.dipasang, [inst.props, inst.state]); }
+        catch (e) { console.error('Kesalahan di dalam hook "dipasang":', e.message || e); }
+      }
+    } else if (inst.definisi.diperbarui) {
+      try { this.panggilCallbackNArg('komponen "diperbarui"', inst.definisi.diperbarui, [inst.props, inst.state]); }
+      catch (e) { console.error('Kesalahan di dalam hook "diperbarui":', e.message || e); }
+    }
+  }
+
+  /** Pasang event delegation buat satu instans komponen: SATU listener per tipe event umum
+   *  (click/input/change/submit/keyup) langsung di elemen wadah (bukan satu-satu per elemen
+   *  anak -- otomatis "ikut" ke elemen baru hasil render ulang tanpa perlu daftar ulang tiap
+   *  kali). Elemen di dalam HTML hasil render yang punya atribut `data-aksi="nama"` (opsional
+   *  `data-peristiwa="input"` dst, default "click") memicu handler terkait di opsi "aksi" milik
+   *  definisi komponen -- ini pengganti `onclick="..."` inline yang gak mungkin dipakai di sini
+   *  (hasil render cuma teks HTML, gak ada cara nyuntik pointer fungsi Isoteri langsung ke
+   *  atribut HTML). Handler aksi menerima (props, state, event) dan NILAI KEMBALIANNYA jadi
+   *  state baru (pola reducer) -- otomatis memicu render ulang lagi setelahnya. */
+  _komponenPasangDelegasi(inst) {
+    const TIPE_EVENT = ["click", "input", "change", "submit", "keyup"];
+    for (const tipe of TIPE_EVENT) {
+      const fn = (ev) => {
+        const elAksi = ev.target.closest ? ev.target.closest("[data-aksi]") : null;
+        if (!elAksi || !inst.wadah.contains(elAksi)) return;
+        if ((elAksi.getAttribute("data-peristiwa") || "click") !== tipe) return;
+        const namaAksi = elAksi.getAttribute("data-aksi");
+        const handler = inst.definisi.aksi.get(namaAksi);
+        if (!handler) { console.warn(`Komponen: aksi "${namaAksi}" (dari data-aksi) tidak terdaftar di opsi "aksi" komponen ini.`); return; }
+        if (tipe === "submit") ev.preventDefault(); // hampir selalu yang dimaksud pengguna -- submit form JANGAN reload halaman
+        try {
+          inst.state = this.panggilCallbackNArg(`komponen aksi "${namaAksi}"`, handler, [inst.props, inst.state, this._bungkusEventDom(ev, elAksi)]);
+          this._komponenRenderUlang(inst);
+        } catch (e) {
+          console.error(`Kesalahan di dalam aksi "${namaAksi}":`, e.message || e);
+        }
+      };
+      inst.wadah.addEventListener(tipe, fn);
+      inst.listenerTerpasang.push({ tipe, fn });
+    }
+  }
+
   panggilBawaan(nama, args) {
     if ((nama === "petakan" || nama === "saring") && args.length === 2) {
       if (args[0].t !== "Daftar") throw new IsoteriError(`${nama}(daftar, fungsi): argumen pertama harus Daftar, ditemukan ${tampilkanStr(args[0])}`);
@@ -394,8 +529,40 @@ class IsoteriVM {
     throw new IsoteriError(`${namaBuiltin}(): fungsi callback harus punya 0 parameter (diabaikan) atau 1 parameter (data event), tapi fungsi ini punya ${nParamAsli}.`);
   }
 
+  /** Cari rute yang cocok dengan `window.location.hash` saat ini, panggil handler-nya dengan
+   *  Peta params (path param + query string digabung). Dipanggil pertama kali oleh rute_mulai()
+   *  dan setiap kali event 'hashchange' terjadi (klik link #, tombol back/forward browser, dst). */
+  _ruteCocokkanDanJalankan() {
+    let hash = window.location.hash.slice(1) || "/";
+    const qIdx = hash.indexOf("?");
+    let queryStr = "";
+    if (qIdx !== -1) { queryStr = hash.slice(qIdx + 1); hash = hash.slice(0, qIdx); }
+    if (!hash.startsWith("/")) hash = "/" + hash;
+    const queryParams = [];
+    if (queryStr) {
+      for (const pasangan of queryStr.split("&")) {
+        const [k, v] = pasangan.split("=");
+        if (k) queryParams.push([decodeURIComponent(k), teks(decodeURIComponent(v || ""))]);
+      }
+    }
+    for (const rute of this._rute) {
+      const cocok = rute.regex.exec(hash);
+      if (cocok) {
+        const paramJalur = rute.namaParam.map((n, i) => [n, teks(decodeURIComponent(cocok[i + 1] || ""))]);
+        this._ruteSaatIni = { path: hash, params: [...paramJalur, ...queryParams] };
+        try {
+          this.panggilCallback1Arg("rute_daftar", rute.handler, { t: "Peta", v: this._ruteSaatIni.params });
+        } catch (e) {
+          console.error(`Kesalahan di dalam handler rute "${rute.pola}":`, e.message || e);
+        }
+        return;
+      }
+    }
+    console.warn(`rute_mulai(): tidak ada rute cocok buat path "${hash}". Tambahkan rute berpola "*" sebagai catch-all/404 kalau perlu.`);
+  }
+
   panggilDom(nama, args) {
-    const TIDAK_BUTUH_DOCUMENT = new Set(["unduh_async", "unduh_lanjut_async", "tunda", "interval_mulai", "interval_hentikan"]);
+    const TIDAK_BUTUH_DOCUMENT = new Set(["unduh_async", "unduh_lanjut_async", "tunda", "interval_mulai", "interval_hentikan", "state_buat", "state_nilai", "state_atur", "state_ubah", "state_langgan"]);
     const butuhDocument = !nama.startsWith("ws_") && !TIDAK_BUTUH_DOCUMENT.has(nama);
     if (butuhDocument && typeof document === "undefined") {
       throw new IsoteriError(`${nama}() butuh browser (ada \`document\`) -- tidak berlaku di Node.js/runtime non-browser.`);
@@ -441,6 +608,33 @@ class IsoteriVM {
       const id = `el${this._domIdCounter++}`;
       this.domRegistry.set(id, ws);
       return { t: "Instans", nama: "WebSocket", v: [["_id", teks(id)]] };
+    };
+    const tokoDari = (v) => {
+      if (v.t !== "Instans" || v.nama !== "Toko") throw new IsoteriError(`${nama}(): argumen harus Toko (hasil state_buat), ditemukan ${tampilkanStr(v)}`);
+      const id = v.v.find(([k]) => k === "_id")[1].v;
+      const toko = this.domRegistry.get(id);
+      if (!toko) throw new IsoteriError(`${nama}(): Toko sudah tidak valid (id "${id}" tidak ditemukan).`);
+      return toko;
+    };
+    const bungkusToko = (toko) => {
+      if (!this._domIdCounter) this._domIdCounter = 0;
+      const id = `el${this._domIdCounter++}`;
+      this.domRegistry.set(id, toko);
+      return { t: "Instans", nama: "Toko", v: [["_id", teks(id)]] };
+    };
+    const definisiKomponenDari = (v) => {
+      if (v.t !== "Instans" || v.nama !== "Komponen") throw new IsoteriError(`${nama}(): argumen pertama harus hasil komponen_buat(), ditemukan ${tampilkanStr(v)}`);
+      const id = v.v.find(([k]) => k === "_id")[1].v;
+      const def = this.domRegistry.get(id);
+      if (!def) throw new IsoteriError(`${nama}(): definisi komponen sudah tidak valid (id "${id}" tidak ditemukan).`);
+      return def;
+    };
+    const instansKomponenDari = (v) => {
+      if (v.t !== "Instans" || v.nama !== "InstansKomponen") throw new IsoteriError(`${nama}(): argumen harus hasil komponen_pasang(), ditemukan ${tampilkanStr(v)}`);
+      const id = v.v.find(([k]) => k === "_id")[1].v;
+      const inst = this.domRegistry.get(id);
+      if (!inst) throw new IsoteriError(`${nama}(): instans komponen sudah tidak valid (id "${id}" tidak ditemukan, mungkin sudah komponen_lepas()).`);
+      return inst;
     };
     const angkaArg = (v, label) => { if (v.t !== "Angka" && v.t !== "Desimal") throw new IsoteriError(`${nama}(): ${label} harus Angka/Desimal, ditemukan ${tampilkanStr(v)}`); return v.v; };
     const teksArg = (v, label) => { if (v.t !== "Teks") throw new IsoteriError(`${nama}(): ${label} harus Teks, ditemukan ${tampilkanStr(v)}`); return v.v; };
@@ -575,6 +769,143 @@ class IsoteriVM {
         if (idAsli !== undefined) { clearInterval(idAsli); this._intervalIdMap.delete(idAngka); }
         return KOSONG;
       }
+      // === Router (rute_*) -- hash routing (#/path), zero-config di hosting statis apa pun ===
+      case "rute_daftar": {
+        if (args[0].t !== "Daftar") throw new IsoteriError('rute_daftar(daftar_rute): argumen harus Daftar berisi Peta/instans {"pola": ..., "tampilkan": ...}.');
+        this._rute = args[0].v.map((r) => {
+          if (r.t !== "Peta" && r.t !== "Instans") throw new IsoteriError('rute_daftar(): tiap elemen Daftar harus Peta/instans {"pola": ..., "tampilkan": ...}.');
+          const cari = (k) => { const e = r.v.find(([kk]) => kk === k); return e ? e[1] : null; };
+          const p = cari("pola"), h = cari("tampilkan");
+          if (!p || p.t !== "Teks") throw new IsoteriError('rute_daftar(): tiap rute butuh field "pola" bertipe Teks, mis. {"pola": "/produk/:id", "tampilkan": fungsi(params) {...}}.');
+          if (!h) throw new IsoteriError('rute_daftar(): tiap rute butuh field "tampilkan" -- Teks (nama fungsi) atau closure, dipanggil dengan SATU argumen Peta<Teks,Teks> (path param + query string).');
+          return { ...kompilasiPolaRute(p.v), pola: p.v, handler: h };
+        });
+        return KOSONG;
+      }
+      case "rute_mulai": {
+        if (this._ruteHashListener) window.removeEventListener("hashchange", this._ruteHashListener);
+        this._ruteHashListener = () => this._ruteCocokkanDanJalankan();
+        window.addEventListener("hashchange", this._ruteHashListener);
+        this._ruteCocokkanDanJalankan(); // langsung cocokkan path saat ini (mis. buka .../#/produk/5 langsung)
+        return KOSONG;
+      }
+      case "rute_navigasi": {
+        const path = teksArg(args[0], "path");
+        const hashBaru = "#" + (path.startsWith("/") ? path : "/" + path);
+        if (window.location.hash === hashBaru) this._ruteCocokkanDanJalankan(); // navigasi ke path yg SAMA -> hashchange gak trigger, panggil manual
+        else window.location.hash = hashBaru;
+        return KOSONG;
+      }
+      case "rute_sekarang": return { t: "Instans", nama: "Rute", v: [["path", teks(this._ruteSaatIni.path)], ["params", { t: "Peta", v: this._ruteSaatIni.params }]] };
+      // === Manajemen state (state_*) -- toko sederhana + langganan, TANPA vdom/diffing.
+      // Pola: state_ubah()/state_atur() memberi tahu SEMUA pelanggan dengan nilai baru penuh;
+      // pelanggan (biasanya fungsi "render ulang" pakai dom_atur_html) tanggung jawab sendiri
+      // update tampilannya. Simpel & dapat diandalkan buat skala dashboard/CRUD -- bukan
+      // pengganti virtual-DOM diffing React buat UI yang sangat besar & dalam. ===
+      case "state_buat": return bungkusToko({ nilai: args[0], pelanggan: [] });
+      case "state_nilai": return tokoDari(args[0]).nilai;
+      case "state_atur": {
+        const toko = tokoDari(args[0]);
+        toko.nilai = args[1];
+        for (const p of toko.pelanggan) {
+          try { this.panggilCallback1Arg("state_atur", p, toko.nilai); }
+          catch (e) { console.error("Kesalahan di dalam pelanggan state:", e.message || e); }
+        }
+        return args[0];
+      }
+      case "state_ubah": {
+        // state_ubah(toko, fungsi_pembaru) -- fungsi_pembaru(nilai_lama) -> nilai_baru. Berguna
+        // buat update berbasis nilai sebelumnya (mis. counter++) tanpa perlu state_nilai() dulu.
+        const toko = tokoDari(args[0]);
+        toko.nilai = this.panggilCallback1Arg("state_ubah", args[1], toko.nilai);
+        for (const p of toko.pelanggan) {
+          try { this.panggilCallback1Arg("state_ubah", p, toko.nilai); }
+          catch (e) { console.error("Kesalahan di dalam pelanggan state:", e.message || e); }
+        }
+        return args[0];
+      }
+      case "state_langgan": {
+        // state_langgan(toko, fungsi_pelanggan) -- daftar jadi pelanggan, LANGSUNG dipanggil
+        // sekali dengan nilai SAAT INI (render pertama tanpa nunggu state_atur/state_ubah).
+        const toko = tokoDari(args[0]);
+        toko.pelanggan.push(args[1]);
+        this.panggilCallback1Arg("state_langgan", args[1], toko.nilai);
+        return args[0];
+      }
+      // === Component System (komponen_*) -- "render ulang penuh" (BUKAN vdom-diffing kayak
+      // React): tiap perubahan state/props, seluruh isi wadah komponen di-render ulang lewat
+      // innerHTML. Simpel & dapat diandalkan buat skala dashboard/CRUD; TIDAK cocok buat UI
+      // yang sangat besar & dalam performa-kritis (di situ, diffing DOM sungguhan menang).
+      // Event di dalam hasil render dijembatani lewat delegation `data-aksi` -- lihat
+      // _komponenPasangDelegasi() buat penjelasan lengkap kenapa (bukan `onclick=` inline). ===
+      case "komponen_buat": {
+        if (args[0].t !== "Peta" && args[0].t !== "Instans") throw new IsoteriError('komponen_buat(opsi): argumen harus Peta/instans, mis. {"render": fungsi(props, state) {...}}.');
+        const cari = (k) => { const e = args[0].v.find(([kk]) => kk === k); return e ? e[1] : null; };
+        const render = cari("render");
+        if (!render) throw new IsoteriError('komponen_buat(): opsi wajib punya "render" -- fungsi(props, state) yang mengembalikan Teks (HTML).');
+        const aksiPeta = cari("aksi");
+        let aksi = null;
+        if (aksiPeta) {
+          if (aksiPeta.t !== "Peta") throw new IsoteriError('komponen_buat(): opsi "aksi" harus Peta<Teks, fungsi>, mis. {"tambah": fungsi(props, state, e) {...}}.');
+          aksi = new Map(aksiPeta.v.map(([k, v]) => [k, v]));
+        }
+        const definisi = {
+          render, aksi,
+          stateAwal: cari("state_awal") ?? KOSONG,
+          dipasang: cari("dipasang"),
+          diperbarui: cari("diperbarui"),
+          dilepas: cari("dilepas"),
+        };
+        if (!this._domIdCounter) this._domIdCounter = 0;
+        const idDef = `el${this._domIdCounter++}`;
+        this.domRegistry.set(idDef, definisi);
+        return { t: "Instans", nama: "Komponen", v: [["_id", teks(idDef)]] };
+      }
+      case "komponen_pasang": {
+        const definisi = definisiKomponenDari(args[0]);
+        const wadah = elemenDari(args[1]);
+        const props = args.length > 2 ? args[2] : KOSONG;
+        const inst = { definisi, wadah, props, state: definisi.stateAwal, sudahDipasang: false, listenerTerpasang: [] };
+        if (definisi.aksi) this._komponenPasangDelegasi(inst);
+        this._komponenRenderUlang(inst);
+        if (!this._domIdCounter) this._domIdCounter = 0;
+        const id = `el${this._domIdCounter++}`;
+        this.domRegistry.set(id, inst);
+        return { t: "Instans", nama: "InstansKomponen", v: [["_id", teks(id)]] };
+      }
+      case "komponen_state": return instansKomponenDari(args[0]).state;
+      case "komponen_atur_state": {
+        const inst = instansKomponenDari(args[0]);
+        inst.state = args[1];
+        this._komponenRenderUlang(inst);
+        return args[0];
+      }
+      case "komponen_ubah_state": {
+        const inst = instansKomponenDari(args[0]);
+        inst.state = this.panggilCallback1Arg("komponen_ubah_state", args[1], inst.state);
+        this._komponenRenderUlang(inst);
+        return args[0];
+      }
+      case "komponen_atur_props": {
+        const inst = instansKomponenDari(args[0]);
+        inst.props = args[1];
+        this._komponenRenderUlang(inst);
+        return args[0];
+      }
+      case "komponen_elemen": return this._bungkusElemenDom(instansKomponenDari(args[0]).wadah);
+      case "komponen_lepas": {
+        const inst = instansKomponenDari(args[0]);
+        if (inst.definisi.dilepas) {
+          try { this.panggilCallbackNArg('komponen "dilepas"', inst.definisi.dilepas, [inst.props, inst.state]); }
+          catch (e) { console.error('Kesalahan di dalam hook "dilepas":', e.message || e); }
+        }
+        for (const { tipe, fn } of inst.listenerTerpasang) inst.wadah.removeEventListener(tipe, fn);
+        inst.listenerTerpasang = [];
+        inst.wadah.innerHTML = "";
+        const idInst = args[0].v.find(([k]) => k === "_id")[1].v;
+        this.domRegistry.delete(idInst); // cegah komponen_state/atur_state/dst. dipakai lagi setelah dilepas
+        return KOSONG;
+      }
 
       // --- Canvas 2D (lanjutan Milestone B) ---
       case "dom_konteks_2d": {
@@ -661,6 +992,10 @@ const DOM_FUNGSI = new Set([
   "dom_nilai", "dom_atur_nilai", "dom_dicentang", "dom_atur_dicentang", "dom_fokus",
   "simpan_lokal", "ambil_lokal", "hapus_lokal", "unduh_async", "unduh_lanjut_async",
   "tunda", "interval_mulai", "interval_hentikan",
+  "rute_daftar", "rute_mulai", "rute_navigasi", "rute_sekarang",
+  "state_buat", "state_nilai", "state_atur", "state_ubah", "state_langgan",
+  "komponen_buat", "komponen_pasang", "komponen_state", "komponen_atur_state", "komponen_ubah_state",
+  "komponen_atur_props", "komponen_elemen", "komponen_lepas",
   "dom_konteks_2d", "kanvas_isi_gaya", "kanvas_garis_gaya", "kanvas_lebar_garis", "kanvas_font",
   "kanvas_isi_persegi", "kanvas_garis_persegi", "kanvas_bersihkan", "kanvas_isi_teks",
   "kanvas_mulai_jalur", "kanvas_pindah_ke", "kanvas_garis_ke", "kanvas_lingkaran", "kanvas_isi", "kanvas_garis",

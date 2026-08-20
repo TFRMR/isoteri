@@ -1,0 +1,40 @@
+tampilkan 17 % 5
+tampilkan 10 % 2
+tampilkan (-7) % 3
+tampilkan 7.5 % 2.0
+
+ingat total = 0
+total += 5
+tampilkan total
+total -= 2
+tampilkan total
+total *= 4
+tampilkan total
+total /= 3
+tampilkan total
+
+ingat hitung = 0
+hitung++
+hitung++
+hitung++
+tampilkan hitung
+hitung--
+tampilkan hitung
+
+fungsi genap(n) {
+    kembalikan n % 2 == 0
+}
+ingat i = 0
+ulang (i < 10) {
+    i++
+    kalau (genap(i)) {
+        tampilkan i
+    }
+}
+
+bentuk Akun { saldo }
+ingat rek = Akun { saldo: 100 }
+rek.saldo += 50
+tampilkan rek.saldo
+rek.saldo -= 30
+tampilkan rek.saldo

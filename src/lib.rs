@@ -18,7 +18,7 @@ pub enum Token {
     Angka(i64),
     AngkaDesimal(f64),
 
-    SamaDengan, SamaDenganDua, TidakSama,
+    SamaDengan, SamaDenganDua, TidakSama, Seru,
     LebihBesar, LebihBesarSamaDengan, LebihKecil, LebihKecilSamaDengan,
     Tambah, Kurang, Kali, Bagi, Persen,
     /// Compound assignment (+= -= *= /=) -- gula sintaksis MURNI di parser, langsung didesugar
@@ -164,7 +164,7 @@ impl Lexer {
 
             match ch {
                 '=' => { if self.intip() == '=' { push!(Token::SamaDenganDua); self.posisi += 2; } else { push!(Token::SamaDengan); self.posisi += 1; } }
-                '!' => { if self.intip() == '=' { push!(Token::TidakSama); self.posisi += 2; } else { return Err(format!("Karakter '!' tidak dikenal pada baris {}", self.baris)); } }
+                '!' => { if self.intip() == '=' { push!(Token::TidakSama); self.posisi += 2; } else { push!(Token::Seru); self.posisi += 1; } }
                 '>' => { if self.intip() == '=' { push!(Token::LebihBesarSamaDengan); self.posisi += 2; } else { push!(Token::LebihBesar); self.posisi += 1; } }
                 '<' => { if self.intip() == '=' { push!(Token::LebihKecilSamaDengan); self.posisi += 2; } else { push!(Token::LebihKecil); self.posisi += 1; } }
                 '+' => {
@@ -213,6 +213,10 @@ pub enum Expr {
     Peta(Vec<(String, Expr)>),
     Indeks(Box<Expr>, Box<Expr>),
     Field(Box<Expr>, String),
+    /// Negasi boolean unary ('!ekspr') -- pakai truthiness YANG SAMA seperti kondisi 'kalau'/
+    /// 'dan'/'atau' (lihat Value::truthy()), bukan cuma 'ekspr == salah'. Jadi '!5' itu Salah
+    /// (5 truthy), '!0' itu Benar, '!""' itu Benar, dst -- konsisten di seluruh bahasa.
+    Tidak(Box<Expr>),
     BentukLiteral(String, Vec<(String, Expr)>),
     /// fungsi(params) { badan } dipakai sebagai EKSPRESI (closure/fungsi anonim) -- beda dari
     /// Stmt::FungsiDef yang punya nama & cuma boleh di level atas. Closure ini boleh nangkep
@@ -630,6 +634,11 @@ impl Parser {
             let expr = self.parse_unary()?;
             return Ok(Expr::Binary(Box::new(Expr::Angka(0)), BinOp::Kurang, Box::new(expr)));
         }
+        if *self.sekarang() == Token::Seru {
+            self.maju();
+            let expr = self.parse_unary()?; // rekursif -- '!!x' dan '!(!x)' sah, dua-duanya
+            return Ok(Expr::Tidak(Box::new(expr)));
+        }
         let mut expr = self.parse_primary()?;
         loop {
             if *self.sekarang() == Token::KurungSikuBuka {
@@ -731,6 +740,7 @@ pub enum CExpr {
     Peta(Vec<(String, CExpr)>),
     Indeks(Box<CExpr>, Box<CExpr>),
     Field(Box<CExpr>, String),
+    Tidak(Box<CExpr>),
     /// Field sudah diurutkan & divalidasi lengkap terhadap skema 'bentuk' saat resolve --
     /// jadi saat runtime tinggal dorong nilai sesuai urutan, tanpa perlu cek nama lagi.
     BentukLiteral(String, Vec<(String, CExpr)>),
@@ -845,6 +855,7 @@ fn variabel_bebas_expr(e: &Expr, terikat: &mut std::collections::HashSet<String>
         Expr::Peta(entries) => { for (_, v) in entries { variabel_bebas_expr(v, terikat, bebas); } }
         Expr::Indeks(t, i) => { variabel_bebas_expr(t, terikat, bebas); variabel_bebas_expr(i, terikat, bebas); }
         Expr::Field(t, _) => variabel_bebas_expr(t, terikat, bebas),
+        Expr::Tidak(e) => variabel_bebas_expr(e, terikat, bebas),
         Expr::BentukLiteral(_, entries) => { for (_, v) in entries { variabel_bebas_expr(v, terikat, bebas); } }
         Expr::FungsiLiteral(params, body) => {
             // Closure bersarang lagi di dalam closure -- scope sendiri (parameter closure dalam
@@ -1225,6 +1236,7 @@ impl Resolver {
             }
             Expr::Indeks(t, i) => Ok(CExpr::Indeks(Box::new(self.resolve_expr_global(t)?), Box::new(self.resolve_expr_global(i)?))),
             Expr::Field(t, f) => Ok(CExpr::Field(Box::new(self.resolve_expr_global(t)?), f.clone())),
+            Expr::Tidak(e) => Ok(CExpr::Tidak(Box::new(self.resolve_expr_global(e)?))),
             Expr::BentukLiteral(nama, entries) => {
                 let terurut = self.urutkan_field_bentuk(nama, entries)?;
                 let skema = self.bentuk_skema.get(nama).unwrap().clone();
@@ -1595,6 +1607,7 @@ impl<'a> LocalResolver<'a> {
                 }
                 Ok(CExpr::Field(Box::new(self.resolve_expr(t)?), f.clone()))
             }
+            Expr::Tidak(e) => Ok(CExpr::Tidak(Box::new(self.resolve_expr(e)?))),
             Expr::BentukLiteral(nama, entries) => {
                 let terurut = self.urutkan_field_bentuk(nama, entries)?;
                 let skema = self.bentuk_skema.get(nama).unwrap().clone();
@@ -1910,6 +1923,15 @@ fn optimisasi_expr(e: CExpr) -> CExpr {
         CExpr::Daftar(items) => CExpr::Daftar(items.into_iter().map(optimisasi_expr).collect()),
         CExpr::Peta(entries) => CExpr::Peta(entries.into_iter().map(|(k, v)| (k, optimisasi_expr(v))).collect()),
         CExpr::Indeks(t, i) => CExpr::Indeks(Box::new(optimisasi_expr(*t)), Box::new(optimisasi_expr(*i))),
+        CExpr::Tidak(e) => {
+            let e = optimisasi_expr(*e);
+            match &e {
+                CExpr::Bool(b) => CExpr::Bool(!b),
+                CExpr::Angka(n) => CExpr::Bool(*n == 0),
+                CExpr::Teks(s) => CExpr::Bool(s.is_empty()),
+                _ => CExpr::Tidak(Box::new(e)),
+            }
+        }
         CExpr::Field(t, f) => CExpr::Field(Box::new(optimisasi_expr(*t)), f),
         CExpr::BentukLiteral(nama, entries) => CExpr::BentukLiteral(nama, entries.into_iter().map(|(k, v)| (k, optimisasi_expr(v))).collect()),
         CExpr::FungsiLiteral(nama, tangkapan) => CExpr::FungsiLiteral(nama, tangkapan.into_iter().map(optimisasi_expr).collect()),
@@ -1992,6 +2014,9 @@ enum Instr {
     BinOp(BinOp),
     Lompat(usize),
     LompatJikaSalah(usize),
+    /// Negasi boolean unary -- pop 1 nilai, pakai Value::truthy() (SAMA seperti kondisi
+    /// 'kalau'/'dan'/'atau'), push Bool kebalikannya.
+    Tidak,
     MakeDaftar(usize),
     MakePeta(Vec<String>),
     Indeks,
@@ -2198,6 +2223,7 @@ impl Compiler {
             CExpr::Global(slot) => out.push(Instr::LoadGlobal(*slot)),
             CExpr::Local(slot) => out.push(Instr::LoadLocal(*slot)),
             CExpr::Binary(l, op, r) => { self.compile_expr(l, out); self.compile_expr(r, out); out.push(Instr::BinOp(*op)); }
+            CExpr::Tidak(e) => { self.compile_expr(e, out); out.push(Instr::Tidak); }
             CExpr::Panggil(nama, args) => {
                 for a in args { self.compile_expr(a, out); }
                 if let Some(&idx) = self.fungsi_index.get(nama) {
@@ -2631,6 +2657,7 @@ impl<'a, 'b> KompilerBadanIr<'a, 'b> {
                 false
             }
             IrInstr::Move(dst, src) => { let v = self.v(*src); self.set(*dst, v); false }
+            IrInstr::Tidak(..) => unreachable!("Tidak seharusnya sudah disaring cek_jit_murni_nilai/kondisi (JIT sempit ini cuma buat fungsi Angka/Desimal, gak pernah balikin Bool)"),
             IrInstr::BinOp(dst, op, a, b) => {
                 use BinOp::*;
                 let av = self.v(*a);
@@ -3362,6 +3389,11 @@ fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_
                 Instr::LompatJikaSalah(target) => {
                     let v = state.stack.pop().unwrap();
                     if v.truthy() { *pc += 1; } else { *pc = *target; }
+                }
+                Instr::Tidak => {
+                    let v = state.stack.pop().unwrap();
+                    state.stack.push(Value::Bool(!v.truthy()));
+                    *pc += 1;
                 }
                 Instr::MakeDaftar(n) => {
                     let mut items = Vec::with_capacity(*n);
@@ -4460,6 +4492,7 @@ fn cetak_expr_fmt(e: &Expr, indent: usize, min_prec: u8, komentar: &PetaKomentar
         Expr::Teks(s) => format!("\"{}\"", escape_teks_format(s)),
         Expr::Bool(b) => (if *b { "benar" } else { "salah" }).to_string(),
         Expr::Ident(s) => s.clone(),
+        Expr::Tidak(inner) => format!("!{}", cetak_expr_fmt(inner, indent, 7, komentar, terpakai)),
         Expr::Binary(l, op, r) => {
             let p = prec_binop(*op);
             let teks = format!(
@@ -4961,6 +4994,7 @@ enum IrInstr {
     StoreGlobal(usize, Reg),
     Move(Reg, Reg),
     BinOp(Reg, BinOp, Reg, Reg),
+    Tidak(Reg, Reg),
     MakeDaftar(Reg, Vec<Reg>),
     MakePeta(Reg, Vec<String>, Vec<Reg>),
     Indeks(Reg, Reg, Reg),
@@ -5051,6 +5085,12 @@ impl<'a> IrLower<'a> {
                 let dst = self.reg_tujuan(dest, tipe_hasil);
                 out.push(IrInstr::BinOp(dst, *op, lr, rr));
                 (dst, tipe_hasil)
+            }
+            CExpr::Tidak(e) => {
+                let (er, _) = self.lower_expr(e, out); // truthy() diterapkan saat eksekusi (Instr::Tidak) -- tipe operand apa aja sah
+                let dst = self.reg_tujuan(dest, IrType::Bool);
+                out.push(IrInstr::Tidak(dst, er));
+                (dst, IrType::Bool)
             }
             CExpr::Panggil(nama, args) => {
                 let arg_regs: Vec<Reg> = args.iter().map(|a| self.lower_expr(a, out).0).collect();
@@ -5323,6 +5363,7 @@ fn ir_ke_instr_dgn_konstanta(kompiler: &mut Compiler, ir: &[IrInstr]) -> Vec<Ins
             IrInstr::StoreGlobal(..) => 2,    // LoadLocal ; StoreGlobal
             IrInstr::Move(..) => 2,           // LoadLocal ; StoreLocal
             IrInstr::BinOp(..) => 4,          // LoadLocal x2 ; BinOp ; StoreLocal
+            IrInstr::Tidak(..) => 3,          // LoadLocal ; Tidak ; StoreLocal
             IrInstr::MakeDaftar(_, items) => items.len() + 2,
             IrInstr::MakePeta(_, _, v) => v.len() + 1 + 1,
             IrInstr::Indeks(..) => 4,
@@ -5370,6 +5411,11 @@ fn ir_ke_instr_dgn_konstanta(kompiler: &mut Compiler, ir: &[IrInstr]) -> Vec<Ins
                 out.push(Instr::LoadLocal(*a as usize));
                 out.push(Instr::LoadLocal(*b as usize));
                 out.push(Instr::BinOp(*op));
+                out.push(Instr::StoreLocal(*dst as usize));
+            }
+            IrInstr::Tidak(dst, src) => {
+                out.push(Instr::LoadLocal(*src as usize));
+                out.push(Instr::Tidak);
                 out.push(Instr::StoreLocal(*dst as usize));
             }
             IrInstr::MakeDaftar(dst, items) => {
@@ -5668,6 +5714,7 @@ fn instr_ke_json(instr: &Instr) -> Result<serde_json::Value, String> {
         Instr::BinOp(op) => json!(["BinOp", binop_ke_str(*op)]),
         Instr::Lompat(t) => json!(["Lompat", t]),
         Instr::LompatJikaSalah(t) => json!(["LompatJikaSalah", t]),
+        Instr::Tidak => json!(["Tidak"]),
         Instr::MakeDaftar(n) => json!(["MakeDaftar", n]),
         Instr::MakePeta(kunci) => json!(["MakePeta", kunci]),
         Instr::Indeks => json!(["Indeks"]),

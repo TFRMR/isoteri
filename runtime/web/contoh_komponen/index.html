@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Contoh: Component System Isoteri</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; }
+  input { font-size: 1rem; padding: 6px; }
+  button { font-size: 0.9rem; padding: 4px 8px; margin-left: 4px; cursor: pointer; }
+  li { list-style: none; }
+  ul { padding: 0; }
+</style>
+</head>
+<body>
+  <h2>Contoh: Component System -- Todo List</h2>
+  <div id="app">Memuat...</div>
+  <p><small>
+    Ketik tugas baru lalu klik Tambah. Klik "v" buat toggle selesai (coret), "x" buat hapus.
+    Buka console (F12) buat lihat log lifecycle hook (dipasang/diperbarui).
+  </small></p>
+
+  <script src="../isoteri-vm.js"></script>
+  <script>
+    (async () => {
+      const res = await fetch("todo_komponen.isoweb.json");
+      const bundel = await res.json();
+      const vm = new IsoteriVM(bundel);
+      try {
+        vm.jalankan();
+      } catch (e) {
+        console.error(e);
+        document.getElementById("app").textContent = "Error: " + (e.message || e);
+      }
+    })();
+  </script>
+</body>
+</html>

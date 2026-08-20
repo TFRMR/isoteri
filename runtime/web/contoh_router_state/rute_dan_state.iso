@@ -1,0 +1,27 @@
+catatan: Uji Router (hash-based) + State Management -- pola "aplikasi" sungguhan sederhana:
+catatan: halaman Beranda, halaman Produk (param dinamis :id), halaman 404.
+
+ingat toko_kunjungan = state_buat(0)
+
+fungsi render_beranda(params) {
+    state_ubah(toko_kunjungan, fungsi(n) { kembalikan n + 1 })
+    dom_atur_html(dom_pilih("#app"), "<h3>Beranda</h3><p>Kunjungan ke halaman ini: " + state_nilai(toko_kunjungan) + "x</p><p>Coba: <a href='#/produk/42'>Lihat Produk 42</a></p>")
+}
+
+fungsi render_produk(params) {
+    ingat id_produk = params["id"]
+    dom_atur_html(dom_pilih("#app"), "<h3>Detail Produk</h3><p>ID produk: " + id_produk + "</p><p><a href='#/'>Kembali ke Beranda</a></p>")
+}
+
+fungsi render_404(params) {
+    dom_atur_html(dom_pilih("#app"), "<h3>404</h3><p>Halaman tidak ditemukan: " + params["*"] + "</p>")
+}
+
+rute_daftar([
+    {"pola": "/", "tampilkan": "render_beranda"},
+    {"pola": "/produk/:id", "tampilkan": "render_produk"},
+    {"pola": "*", "tampilkan": "render_404"}
+])
+rute_mulai()
+
+dom_atur_teks(dom_pilih("#nav_info"), "Router aktif. Rute sekarang: " + rute_sekarang().path)

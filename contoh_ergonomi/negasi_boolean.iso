@@ -1,0 +1,24 @@
+tampilkan !benar
+tampilkan !salah
+tampilkan !!benar
+tampilkan !0
+tampilkan !5
+tampilkan !""
+tampilkan !"halo"
+tampilkan !(3 > 5)
+bentuk Todo {
+    teks,
+    selesai
+}
+ingat t = Todo { teks: "beli beras", selesai: salah }
+tampilkan !t.selesai
+fungsi genap(n) {
+    kembalikan n % 2 == 0
+}
+ingat i = 0
+ulang (i < 6) {
+    kalau (!genap(i)) {
+        tampilkan i
+    }
+    i = i + 1
+}

@@ -1,0 +1,462 @@
+{
+  "format": "isoteri-web-bytecode-v1",
+  "fungsi": [
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          17
+        ],
+        [
+          "PushK",
+          9
+        ],
+        [
+          "PanggilBawaan",
+          "dom_pilih",
+          1
+        ],
+        [
+          "PushK",
+          10
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "PushK",
+          11
+        ],
+        [
+          "Indeks"
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          12
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PanggilBawaan",
+          "dom_atur_html",
+          2
+        ],
+        [
+          "Pop"
+        ]
+      ],
+      "local_slot_count": 1,
+      "nama": "render_404",
+      "param_count": 1,
+      "param_flat": [
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          7
+        ],
+        [
+          "LoadGlobal",
+          0
+        ],
+        [
+          "BuatFungsi",
+          2,
+          0
+        ],
+        [
+          "PanggilBawaan",
+          "state_ubah",
+          2
+        ],
+        [
+          "Pop"
+        ],
+        [
+          "TandaiBaris",
+          8
+        ],
+        [
+          "PushK",
+          13
+        ],
+        [
+          "PanggilBawaan",
+          "dom_pilih",
+          1
+        ],
+        [
+          "PushK",
+          14
+        ],
+        [
+          "LoadGlobal",
+          0
+        ],
+        [
+          "PanggilBawaan",
+          "state_nilai",
+          1
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          15
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PanggilBawaan",
+          "dom_atur_html",
+          2
+        ],
+        [
+          "Pop"
+        ]
+      ],
+      "local_slot_count": 1,
+      "nama": "render_beranda",
+      "param_count": 1,
+      "param_flat": [
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          7
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "PushK",
+          16
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 1,
+      "nama": "<closure#1>",
+      "param_count": 1,
+      "param_flat": [
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          12
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "PushK",
+          17
+        ],
+        [
+          "Indeks"
+        ],
+        [
+          "StoreLocal",
+          1
+        ],
+        [
+          "TandaiBaris",
+          13
+        ],
+        [
+          "PushK",
+          18
+        ],
+        [
+          "PanggilBawaan",
+          "dom_pilih",
+          1
+        ],
+        [
+          "PushK",
+          19
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          20
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PanggilBawaan",
+          "dom_atur_html",
+          2
+        ],
+        [
+          "Pop"
+        ]
+      ],
+      "local_slot_count": 2,
+      "nama": "render_produk",
+      "param_count": 1,
+      "param_flat": [
+        null
+      ]
+    }
+  ],
+  "global_slot_count": 1,
+  "konstanta": [
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Teks",
+      "v": "/"
+    },
+    {
+      "t": "Teks",
+      "v": "render_beranda"
+    },
+    {
+      "t": "Teks",
+      "v": "/produk/:id"
+    },
+    {
+      "t": "Teks",
+      "v": "render_produk"
+    },
+    {
+      "t": "Teks",
+      "v": "*"
+    },
+    {
+      "t": "Teks",
+      "v": "render_404"
+    },
+    {
+      "t": "Teks",
+      "v": "#nav_info"
+    },
+    {
+      "t": "Teks",
+      "v": "Router aktif. Rute sekarang: "
+    },
+    {
+      "t": "Teks",
+      "v": "#app"
+    },
+    {
+      "t": "Teks",
+      "v": "<h3>404</h3><p>Halaman tidak ditemukan: "
+    },
+    {
+      "t": "Teks",
+      "v": "*"
+    },
+    {
+      "t": "Teks",
+      "v": "</p>"
+    },
+    {
+      "t": "Teks",
+      "v": "#app"
+    },
+    {
+      "t": "Teks",
+      "v": "<h3>Beranda</h3><p>Kunjungan ke halaman ini: "
+    },
+    {
+      "t": "Teks",
+      "v": "x</p><p>Coba: <a href='#/produk/42'>Lihat Produk 42</a></p>"
+    },
+    {
+      "t": "Angka",
+      "v": 1
+    },
+    {
+      "t": "Teks",
+      "v": "id"
+    },
+    {
+      "t": "Teks",
+      "v": "#app"
+    },
+    {
+      "t": "Teks",
+      "v": "<h3>Detail Produk</h3><p>ID produk: "
+    },
+    {
+      "t": "Teks",
+      "v": "</p><p><a href='#/'>Kembali ke Beranda</a></p>"
+    }
+  ],
+  "nama_ke_indeks": {
+    "<closure#1>": 2,
+    "render_404": 0,
+    "render_beranda": 1,
+    "render_produk": 3
+  },
+  "top_kode": [
+    [
+      "TandaiBaris",
+      4
+    ],
+    [
+      "PushK",
+      0
+    ],
+    [
+      "PanggilBawaan",
+      "state_buat",
+      1
+    ],
+    [
+      "StoreGlobal",
+      0
+    ],
+    [
+      "TandaiBaris",
+      20
+    ],
+    [
+      "PushK",
+      1
+    ],
+    [
+      "PushK",
+      2
+    ],
+    [
+      "MakePeta",
+      [
+        "pola",
+        "tampilkan"
+      ]
+    ],
+    [
+      "PushK",
+      3
+    ],
+    [
+      "PushK",
+      4
+    ],
+    [
+      "MakePeta",
+      [
+        "pola",
+        "tampilkan"
+      ]
+    ],
+    [
+      "PushK",
+      5
+    ],
+    [
+      "PushK",
+      6
+    ],
+    [
+      "MakePeta",
+      [
+        "pola",
+        "tampilkan"
+      ]
+    ],
+    [
+      "MakeDaftar",
+      3
+    ],
+    [
+      "PanggilBawaan",
+      "rute_daftar",
+      1
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      25
+    ],
+    [
+      "PanggilBawaan",
+      "rute_mulai",
+      0
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      27
+    ],
+    [
+      "PushK",
+      7
+    ],
+    [
+      "PanggilBawaan",
+      "dom_pilih",
+      1
+    ],
+    [
+      "PushK",
+      8
+    ],
+    [
+      "PanggilBawaan",
+      "rute_sekarang",
+      0
+    ],
+    [
+      "AmbilField",
+      "path"
+    ],
+    [
+      "BinOp",
+      "Tambah"
+    ],
+    [
+      "PanggilBawaan",
+      "dom_atur_teks",
+      2
+    ],
+    [
+      "Pop"
+    ]
+  ]
+}

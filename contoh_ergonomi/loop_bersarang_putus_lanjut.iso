@@ -1,0 +1,16 @@
+ingat i = 0
+ulang (i < 3) {
+    i = i + 1
+    tampilkan "luar: " + i
+    ingat j = 0
+    ulang (j < 5) {
+        j = j + 1
+        kalau (j == 2) {
+            lanjut
+        }
+        kalau (j == 4) {
+            putus
+        }
+        tampilkan "  dalam: " + j
+    }
+}

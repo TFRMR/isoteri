@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Contoh: Event Closure, Form Input, Timer Isoteri</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; }
+  input, button { font-size: 1rem; padding: 6px 10px; margin: 4px 0; }
+  #hasil { font-weight: bold; min-height: 1.5em; }
+</style>
+</head>
+<body>
+  <h2>Contoh: Event Closure + Form Input + Timer</h2>
+
+  <p>Ketik namamu (uji event closure + data event):</p>
+  <input type="text" id="input_nama" placeholder="Nama kamu...">
+  <p id="hasil"></p>
+
+  <p>
+    <input type="checkbox" id="centang_setuju"> Setuju
+    <button id="tombol_klik">Klik saya</button>
+  </p>
+
+  <p id="status_timer">Memuat...</p>
+  <div id="kotak">Kotak ini akan berkedip warna 4x (timer).</div>
+
+  <p><small>Buka console browser (F12) kalau ada error.</small></p>
+
+  <script src="../isoteri-vm.js"></script>
+  <script>
+    (async () => {
+      const res = await fetch("event_form_timer.isoweb.json");
+      const bundel = await res.json();
+      const vm = new IsoteriVM(bundel);
+      try {
+        vm.jalankan();
+      } catch (e) {
+        console.error(e);
+        document.getElementById("status_timer").textContent = "Error: " + (e.message || e);
+      }
+    })();
+  </script>
+</body>
+</html>

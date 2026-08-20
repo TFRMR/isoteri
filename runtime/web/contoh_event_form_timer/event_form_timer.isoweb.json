@@ -1,0 +1,721 @@
+{
+  "format": "isoteri-web-bytecode-v1",
+  "fungsi": [
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          20
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "LompatJikaSalah",
+          6
+        ],
+        [
+          "TandaiBaris",
+          20
+        ],
+        [
+          "PushK",
+          13
+        ],
+        [
+          "Kembalikan"
+        ],
+        [
+          "TandaiBaris",
+          21
+        ],
+        [
+          "PushK",
+          14
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 1,
+      "nama": "dicentang_ke_teks",
+      "param_count": 1,
+      "param_flat": [
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          15
+        ],
+        [
+          "LoadGlobal",
+          4
+        ],
+        [
+          "PushK",
+          15
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "StoreGlobal",
+          4
+        ],
+        [
+          "TandaiBaris",
+          16
+        ],
+        [
+          "LoadGlobal",
+          2
+        ],
+        [
+          "PushK",
+          16
+        ],
+        [
+          "LoadGlobal",
+          4
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          17
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "LoadGlobal",
+          3
+        ],
+        [
+          "PanggilBawaan",
+          "dom_dicentang",
+          1
+        ],
+        [
+          "PanggilFungsi",
+          0,
+          1
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PanggilBawaan",
+          "dom_atur_teks",
+          2
+        ],
+        [
+          "Pop"
+        ]
+      ],
+      "local_slot_count": 1,
+      "nama": "<closure#2>",
+      "param_count": 1,
+      "param_flat": [
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          29
+        ],
+        [
+          "LoadGlobal",
+          5
+        ],
+        [
+          "PushK",
+          18
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "StoreGlobal",
+          5
+        ],
+        [
+          "TandaiBaris",
+          30
+        ],
+        [
+          "LoadGlobal",
+          5
+        ],
+        [
+          "PushK",
+          19
+        ],
+        [
+          "BinOp",
+          "Modulo"
+        ],
+        [
+          "PushK",
+          20
+        ],
+        [
+          "BinOp",
+          "SamaDengan"
+        ],
+        [
+          "LompatJikaSalah",
+          20
+        ],
+        [
+          "TandaiBaris",
+          31
+        ],
+        [
+          "PushK",
+          21
+        ],
+        [
+          "PanggilBawaan",
+          "dom_pilih",
+          1
+        ],
+        [
+          "PushK",
+          22
+        ],
+        [
+          "PushK",
+          23
+        ],
+        [
+          "PanggilBawaan",
+          "dom_atur_atribut",
+          3
+        ],
+        [
+          "Pop"
+        ],
+        [
+          "Lompat",
+          27
+        ],
+        [
+          "TandaiBaris",
+          33
+        ],
+        [
+          "PushK",
+          24
+        ],
+        [
+          "PanggilBawaan",
+          "dom_pilih",
+          1
+        ],
+        [
+          "PushK",
+          25
+        ],
+        [
+          "PushK",
+          26
+        ],
+        [
+          "PanggilBawaan",
+          "dom_atur_atribut",
+          3
+        ],
+        [
+          "Pop"
+        ],
+        [
+          "TandaiBaris",
+          35
+        ],
+        [
+          "LoadGlobal",
+          5
+        ],
+        [
+          "PushK",
+          27
+        ],
+        [
+          "BinOp",
+          "LebihBesarSama"
+        ],
+        [
+          "LompatJikaSalah",
+          46
+        ],
+        [
+          "TandaiBaris",
+          36
+        ],
+        [
+          "LoadGlobal",
+          6
+        ],
+        [
+          "PanggilBawaan",
+          "interval_hentikan",
+          1
+        ],
+        [
+          "Pop"
+        ],
+        [
+          "TandaiBaris",
+          37
+        ],
+        [
+          "PushK",
+          28
+        ],
+        [
+          "PanggilBawaan",
+          "dom_pilih",
+          1
+        ],
+        [
+          "PushK",
+          29
+        ],
+        [
+          "LoadGlobal",
+          5
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          30
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PanggilBawaan",
+          "dom_atur_teks",
+          2
+        ],
+        [
+          "Pop"
+        ]
+      ],
+      "local_slot_count": 0,
+      "nama": "kedip",
+      "param_count": 0,
+      "param_flat": []
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          11
+        ],
+        [
+          "LoadGlobal",
+          2
+        ],
+        [
+          "PushK",
+          31
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "AmbilField",
+          "nilai"
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          32
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PanggilBawaan",
+          "dom_atur_teks",
+          2
+        ],
+        [
+          "Pop"
+        ]
+      ],
+      "local_slot_count": 1,
+      "nama": "<closure#1>",
+      "param_count": 1,
+      "param_flat": [
+        null
+      ]
+    }
+  ],
+  "global_slot_count": 7,
+  "konstanta": [
+    {
+      "t": "Teks",
+      "v": "#tombol_klik"
+    },
+    {
+      "t": "Teks",
+      "v": "#input_nama"
+    },
+    {
+      "t": "Teks",
+      "v": "#hasil"
+    },
+    {
+      "t": "Teks",
+      "v": "#centang_setuju"
+    },
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Teks",
+      "v": "input"
+    },
+    {
+      "t": "Teks",
+      "v": "click"
+    },
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Angka",
+      "v": 1000
+    },
+    {
+      "t": "Teks",
+      "v": "kedip"
+    },
+    {
+      "t": "Teks",
+      "v": "#status_timer"
+    },
+    {
+      "t": "Teks",
+      "v": "Timer jalan..."
+    },
+    {
+      "t": "Teks",
+      "v": "ya"
+    },
+    {
+      "t": "Teks",
+      "v": "tidak"
+    },
+    {
+      "t": "Angka",
+      "v": 1
+    },
+    {
+      "t": "Teks",
+      "v": "Diklik "
+    },
+    {
+      "t": "Teks",
+      "v": " kali. Centang: "
+    },
+    {
+      "t": "Angka",
+      "v": 1
+    },
+    {
+      "t": "Angka",
+      "v": 2
+    },
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Teks",
+      "v": "#kotak"
+    },
+    {
+      "t": "Teks",
+      "v": "style"
+    },
+    {
+      "t": "Teks",
+      "v": "background:#e0e0e0;padding:8px"
+    },
+    {
+      "t": "Teks",
+      "v": "#kotak"
+    },
+    {
+      "t": "Teks",
+      "v": "style"
+    },
+    {
+      "t": "Teks",
+      "v": "background:#c8e6c9;padding:8px"
+    },
+    {
+      "t": "Angka",
+      "v": 4
+    },
+    {
+      "t": "Teks",
+      "v": "#status_timer"
+    },
+    {
+      "t": "Teks",
+      "v": "Timer selesai setelah "
+    },
+    {
+      "t": "Teks",
+      "v": " langkah."
+    },
+    {
+      "t": "Teks",
+      "v": "Halo, "
+    },
+    {
+      "t": "Teks",
+      "v": "!"
+    }
+  ],
+  "nama_ke_indeks": {
+    "<closure#1>": 3,
+    "<closure#2>": 1,
+    "dicentang_ke_teks": 0,
+    "kedip": 2
+  },
+  "top_kode": [
+    [
+      "TandaiBaris",
+      3
+    ],
+    [
+      "PushK",
+      0
+    ],
+    [
+      "PanggilBawaan",
+      "dom_pilih",
+      1
+    ],
+    [
+      "StoreGlobal",
+      0
+    ],
+    [
+      "TandaiBaris",
+      4
+    ],
+    [
+      "PushK",
+      1
+    ],
+    [
+      "PanggilBawaan",
+      "dom_pilih",
+      1
+    ],
+    [
+      "StoreGlobal",
+      1
+    ],
+    [
+      "TandaiBaris",
+      5
+    ],
+    [
+      "PushK",
+      2
+    ],
+    [
+      "PanggilBawaan",
+      "dom_pilih",
+      1
+    ],
+    [
+      "StoreGlobal",
+      2
+    ],
+    [
+      "TandaiBaris",
+      6
+    ],
+    [
+      "PushK",
+      3
+    ],
+    [
+      "PanggilBawaan",
+      "dom_pilih",
+      1
+    ],
+    [
+      "StoreGlobal",
+      3
+    ],
+    [
+      "TandaiBaris",
+      7
+    ],
+    [
+      "PushK",
+      4
+    ],
+    [
+      "StoreGlobal",
+      4
+    ],
+    [
+      "TandaiBaris",
+      10
+    ],
+    [
+      "LoadGlobal",
+      1
+    ],
+    [
+      "PushK",
+      5
+    ],
+    [
+      "BuatFungsi",
+      3,
+      0
+    ],
+    [
+      "PanggilBawaan",
+      "dom_ketika",
+      3
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      14
+    ],
+    [
+      "LoadGlobal",
+      0
+    ],
+    [
+      "PushK",
+      6
+    ],
+    [
+      "BuatFungsi",
+      1,
+      0
+    ],
+    [
+      "PanggilBawaan",
+      "dom_ketika",
+      3
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      25
+    ],
+    [
+      "PushK",
+      7
+    ],
+    [
+      "StoreGlobal",
+      5
+    ],
+    [
+      "TandaiBaris",
+      26
+    ],
+    [
+      "PushK",
+      8
+    ],
+    [
+      "StoreGlobal",
+      6
+    ],
+    [
+      "TandaiBaris",
+      27
+    ],
+    [
+      "PushK",
+      9
+    ],
+    [
+      "PushK",
+      10
+    ],
+    [
+      "PanggilBawaan",
+      "interval_mulai",
+      2
+    ],
+    [
+      "StoreGlobal",
+      6
+    ],
+    [
+      "TandaiBaris",
+      41
+    ],
+    [
+      "PushK",
+      11
+    ],
+    [
+      "PanggilBawaan",
+      "dom_pilih",
+      1
+    ],
+    [
+      "PushK",
+      12
+    ],
+    [
+      "PanggilBawaan",
+      "dom_atur_teks",
+      2
+    ],
+    [
+      "Pop"
+    ]
+  ]
+}

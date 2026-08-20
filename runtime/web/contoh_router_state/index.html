@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Contoh: Router + State Management Isoteri</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; }
+  #nav_info { color: #666; font-size: 0.9em; }
+  a { color: #2e7d32; }
+</style>
+</head>
+<body>
+  <h2>Contoh: Router + State Management</h2>
+  <p id="nav_info">Memuat...</p>
+  <div id="app">Memuat...</div>
+
+  <p><small>
+    Coba klik link di dalam halaman, atau ubah manual URL di address bar jadi
+    <code>...#/produk/99</code> lalu Enter, atau <code>...#/halaman-random</code> buat lihat 404.
+    Tombol back/forward browser juga harus jalan (itu inti dari hash routing).
+  </small></p>
+
+  <script src="../isoteri-vm.js"></script>
+  <script>
+    (async () => {
+      const res = await fetch("rute_dan_state.isoweb.json");
+      const bundel = await res.json();
+      const vm = new IsoteriVM(bundel);
+      try {
+        vm.jalankan();
+      } catch (e) {
+        console.error(e);
+        document.getElementById("app").textContent = "Error: " + (e.message || e);
+      }
+    })();
+  </script>
+</body>
+</html>

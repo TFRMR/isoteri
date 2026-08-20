@@ -1,0 +1,41 @@
+catatan: Uji fitur web-runtime baru: event closure+data, form input, timer
+
+ingat tombol = dom_pilih("#tombol_klik")
+ingat input_nama = dom_pilih("#input_nama")
+ingat hasil = dom_pilih("#hasil")
+ingat centang = dom_pilih("#centang_setuju")
+ingat penghitung = 0
+
+catatan: closure DENGAN capture sebagai event handler, baca data event (e.nilai)
+dom_ketika(input_nama, "input", fungsi(e) {
+    dom_atur_teks(hasil, "Halo, " + e.nilai + "!")
+})
+
+dom_ketika(tombol, "click", fungsi(e) {
+    penghitung = penghitung + 1
+    dom_atur_teks(hasil, "Diklik " + penghitung + " kali. Centang: " + dicentang_ke_teks(dom_dicentang(centang)))
+})
+
+fungsi dicentang_ke_teks(b) {
+    kalau (b) { kembalikan "ya" }
+    kembalikan "tidak"
+}
+
+catatan: timer -- ubah warna latar tiap 1 detik selama 3 detik
+ingat langkah = 0
+ingat id_interval = 0
+id_interval = interval_mulai(1000, "kedip")
+fungsi kedip() {
+    langkah = langkah + 1
+    kalau (langkah % 2 == 0) {
+        dom_atur_atribut(dom_pilih("#kotak"), "style", "background:#e0e0e0;padding:8px")
+    } lainnya {
+        dom_atur_atribut(dom_pilih("#kotak"), "style", "background:#c8e6c9;padding:8px")
+    }
+    kalau (langkah >= 4) {
+        interval_hentikan(id_interval)
+        dom_atur_teks(dom_pilih("#status_timer"), "Timer selesai setelah " + langkah + " langkah.")
+    }
+}
+
+dom_atur_teks(dom_pilih("#status_timer"), "Timer jalan...")

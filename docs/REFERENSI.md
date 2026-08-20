@@ -65,6 +65,7 @@ nama = "Siti"                       catatan: pengubahan (assignment) -- TANPA 'i
 ```
 
 - `ingat` dan `simpan` adalah kata kunci yang identik (sinonim), pilih salah satu sesuai selera.
+- **`ingat`/`simpan` nama yang sama dua kali di scope yang sama sekarang gagal kompilasi** dengan pesan jelas (dulu diam-diam menimpa nilai lama). Kalau memang mau MENGUBAH nilai variabel yang sudah ada, pakai `nama = nilai_baru` (tanpa `ingat`/`simpan`) — itu tetap sah.
 - Assignment ulang (`nama = ...` tanpa `ingat`) mengharuskan variabelnya **sudah** dideklarasikan sebelumnya.
 - Anotasi tipe (`: Angka`, `: Desimal`, dst.) bersifat opsional tapi divalidasi saat kompilasi kalau dicantumkan — memberi nilai bertipe salah ke variabel yang dianotasi akan gagal kompilasi, bukan gagal saat program jalan.
 - **Variabel global harus dideklarasikan sebelum dipakai secara tekstual** — tidak ada forward-reference untuk `ingat` (beda dengan `fungsi` dan `bentuk`, yang boleh dipakai sebelum dideklarasikan di tempat lain dalam file yang sama).
@@ -83,15 +84,23 @@ Lihat [Bentuk](#bentuk-structtipe-custom) untuk detail.
 
 | Kategori | Operator |
 |---|---|
-| Aritmatika | `+` `-` `*` `/` |
+| Aritmatika | `+` `-` `*` `/` `%` |
 | Perbandingan | `==` `!=` `>` `>=` `<` `<=` |
-| Logika | `dan` `atau` |
+| Logika | `dan` `atau` `!` (negasi unary) |
+| Compound assignment | `+=` `-=` `*=` `/=` |
+| Increment/decrement | `++` `--` (statement baris sendiri saja, bukan ekspresi) |
 | Akses field | `.` (mis. `budi.nama`) |
-| Indeks | `[...]` (mis. `daftar[0]`, `peta["kunci"]`) |
+| Indeks | `[...]` (mis. `daftar[0]`, `peta["kunci"]`) — bisa juga di sisi kiri assignment (lihat bawah) |
 
 `+` pada `Teks` melakukan penggabungan string, dan otomatis mengonversi operand non-Teks (Angka, Desimal, Bool, dst.) ke representasi Teks-nya — jadi `"Total: " + 5` menghasilkan `"Total: 5"`.
 
-Tidak ada operator `%` (modulo), `++`/`--`, atau `+=`/`-=` dst. — tulis eksplisit, mis. `sisa = a - (a / b) * b`.
+`!ekspr` pakai *truthiness* yang sama dengan kondisi `kalau`/`dan`/`atau` (lihat `Value::truthy()`): `Bool` apa adanya, `Angka`/`Desimal` nol itu salah, `Teks`/`Daftar`/`Peta` kosong itu salah, `Kosong` selalu salah, selain itu benar. Jadi `!5` → `salah`, `!0` → `benar`, `!""` → `benar`.
+
+`+=`/`-=`/`*=`/`/=` dan `++`/`--` murni gula sintaksis (`x += 1` sama dengan `x = x + 1`) — berlaku juga buat field (`objek.saldo += 100`) dan indeks (`daftar[0] += 1`).
+
+Assignment lewat indeks: `daftar[0] = 99`, `peta["kunci"] = 99`, boleh nested (`matriks[0][1] = x`) dan campur dengan field (`objek.daftar[0] = x`). `Peta`: kunci yang belum ada otomatis ditambahkan. `Daftar`: indeks harus sudah ada (di luar jangkauan → error, tidak auto-extend, pakai `tambah()` buat menambah elemen).
+
+Overflow `Angka` (di luar jangkauan `i64`) menghasilkan error runtime jelas di eksekusi normal — lihat `docs/KETERBATASAN.md` untuk pengecualian jalur JIT.
 
 ---
 
@@ -100,6 +109,8 @@ Tidak ada operator `%` (modulo), `++`/`--`, atau `+=`/`-=` dst. — tulis ekspli
 ```
 kalau (kondisi) {
     ...
+} lainnya kalau (kondisi_lain) {
+    ...
 } lainnya {
     ...
 }
@@ -107,18 +118,8 @@ kalau (kondisi) {
 
 - `jika` adalah sinonim dari `kalau`.
 - Kondisi **wajib** dikurung `(...)`.
-- Blok `lainnya` opsional. Tidak ada `lainnya kalau` (else-if) bawaan — nesting manual:
-  ```
-  kalau (a) {
-      ...
-  } lainnya {
-      kalau (b) {
-          ...
-      } lainnya {
-          ...
-      }
-  }
-  ```
+- `lainnya kalau` (else-if) boleh dirantai berapa kali pun, gula sintaksis murni (desugar jadi `kalau` bersarang di dalam `lainnya`).
+- Blok `lainnya` opsional.
 
 ---
 
@@ -131,6 +132,8 @@ ulang (kondisi) {
     ...
 }
 ```
+
+`putus` keluar paksa dari loop (break), `lanjut` lompat ke iterasi berikutnya (continue) — dua-duanya boleh dipakai di dalam `ulang`/`ulang setiap`, boleh bersarang (selalu ke loop terdekat), dan aman dipakai di dalam `coba/tangkap`. Error kompilasi jelas kalau dipakai di luar loop.
 
 ### `ulang setiap` (foreach)
 
@@ -260,23 +263,29 @@ rata_rata(harga)              catatan: rata-rata elemen numerik
 ambil(harga, 1)               catatan: sama seperti harga[1], tapi lewat fungsi
 ```
 
-Tidak ada assignment lewat indeks (`daftar[0] = x` tidak didukung) — pakai `gabung()` untuk membuat daftar baru, atau bangun ulang lewat `petakan()`.
+Assignment lewat indeks didukung: `daftar[0] = x` mengubah elemen yang sudah ada (indeks di luar jangkauan → error, tidak auto-extend). Buat menambah elemen baru, tetap pakai `gabung()`.
 
 ### Fungsi list lanjutan (map/filter/sort)
 
-Karena closure belum bisa dilewatkan langsung sebagai nilai first-class ke fungsi-fungsi ini (butuh nama fungsi berupa string), sintaksnya:
+Sintaks:
 
 ```
 fungsi kuadrat(n) { kembalikan n * n }
-fungsi genap(n) { kembalikan n - (n / 2) * 2 == 0 }
+fungsi genap(n) { kembalikan n % 2 == 0 }
 
-petakan(daftar, "kuadrat")         catatan: map -- fungsi diterapkan ke tiap elemen
-saring(daftar, "genap")            catatan: filter -- fungsi harus kembalikan Bool
-urutkan(daftar)                    catatan: sort natural (Angka/Desimal/Teks)
-urutkan(daftar, "nama_fungsi")     catatan: sort berdasarkan kunci hasil fungsi (mis. field bentuk)
+petakan(daftar, "kuadrat")                     catatan: map -- nama fungsi via Teks (cara klasik)
+petakan(daftar, fungsi(n) { kembalikan n*n })  catatan: map -- closure inline langsung
+saring(daftar, genap)                            catatan: filter -- closure lewat variabel, harus kembalikan Bool
+urutkan(daftar)                                   catatan: sort natural (Angka/Desimal/Teks)
+urutkan(daftar, "nama_fungsi")                   catatan: sort berdasarkan kunci hasil fungsi (mis. field bentuk)
+
+ingat ambang = 10
+saring(daftar, fungsi(n) { kembalikan n > ambang })  catatan: closure DENGAN capture juga bisa
 ```
 
-Fungsi callback di `petakan`/`saring`/`urutkan` **tetap dapat manfaat JIT** kalau fungsinya eligible (parameter & lokal-nya seragam Angka/Desimal), meski dipanggil secara tidak langsung lewat nama string. Ini termasuk fungsi dengan parameter `bentuk` yang di-flatten (lihat [Parameter Bentuk yang "Flattened"](#parameter-bentuk-yang-flattened)) — jadi `urutkan(daftar_titik, "jarak_dari_pusat")` bekerja dan tetap cepat, bukan cuma untuk parameter `Angka`/`Desimal` polos.
+Argumen kedua ketiga fungsi ini terima **Teks** (nama fungsi) **ATAU closure first-class** sekaligus — kalau closure-nya punya *capture* (menangkap variabel dari scope luar), itu otomatis disambung transparan di belakang layar. Yang **belum** bisa: melewatkan nama fungsi top-level TANPA tanda kutip sebagai nilai (`petakan(d, kuadrat)` tanpa closure literal/string gagal, karena fungsi top-level bukan first-class value otomatis) — bungkus jadi closure kecil kalau perlu: `fungsi(x) { kembalikan kuadrat(x) }`.
+
+Fungsi callback di `petakan`/`saring`/`urutkan` **tetap dapat manfaat JIT** kalau fungsinya eligible (parameter & lokal-nya seragam Angka/Desimal), baik dipanggil lewat nama string maupun closure. Ini termasuk fungsi dengan parameter `bentuk` yang di-flatten (lihat [Parameter Bentuk yang "Flattened"](#parameter-bentuk-yang-flattened)) — jadi `urutkan(daftar_titik, "jarak_dari_pusat")` bekerja dan tetap cepat, bukan cuma untuk parameter `Angka`/`Desimal` polos.
 
 ---
 
@@ -292,7 +301,7 @@ kunci_peta(profil)           catatan: Daftar berisi semua kunci (Teks)
 
 Kunci literal Peta harus `Teks` diapit tanda kutip (tidak ada shorthand seperti `{nama: "Budi"}`  tanpa kutip — itu justru sintaks literal `Bentuk`, beda makna).
 
-Tidak ada assignment lewat kunci (`peta["x"] = y` tidak didukung), sama seperti `Daftar`.
+Assignment lewat kunci didukung: `peta["x"] = y` — kunci yang belum ada otomatis ditambahkan (insert-or-update), beda dari `Daftar` yang harus indeksnya sudah ada.
 
 ---
 

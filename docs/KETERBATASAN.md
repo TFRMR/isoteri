@@ -21,6 +21,14 @@ Catatan tambahan: menulis literal `i64::MIN` (`-9223372036854775808`) langsung j
 
 Catatan lain: `isoteri-vm.js` (runtime browser) merepresentasikan `Angka` sebagai `Number` JS biasa (double 64-bit), BUKAN `i64` asli seperti versi native -- jadi perilaku ekstrimnya beda lagi dari dua yang di atas: bukan wrap-around, tapi kehilangan presisi diam-diam begitu lewat `Number.MAX_SAFE_INTEGER` (2^53). Ini pre-existing (bukan dari perubahan overflow-checking sesi ini), belum diperbaiki -- perlu `BigInt` buat benar-benar menyamai semantik `i64`.
 
+### Negasi boolean (`!ekspr`) -- didukung (ditemukan & diperbaiki di sesi ini)
+```
+tampilkan !benar        catatan: salah
+tampilkan !0              catatan: benar -- pakai truthiness YANG SAMA seperti 'kalau'/'dan'/'atau'
+tampilkan !x.selesai      catatan: jalan buat field bentuk juga
+```
+Sebelumnya bahasa ini sama sekali gak punya cara negasi boolean langsung (bukan cuma belum ada `!`, tapi juga gak ada kata kunci pengganti kayak `tidak`/`bukan`) -- ketauan pas nulis contoh Component System (toggle status di Todo List). `!` sekarang jadi operator unary sungguhan (presedensi tertinggi, sama seperti minus unary), dievaluasi via `Value::truthy()` yang SAMA dipakai kondisi `kalau`, jadi konsisten: `!5` salah (5 truthy), `!0`/`!""`/`![]` benar. Didukung penuh di semua jalur (native, `via-ir`/AOT, web export) -- TIDAK di-JIT (fungsi yang makai `!` fallback ke bytecode VM, karena operasi ini fundamental beda tipe balikan (Bool) dari JIT sempit yang cuma buat Angka/Desimal).
+
 ### Operator modulo (`%`), increment/decrement (`++`/`--`), compound assignment (`+=` dst.) -- didukung
 ```
 tampilkan 17 % 5        catatan: 2
@@ -190,7 +198,72 @@ unduh_lanjut_async(url, {"metode": "POST", "body": teks_json(data), "header": {"
 ```
 `opsi` (Peta) semua kunci opsional: `metode` (default `"GET"`), `body` (Teks), `header` (Peta<Teks,Teks>). Callback sukses terima SATU argumen: instans `Respons` (`status`: Angka, `ok`: Bool, `teks`: Teks -- uraikan sendiri lewat `urai_json()` yang sudah ada kalau JSON). `unduh_async()` versi lama (GET-teks-doang) **tetap ada, tidak berubah**, sekarang juga menerima closure di kedua argumen fungsi-nya (bukan cuma Teks nama fungsi).
 
+### Router -- `rute_daftar()`/`rute_mulai()`/`rute_navigasi()`/`rute_sekarang()` (hash routing)
+```
+fungsi render_beranda(params) { dom_atur_html(dom_pilih("#app"), "<h1>Beranda</h1>") }
+fungsi render_produk(params) { tampilkan params["id"] }   catatan: dari pola "/produk/:id"
+
+rute_daftar([
+    {"pola": "/", "tampilkan": "render_beranda"},
+    {"pola": "/produk/:id", "tampilkan": "render_produk"},
+    {"pola": "*", "tampilkan": "render_404"}                catatan: catch-all/404, taruh PALING AKHIR
+])
+rute_mulai()               catatan: mulai dengarkan hashchange + cocokkan path saat ini
+rute_navigasi("/produk/7") catatan: navigasi terprogram (mis. dari tombol)
+rute_sekarang()             catatan: {path: Teks, params: Peta} rute aktif saat ini
+```
+URL berbentuk `situs.com/#/produk/7` (hash routing) -- **sengaja** dipilih ketimbang path routing (`situs.com/produk/7`) karena zero-config, langsung jalan di hosting statis apa pun (Vercel/Cloudflare Pages/GitHub Pages) tanpa perlu setting rewrite server. `:nama` menangkap satu segmen path, `*` di akhir jadi catch-all (isinya masuk `params["*"]`) -- cocok buat halaman 404. Query string (`#/cari?q=beras`) otomatis ke-parse gabung ke `params` yang sama. Handler terima Teks (nama fungsi) ATAU closure (dengan capture), persis konvensi `petakan`/`dom_ketika`/dst. **Batasan:** cuma satu level rute (belum ada nested routes/layout bertingkat) -- buat aplikasi kompleks, susun sendiri di dalam handler (mis. render_produk bisa manggil komponen anak sendiri).
+
+### Manajemen state -- `state_buat()`/`state_nilai()`/`state_atur()`/`state_ubah()`/`state_langgan()`
+```
+ingat toko = state_buat(0)                                  catatan: nilai awal
+state_langgan(toko, fungsi(n) { dom_atur_teks(el, ""+n) })  catatan: "pelanggan" (subscriber), langsung dipanggil sekali
+state_atur(toko, 5)                                          catatan: set nilai baru -> SEMUA pelanggan dipanggil ulang
+state_ubah(toko, fungsi(lama) { kembalikan lama + 1 })       catatan: update berbasis nilai lama (increment dst.)
+state_nilai(toko)                                             catatan: baca nilai saat ini tanpa langganan
+```
+Pola **pub/sub sederhana** (bukan reactive fine-grained kayak Vue/Solid, bukan vdom-diffing kayak React) -- tiap `state_atur`/`state_ubah` memanggil ULANG SEMUA pelanggan dengan nilai baru PENUH; pelanggan (biasanya fungsi "render ulang" pakai `dom_atur_html`) tanggung jawab sendiri update tampilannya. Nilai yang disimpan bisa apa saja termasuk `bentuk`/`Daftar`/`Peta` bersarang (immutable/clone-on-write, konsisten dengan semantik bahasa). Cukup buat skala dashboard/CRUD/aplikasi warga -- **bukan** pengganti diffing DOM buat UI yang sangat besar & dalam (tiap render ulang, seluruh bagian yang di-`dom_atur_html` di-parse ulang browser dari nol, bukan di-patch sebagian).
+
+### Performa: JS runtime TIDAK punya JIT -- jaga komputasi berat tetap di native
+```
+fungsi fib(n: Angka) { kalau (n <= 1) { kembalikan n } kembalikan fib(n-1) + fib(n-2) }
+tampilkan fib(38)
+```
+Di native (`isoteri jalankan`), ini berkat JIT Cranelift selesai dalam hitungan detik. Di `isoteri-vm.js` (browser/Node) -- **diverifikasi langsung**, masih belum selesai setelah 90 detik, karena JS runtime murni interpretasi bytecode, tidak ada kompilasi native sama sekali. Ini bukan bug, tapi karakteristik arsitektur yang harus disadari: buat kalkulasi berat (rekursi dalam, loop jutaan iterasi), pertimbangkan lakukan di native Rust (mis. lewat API/Cloudflare Worker yang dipanggil dari web lewat `unduh_lanjut_async`) alih-alih langsung di `isoteri-vm.js`. UI logic biasa (routing, state, DOM manipulation, event handling) jauh lebih ringan dan tidak kena batasan ini.
+
+### Component System -- `komponen_buat()`/`komponen_pasang()`/dst.
+```
+ingat todo = komponen_buat({
+    "state_awal": TodoState { item_daftar: [], teks_input: "" },
+    "render": fungsi(props, state) {
+        kembalikan "<input data-aksi='ubah' data-peristiwa='input' value='" + state.teks_input + "'>" +
+                   "<button data-aksi='tambah'>Tambah</button>"
+    },
+    "aksi": {
+        "ubah": fungsi(props, state, e) { kembalikan TodoState { item_daftar: state.item_daftar, teks_input: e.nilai } },
+        "tambah": fungsi(props, state, e) { catatan: ... kembalikan state_baru }
+    },
+    "dipasang": fungsi(props, state) { tampilkan "komponen siap" },      catatan: opsional, sekali pas mount
+    "diperbarui": fungsi(props, state) { tampilkan "render ulang" },     catatan: opsional, tiap re-render
+    "dilepas": fungsi(props, state) { tampilkan "dibongkar" }            catatan: opsional, pas komponen_lepas()
+})
+ingat instans = komponen_pasang(todo, dom_pilih("#app"), props_opsional)
+komponen_state(instans)              catatan: baca state saat ini
+komponen_atur_state(instans, nilai)  catatan: ganti state -> otomatis render ulang
+komponen_ubah_state(instans, fungsi(lama) { kembalikan lama_diubah })
+komponen_atur_props(instans, props_baru)
+komponen_elemen(instans)             catatan: ElemenDOM wadah -- buat query manual kalau perlu
+komponen_lepas(instans)              catatan: panggil "dilepas", copot listener, kosongkan wadah
+```
+**Filosofi (disengaja, bukan kelalaian):** ini pola **"render ulang penuh"**, BUKAN virtual-DOM diffing kayak React. `render` mengembalikan STRING HTML, ditulis langsung lewat `innerHTML` tiap state/props berubah. Cukup buat skala dashboard/CRUD/aplikasi warga -- bukan pengganti diffing sungguhan buat UI sangat besar & dalam (browser parse ulang HTML dari nol tiap render, bukan patch sebagian).
+
+**Event lewat `data-aksi`, bukan `onclick=` inline:** karena `render` cuma menghasilkan teks HTML (bukan pointer fungsi hidup), gak ada cara nyuntik handler Isoteri langsung ke atribut `onclick`. Solusinya event delegation: tulis `data-aksi="nama"` di elemen HTML hasil render (opsional `data-peristiwa="input"`/`"change"`/`"submit"`/`"keyup"`, default `"click"`), lalu daftarkan handler yang sesuai lewat opsi `"aksi"` komponen. Handler aksi dapat `(props, state, event)`, **nilai kembaliannya JADI state baru** (pola reducer) -- otomatis memicu render ulang.
+
+**Komposisi/nested components:** belum otomatis (belum ada children/slot bawaan). Pola yang jalan: `render` induk taruh placeholder `<div id='anak-1'></div>`, lalu di hook `"dipasang"`/`"diperbarui"` panggil `komponen_pasang()` manual buat tiap anak, target ke `dom_pilih("#anak-1")`.
+
 ### Yang masih belum ada
+- **Component System** (React/Vue-style, dengan lifecycle hooks) -- BELUM dikerjakan, ini proyek besar tersendiri (butuh keputusan arsitektur: vdom-diffing vs render-ulang-penuh vs approach lain). Router + State Management di atas adalah FONDASI buat itu -- komponen nantinya = kombinasi state_buat() + fungsi render + rute_daftar(), tinggal disusun jadi pola/helper yang lebih rapi.
+- **HTTP Interceptor** -- belum ada primitif bahasa baru, tapi BISA disusun sendiri sekarang lewat pola pembungkus: buat fungsi `unduh_dengan_auth(url, opsi, sukses, gagal)` yang nambahin header token lalu manggil `unduh_lanjut_async()` di dalamnya.
 - Belum ada bridge clipboard (copy/paste).
 - Belum ada akses ke `History`/routing SPA (`pushState` dst.).
 - `dom_ketika()` belum bisa `removeEventListener` (sekali daftar, nempel selamanya sampai elemen dihapus).

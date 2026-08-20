@@ -42,17 +42,49 @@ Kalau build gagal karena error `edition2024`, itu masalah versi toolchain, bukan
 
 ## Fitur Bahasa
 
-- Tipe dasar: `Angka` (i64), `Desimal` (f64), `Teks`, `Bool`, `Daftar`, `Peta`, `kosong`
+- Tipe dasar: `Angka` (i64, overflow di-cek jelas -- lihat KETERBATASAN.md), `Desimal` (f64), `Teks`, `Bool`, `Daftar`, `Peta`, `kosong`
 - `bentuk` — struct/tipe custom dengan validasi field saat kompilasi, mendukung field bersarang (baca & tulis, sedalam apapun)
-- Closure (fungsi anonim) dengan capture-by-value, termasuk closure bersarang dengan capture transitif
+- Closure (fungsi anonim) dengan capture-by-value, termasuk closure bersarang dengan capture transitif — **sekarang juga bisa langsung dilewatkan sebagai callback ke `petakan`/`saring`/`urutkan`** (dulu cuma nama fungsi via Teks)
 - `muat` — sistem modul antar file, dengan deteksi tabrakan nama lintas-modul
+- Kontrol alir lengkap: `kalau`/`lainnya kalau`/`lainnya` (else-if), `ulang`, `ulang setiap`, `putus`/`lanjut` (break/continue, aman dipakai di dalam `coba/tangkap`)
+- Operator lengkap: aritmatika (`+` `-` `*` `/` `%`), perbandingan, `dan`/`atau`, negasi boolean (`!`), compound assignment (`+=` `-=` `*=` `/=`), increment/decrement (`++`/`--`), assignment lewat indeks (`daftar[0] = x`, `peta["k"] = x`, nested & campur field)
 - Fungsi bawaan untuk teks, matematika, list (`petakan`/`saring`/`urutkan`), JSON, file, dan HTTP
 - `coba/tangkap` untuk penanganan error runtime
 - `ulang selaras` — perulangan paralel multi-thread
 - Kompilasi JIT otomatis (ke kode mesin asli lewat Cranelift) untuk fungsi numerik murni — tidak perlu anotasi manual, terdeteksi otomatis
 - Kompilasi AOT (`isoteri bangun program.iso -o keluaran`) — hasilkan executable native mandiri, bisa didistribusikan tanpa perlu instalasi apa pun
+- Deklarasi ulang `ingat` nama sama sekarang gagal kompilasi dengan pesan jelas (dulu diam-diam menimpa)
 
 Detail lengkap tiap fitur dan batasannya ada di [docs/REFERENSI.md](docs/REFERENSI.md) dan [docs/KETERBATASAN.md](docs/KETERBATASAN.md).
+
+## Web Application Framework (`runtime/web/isoteri-vm.js`)
+
+Di atas VM browser (Milestone B), Isoteri sekarang punya tiga fondasi buat aplikasi web kompleks (dashboard, CRUD, e-commerce skala menengah) — semuanya murni di jalur JavaScript, **nol perubahan ke compiler/VM Rust**, jadi nol dampak ke performa native:
+
+```isoteri
+catatan: Router (hash-based, zero-config di hosting statis)
+rute_daftar([
+    {"pola": "/", "tampilkan": "render_beranda"},
+    {"pola": "/produk/:id", "tampilkan": "render_produk"},
+    {"pola": "*", "tampilkan": "render_404"}
+])
+rute_mulai()
+
+catatan: State Management (pub/sub, render-ulang-penuh)
+ingat toko = state_buat(0)
+state_langgan(toko, fungsi(n) { dom_atur_teks(el, "" + n) })
+state_atur(toko, 5)
+
+catatan: Component System (state + render + aksi + lifecycle hooks)
+ingat komp = komponen_buat({
+    "state_awal": 0,
+    "render": fungsi(props, state) { kembalikan "<button data-aksi='tambah'>" + state + "</button>" },
+    "aksi": { "tambah": fungsi(props, state, e) { kembalikan state + 1 } }
+})
+komponen_pasang(komp, dom_pilih("#app"))
+```
+
+Plus event handler yang bisa terima closure & baca data event langsung (`dom_ketika(el, "input", fungsi(e) { tampilkan e.nilai })`), form input (`dom_nilai`/`dom_dicentang`), timer (`tunda`/`interval_mulai`), dan fetch lanjutan dengan POST/header/status code (`unduh_lanjut_async`). Filosofi Component System-nya **render-ulang-penuh** (bukan vdom-diffing kayak React) — cukup buat skala dashboard/CRUD, dengan trade-off yang didokumentasikan jujur di [docs/KETERBATASAN.md](docs/KETERBATASAN.md).
 
 ## Roadmap
 
@@ -64,9 +96,15 @@ Isoteri dikembangkan lewat dua kelompok prioritas: **Kelompok 1** (kelengkapan d
 |---|---|
 | Struct/tipe custom (`bentuk`) | ✅ Selesai |
 | Fungsi string & matematika | ✅ Selesai |
-| Fungsi list lanjutan (`urutkan`/`saring`/`petakan`) | ✅ Selesai |
+| Fungsi list lanjutan (`urutkan`/`saring`/`petakan`) | ✅ Selesai, sekarang terima closure langsung juga |
 | Modul/import antar file (`muat`) | ✅ Selesai |
 | Fungsi anonim/closure | ✅ Selesai |
+| `lainnya kalau` (else-if) | ✅ Selesai |
+| `putus`/`lanjut` (break/continue) | ✅ Selesai (native+web; belum di `via-ir`/AOT) |
+| Modulo (`%`), compound assignment, `++`/`--` | ✅ Selesai |
+| Assignment lewat indeks (`daftar[0]=x`, `peta["k"]=x`) | ✅ Selesai, termasuk nested & campur field |
+| Negasi boolean (`!`) | ✅ Selesai |
+| Overflow `Angka` terdeteksi (bytecode VM) | ✅ Selesai (JIT masih wrap, lihat KETERBATASAN.md) |
 
 ### Kelompok 2 — Keunggulan Rust
 
@@ -125,14 +163,14 @@ identik byte-per-byte** untuk 13/16 program contoh (sisanya sengaja belum diduku
 dibanding menunggu target WASM asli). Lihat juga [docs/FILOSOFI.md](docs/FILOSOFI.md)
 untuk 10 Hukum Isoteri dan peta jalan fase lengkap.
 
-### Milestone B — DOM/Event/Storage/Fetch/Canvas/WebSocket
+### Milestone B — DOM/Event/Storage/Fetch/Canvas/WebSocket/Router/State/Component
 
 ```isoteri
 ingat judul = dom_pilih("#judul")
 dom_atur_teks(judul, "Halo Isoteri")
-dom_ketika(judul, "klik", "ketika_diklik")
+dom_ketika(judul, "klik", fungsi(e) { tampilkan e.tipe })   catatan: closure + data event, bukan cuma nama fungsi
 simpan_lokal("kunci", "nilai")
-unduh_async("https://api.contoh.com", "saat_sukses", "saat_gagal")
+unduh_lanjut_async("https://api.contoh.com", {"metode": "POST"}, fungsi(r) { tampilkan r.status })
 
 ingat ctx = dom_konteks_2d(dom_pilih("#papan"))
 kanvas_isi_gaya(ctx, "merah")
@@ -149,6 +187,21 @@ sepenuhnya di `runtime/web/isoteri-vm.js` tanpa perubahan compiler Rust sama sek
 konsisten dengan prinsip "DOM adalah lapisan platform, bukan core language" di
 [docs/FILOSOFI.md](docs/FILOSOFI.md). Contoh lengkap: `runtime/web/contoh_dom.iso`
 dan `runtime/web/contoh_kanvas_ws.iso`.
+
+Di atas Milestone B, sekarang ada tiga fondasi buat aplikasi web kompleks (lihat
+section "Web Application Framework" di atas dan detail lengkap di
+[docs/KETERBATASAN.md](docs/KETERBATASAN.md)):
+
+- **Router** (`rute_daftar`/`rute_mulai`/`rute_navigasi`/`rute_sekarang`) — hash-based, path param dinamis, catch-all/404
+- **State Management** (`state_buat`/`state_atur`/`state_ubah`/`state_langgan`) — pub/sub sederhana
+- **Component System** (`komponen_buat`/`komponen_pasang`/dst.) — render-ulang-penuh + event delegation lewat `data-aksi`, lifecycle hooks (`dipasang`/`diperbarui`/`dilepas`)
+
+Plus form input (`dom_nilai`/`dom_atur_nilai`/`dom_dicentang`), timer
+(`tunda`/`interval_mulai`/`interval_hentikan`), dan fetch lanjutan dengan
+POST/header/status code (`unduh_lanjut_async`). Semua sudah diverifikasi
+identik lewat regresi native+`via-ir`+web (Node.js) di 25+ program contoh —
+nol dampak ke performa jalur native Rust, karena semuanya murni penambahan
+JavaScript di `isoteri-vm.js`.
 
 ### Milestone C — Package Manager Minimal
 
