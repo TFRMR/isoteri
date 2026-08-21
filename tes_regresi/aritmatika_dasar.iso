@@ -1,0 +1,7 @@
+fungsi hitung(a: Angka, b: Angka) {
+    kembalikan a + b - 3 * b
+}
+tampilkan hitung(10, 20)
+tampilkan hitung(-5, 3)
+tampilkan 7 % 3
+tampilkan 2 + 3 * 4

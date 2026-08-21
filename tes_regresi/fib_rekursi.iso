@@ -1,0 +1,8 @@
+fungsi fib(n: Angka) {
+    kalau (n < 2) {
+        kembalikan n
+    }
+    kembalikan fib(n - 1) + fib(n - 2)
+}
+tampilkan fib(10)
+tampilkan fib(20)

@@ -1,0 +1,5 @@
+ingat angka = [5, 3, 8, 1, 9, 2]
+ingat genap = saring(angka, fungsi(x) { kembalikan x % 2 == 0 })
+ingat ganda = petakan(genap, fungsi(x) { kembalikan x * 2 })
+ingat urut = urutkan(ganda)
+tampilkan urut

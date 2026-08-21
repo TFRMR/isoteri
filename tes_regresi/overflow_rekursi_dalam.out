@@ -1,0 +1,2 @@
+Kesalahan Runtime: Baris 7: Angka meluap (overflow) di dalam fungsi terkompilasi JIT: hasil melebihi jangkauan Angka (-9223372036854775808..9223372036854775807). Pertimbangkan pakai Desimal kalau nilainya memang bisa sebesar ini.
+EXIT:1

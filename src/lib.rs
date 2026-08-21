@@ -5063,11 +5063,22 @@ fn jalankan_stmt_list(program: Vec<(usize, Stmt)>) -> Result<(), String> {
     let mut compiler = Compiler::new(fungsi_index);
     let top_kode = compiler.compile_top(&top_level);
     let mut jit = JitEngine::new();
+    // ISOTERI_NO_JIT=1 matikan JIT sama sekali (semua fungsi lari ke bytecode VM murni),
+    // TANPA perlu edit/hapus anotasi tipe di kode sumbernya. Dipakai scripts/regresi.sh
+    // supaya bisa bandingkan hasil "bytecode murni" vs "JIT produksi" vs "via-ir" buat
+    // 3 jalur eksekusi yang independen -- persis metodologi yang nemuin bug wrap-around
+    // overflow JIT (lihat KETERBATASAN.md & docs/IR.md): kalau bytecode & JIT kasih hasil
+    // beda buat program yang SAMA, itu tandanya salah satu jalurnya (biasanya JIT-nya,
+    // karena lebih jarang dites manual) punya bug tersembunyi.
+    let paksa_bytecode = std::env::var("ISOTERI_NO_JIT").map(|v| v == "1").unwrap_or(false);
     let mut fungsi_vm: Vec<Rc<VMFungsi>> = Vec::with_capacity(nama_fungsi.len());
     for nama in &nama_fungsi {
         let cf = resolver.fungsi_out.get(nama).unwrap();
         let mut vmf = compiler.compile_fungsi(cf);
         if let Some(mode) = cf.tipe_jit {
+            if paksa_bytecode {
+                // sengaja skip -- vmf.native tetap None, VM otomatis pakai bytecode biasa.
+            } else {
             match jit.kompilasi(cf, mode) {
                 Ok(ptr) => {
                     vmf.native = Some(match mode {
@@ -5078,6 +5089,7 @@ fn jalankan_stmt_list(program: Vec<(usize, Stmt)>) -> Result<(), String> {
                 Err(e) => {
                     eprintln!("Peringatan: fungsi \"{}\" gagal dikompilasi JIT ({}), pakai bytecode biasa.", nama, e);
                 }
+            }
             }
         }
         fungsi_vm.push(Rc::new(vmf));
@@ -5170,10 +5182,30 @@ enum IrInstr {
     Legacy(Vec<Instr>, Option<Reg>),
 }
 
+/// Konteks satu loop yang lagi dilower ke IR -- sama persis semantiknya dengan
+/// Compiler::LoopCtx (bytecode), lihat catatan di sana. Dipisah jadi struct sendiri
+/// (bukan reuse LoopCtx langsung) karena field `break_patches`/`continue_target` di sini
+/// menunjuk indeks di larik `IrInstr` (Vec<IrInstr>), BUKAN larik `Instr` (bytecode) --
+/// dua ruang indeks yang berbeda.
+struct LoopCtxIr {
+    continue_target: usize,
+    break_patches: Vec<usize>,
+    coba_depth_saat_masuk: usize,
+}
+
 struct IrLower<'a> {
     kompiler: &'a mut Compiler, // dipakai ulang buat konstanta & fungsi_index & escape hatch
     reg_types: Vec<IrType>,     // terindeks per register; tumbuh seiring temp baru dialokasi
     slot_tipe: &'a [Option<TipeJit>],
+    /// 'putus'/'lanjut' -- lihat catatan panjang di CStmt::Putus/Lanjut di bawah.
+    loop_stack: Vec<LoopCtxIr>,
+    /// SENGAJA field terpisah dari Compiler::coba_depth (walau namanya sama) -- coba_depth
+    /// milik `self.kompiler` itu buat compile_stmt/compile_expr escape hatch punya Compiler
+    /// SENDIRI (dipanggil buat statement lain semacam UbahFieldLocal, TIDAK ADA hubungannya
+    /// dengan CobaLocal/CobaGlobal yang di sini dilower LANGSUNG ke IrInstr::MulaiCoba/
+    /// SelesaiCoba, bukan lewat compile_stmt). Jadi coba_depth counter buat 'putus'/'lanjut'
+    /// perlu dihitung ulang di sini, independen, dengan pola PERSIS sama seperti Compiler.
+    coba_depth: usize,
 }
 
 impl<'a> IrLower<'a> {
@@ -5362,10 +5394,13 @@ impl<'a> IrLower<'a> {
                 let (cr, _) = self.lower_expr(cond, out);
                 let lompat_salah_idx = out.len();
                 out.push(IrInstr::JumpJikaSalah(cr, 0));
+                self.loop_stack.push(LoopCtxIr { continue_target: mulai, break_patches: Vec::new(), coba_depth_saat_masuk: self.coba_depth });
                 self.lower_blok(body, out);
+                let ctx = self.loop_stack.pop().unwrap();
                 out.push(IrInstr::Jump(mulai));
                 let akhir = out.len();
                 if let IrInstr::JumpJikaSalah(_, t) = &mut out[lompat_salah_idx] { *t = akhir; }
+                for idx in ctx.break_patches { if let IrInstr::Jump(t) = &mut out[idx] { *t = akhir; } }
             }
             CStmt::UlangSetiapGlobal(slot, e, body) => {
                 let (er, _) = self.lower_expr(e, out);
@@ -5374,10 +5409,13 @@ impl<'a> IrLower<'a> {
                 let dst = self.baru_reg(IrType::Dinamis);
                 out.push(IrInstr::IterLanjut(dst, 0));
                 out.push(IrInstr::StoreGlobal(*slot, dst));
+                self.loop_stack.push(LoopCtxIr { continue_target: mulai, break_patches: Vec::new(), coba_depth_saat_masuk: self.coba_depth });
                 self.lower_blok(body, out);
+                let ctx = self.loop_stack.pop().unwrap();
                 out.push(IrInstr::Jump(mulai));
                 let akhir = out.len();
                 if let IrInstr::IterLanjut(_, t) = &mut out[mulai] { *t = akhir; }
+                for idx in ctx.break_patches { if let IrInstr::Jump(t) = &mut out[idx] { *t = akhir; } }
             }
             CStmt::UlangSetiapLocal(slot, e, body) => {
                 let (er, _) = self.lower_expr(e, out);
@@ -5386,10 +5424,13 @@ impl<'a> IrLower<'a> {
                 while self.reg_types.len() <= *slot { self.reg_types.push(IrType::Dinamis); }
                 self.reg_types[*slot] = IrType::Dinamis;
                 out.push(IrInstr::IterLanjut(*slot as u32, 0));
+                self.loop_stack.push(LoopCtxIr { continue_target: mulai, break_patches: Vec::new(), coba_depth_saat_masuk: self.coba_depth });
                 self.lower_blok(body, out);
+                let ctx = self.loop_stack.pop().unwrap();
                 out.push(IrInstr::Jump(mulai));
                 let akhir = out.len();
                 if let IrInstr::IterLanjut(_, t) = &mut out[mulai] { *t = akhir; }
+                for idx in ctx.break_patches { if let IrInstr::Jump(t) = &mut out[idx] { *t = akhir; } }
             }
             CStmt::UlangSelaras(e, _, _) => {
                 // Badannya AST Stmt mentah (bukan bytecode) -- lihat catatan modul. Pakai ulang
@@ -5403,7 +5444,9 @@ impl<'a> IrLower<'a> {
                 let mulai_idx = out.len();
                 let dst_pesan = self.baru_reg(IrType::Teks);
                 out.push(IrInstr::MulaiCoba(0, dst_pesan));
+                self.coba_depth += 1;
                 self.lower_blok(badan_coba, out);
+                self.coba_depth -= 1;
                 out.push(IrInstr::SelesaiCoba);
                 let lompat_akhir_idx = out.len();
                 out.push(IrInstr::Jump(0));
@@ -5422,7 +5465,9 @@ impl<'a> IrLower<'a> {
                 // slot itu (badan_coba belum tentu menulisinya buat hal lain).
                 let dst_pesan = self.reg_tujuan(Some(*slot as u32), IrType::Teks);
                 out.push(IrInstr::MulaiCoba(0, dst_pesan));
+                self.coba_depth += 1;
                 self.lower_blok(badan_coba, out);
+                self.coba_depth -= 1;
                 out.push(IrInstr::SelesaiCoba);
                 let lompat_akhir_idx = out.len();
                 out.push(IrInstr::Jump(0));
@@ -5434,13 +5479,29 @@ impl<'a> IrLower<'a> {
             }
             CStmt::Kembalikan(e) => { let (r, _) = self.lower_expr(e, out); out.push(IrInstr::Kembalikan(r)); }
             CStmt::EkspresiStmt(e) => { self.lower_expr(e, out); }
-            CStmt::Putus | CStmt::Lanjut => {
-                // KETERBATASAN SAAT INI: jalur 'via-ir' (dipakai `isoteri via-ir` dan AOT lewat
-                // `isoteri bangun`) belum mengimplementasikan 'putus'/'lanjut'. Eksekusi normal
-                // (`isoteri jalankan`/`isoteri uji`/`isoteri ekspor-web`) TIDAK lewat sini sama
-                // sekali -- itu semua langsung pakai Compiler (lihat jalankan_berkas), jadi sudah
-                // didukung penuh. Panik di sini jelas lebih baik daripada diam-diam salah lompat.
-                panic!("'putus'/'lanjut' belum didukung di jalur eksperimental 'via-ir' (dipakai 'isoteri via-ir' dan 'isoteri bangun'). Jalankan programnya lewat 'isoteri jalankan' (mode biasa) untuk sekarang -- lihat docs/KETERBATASAN.md.");
+            CStmt::Putus => {
+                // Sama persis semantiknya dengan Compiler::compile_stmt CStmt::Putus (bytecode)
+                // -- lihat catatan panjang di LoopCtx/LoopCtxIr. Kalau 'putus' melompat keluar
+                // dari tengah satu atau lebih blok 'coba' aktif (coba_depth sekarang lebih besar
+                // dari coba_depth SAAT loop yang dituju baru mulai), handler_stack VM butuh
+                // di-"tutup" sebanyak selisihnya SEBELUM lompat -- kalau tidak, handler yang
+                // seharusnya sudah tidak aktif tetap nyangkut aktif buat kode setelah loop.
+                // Instr::TutupHandler sudah ada & teruji lewat jalur bytecode biasa, jadi
+                // dipakai ulang APA ADANYA lewat escape hatch Legacy (parameterless, tidak
+                // nyentuh register, aman disisipkan di posisi manapun).
+                let ctx = self.loop_stack.last().expect("resolver sudah memvalidasi 'putus' cuma ada di dalam loop");
+                let n_tutup = self.coba_depth - ctx.coba_depth_saat_masuk;
+                if n_tutup > 0 { out.push(IrInstr::Legacy(vec![Instr::TutupHandler; n_tutup], None)); }
+                let idx = out.len();
+                out.push(IrInstr::Jump(0));
+                self.loop_stack.last_mut().unwrap().break_patches.push(idx);
+            }
+            CStmt::Lanjut => {
+                let ctx = self.loop_stack.last().expect("resolver sudah memvalidasi 'lanjut' cuma ada di dalam loop");
+                let n_tutup = self.coba_depth - ctx.coba_depth_saat_masuk;
+                let target = ctx.continue_target;
+                if n_tutup > 0 { out.push(IrInstr::Legacy(vec![Instr::TutupHandler; n_tutup], None)); }
+                out.push(IrInstr::Jump(target));
             }
         }
     }
@@ -5471,7 +5532,7 @@ fn lower_fungsi_ke_ir(kompiler: &mut Compiler, cf: &CFungsi) -> (Vec<IrInstr>, V
         .collect();
     let mut out = Vec::new();
     {
-        let mut lower = IrLower { kompiler, reg_types: std::mem::take(&mut reg_types), slot_tipe: &cf.slot_tipe };
+        let mut lower = IrLower { kompiler, reg_types: std::mem::take(&mut reg_types), slot_tipe: &cf.slot_tipe, loop_stack: Vec::new(), coba_depth: 0 };
         lower.lower_blok(&cf.body, &mut out);
         reg_types = lower.reg_types;
     }
@@ -5482,7 +5543,7 @@ fn lower_top_ke_ir(kompiler: &mut Compiler, top: &[(usize, CStmt)]) -> (Vec<IrIn
     let mut out = Vec::new();
     let reg_types;
     {
-        let mut lower = IrLower { kompiler, reg_types: Vec::new(), slot_tipe: &[] };
+        let mut lower = IrLower { kompiler, reg_types: Vec::new(), slot_tipe: &[], loop_stack: Vec::new(), coba_depth: 0 };
         lower.lower_blok(top, &mut out);
         reg_types = lower.reg_types;
     }

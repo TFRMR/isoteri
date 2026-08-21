@@ -1,0 +1,24 @@
+fungsi coba_bagi(a, b) {
+    coba {
+        kembalikan a / b
+    } tangkap e {
+        tampilkan "gagal: " + e
+        kembalikan 0
+    }
+}
+
+ingat daftar_pembagi = [2, 0, 5]
+ulang setiap b dari daftar_pembagi {
+    coba {
+        kalau (b == 0) {
+            putus
+        }
+        tampilkan 10 / b
+    } tangkap e {
+        tampilkan "error tertangkap: " + e
+    }
+}
+tampilkan "loop selesai"
+
+ingat cek = coba_bagi(10, 0)
+tampilkan cek

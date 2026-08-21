@@ -1,0 +1,8 @@
+fungsi faktorial(n: Angka) {
+    kalau (n <= 1) {
+        kembalikan 1
+    }
+    kembalikan n * faktorial(n - 1)
+}
+tampilkan faktorial(10)
+tampilkan faktorial(15)

@@ -1,0 +1,9 @@
+fungsi tambah(a: Angka, b: Angka) {
+    kembalikan a + b
+}
+coba {
+    tampilkan tambah(9223372036854775807, 1)
+} tangkap e {
+    tampilkan "tertangkap"
+}
+tampilkan "lanjut"

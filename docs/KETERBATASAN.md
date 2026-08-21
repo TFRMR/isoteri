@@ -40,8 +40,8 @@ Semuanya gula sintaksis murni di parser (didesugar ke bentuk `nama = nama <op> n
 
 Efek samping yang perlu diketahui: karena `+=`/`++`/`--` didesugar TOTAL tanpa jejak di AST, `isoteri format` akan menormalisasi balik ke bentuk eksplisit (`total += 5` -> `total = total + 5`) -- ini bukan bug, cuma gula sintaksisnya memang tidak "diingat" formatter. `++`/`--` cuma didukung buat variabel (`i++`), belum buat field (`objek.field++`).
 
-### `putus`/`lanjut` (break/continue) -- didukung di eksekusi normal, belum di `via-ir`/AOT
-Sudah bisa dipakai di `ulang` dan `ulang setiap` (loop terdekat, boleh bersarang, aman dipakai di dalam `coba/tangkap`):
+### `putus`/`lanjut` (break/continue) -- didukung di SEMUA jalur eksekusi (native, `via-ir`, AOT, web export)
+Sudah bisa dipakai di `ulang` dan `ulang setiap` (loop terdekat, boleh bersarang, aman dipakai di dalam `coba/tangkap` -- handler_stack VM ditutup lewat `Instr::TutupHandler` yang disisipkan sebelum lompat kalau melompat keluar dari tengah `coba` aktif):
 ```
 ulang (i < 10) {
     i = i + 1
@@ -50,7 +50,7 @@ ulang (i < 10) {
     tampilkan i
 }
 ```
-Belum bisa dipakai lewat `isoteri via-ir` atau `isoteri bangun` (AOT) -- keduanya lewat jalur IR terpisah yang belum diimplementasikan buat dua statement ini, akan panik dengan pesan jelas kalau dicoba. Pakai `isoteri jalankan` (mode biasa) untuk sekarang. `ulang selaras` (loop paralel) juga belum mendukung `putus`/`lanjut` -- evaluatornya memang sudah dibatasi terpisah.
+**Sudah diperbaiki (sesi putus/lanjut di via-ir/AOT):** dulu `isoteri via-ir` dan `isoteri bangun` (AOT, yang secara internal lewat jalur `via-ir` juga -- lihat `jalankan_sumber_via_ir` di kode yang di-generate) PANIK (crash, bukan graceful error) kalau ketemu `putus`/`lanjut` -- jalur IR-linear (`IrLower`) belum diimplementasikan buat dua statement ini. Sekarang `IrLower` punya `loop_stack`/`LoopCtxIr` (menyimpan target lompat `lanjut` & daftar backpatch `putus`, sama persis polanya dengan `Compiler::LoopCtx` di jalur bytecode biasa) dan `coba_depth` counter sendiri (buat tau berapa `Instr::TutupHandler` perlu disisipkan kalau `putus`/`lanjut` melompat keluar dari tengah `coba` aktif) -- **sudah diverifikasi**: loop bersarang, `putus`/`lanjut` di dalam `coba/tangkap` di dalam loop (kasus paling rawan -- lihat `contoh_ergonomi/putus_lanjut_di_dalam_coba.iso`), lewat `isoteri via-ir` MAUPUN binary hasil `isoteri bangun`, hasilnya identik dengan jalur `isoteri jalankan` biasa. `ulang selaras` (loop paralel) MASIH belum mendukung `putus`/`lanjut` -- evaluatornya memang sudah dibatasi terpisah, di luar cakupan perbaikan ini (beda mekanisme sama sekali, bukan soal IR lowering).
 
 ### `lainnya kalau` (else-if) -- didukung
 ```

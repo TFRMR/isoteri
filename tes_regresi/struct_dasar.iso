@@ -1,0 +1,9 @@
+bentuk Petani {
+    nama,
+    lahan
+}
+ingat budi = Petani { nama: "Budi", lahan: 3 }
+tampilkan budi
+tampilkan budi.nama
+budi.lahan = budi.lahan + 1
+tampilkan budi.lahan

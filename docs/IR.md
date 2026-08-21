@@ -434,3 +434,14 @@ beda. Itu polanya, bukan kebetulan.
   keberadaan native fn pointer buat benchmark JIT), supaya kesalahan seperti
   di atas (benchmark JIT yang diam-diam tidak JIT) ketahuan otomatis lewat
   CI, bukan cuma lewat kecurigaan manual.
+  **UPDATE:** kebutuhan yang lebih umum ("ketauan otomatis, bukan cuma
+  kecurigaan manual") sudah kejawab lewat `scripts/regresi.sh` (lihat
+  ROADMAP.md) -- tiap kasus di `tes_regresi/` dijalankan lewat bytecode
+  murni, JIT produksi, DAN via-ir, lalu dibandingkan satu sama lain, jadi
+  divergensi semacam "JIT diam-diam gak aktif" atau "JIT kasih hasil beda
+  dari bytecode" ketahuan otomatis tanpa perlu nebak-nebak dulu native fn
+  pointer-nya kepasang atau nggak. Verifikasi khusus benchmark JIT-aktif
+  di atas masih belum diimplementasi terpisah -- kalau perlu, tinggal
+  tambah kasus di `tes_regresi/` yang isinya fungsi ber-anotasi tipe (jadi
+  otomatis lolos elig-JIT) & bandingkan performa/hasil, bukan bikin
+  mekanisme verifikasi baru dari nol.

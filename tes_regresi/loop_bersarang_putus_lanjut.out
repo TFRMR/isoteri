@@ -1,0 +1,10 @@
+luar: 1
+  dalam: 1
+  dalam: 3
+luar: 2
+  dalam: 1
+  dalam: 3
+luar: 3
+  dalam: 1
+  dalam: 3
+EXIT:0

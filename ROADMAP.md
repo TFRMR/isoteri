@@ -19,7 +19,7 @@ dapat berubah berdasarkan hasil eksperimen dan kontribusi komunitas.
 - [x] penanganan error `coba` / `tangkap`
 - [x] fungsi teks, matematika, list, JSON, file, dan HTTP
 - [x] `lainnya kalau` (else-if) -- gula sintaksis murni, jalan di semua jalur eksekusi
-- [x] `putus` / `lanjut` (break/continue) -- aman dipakai di dalam `coba/tangkap`, di eksekusi normal & web export (belum di `via-ir`/AOT, lihat KETERBATASAN.md)
+- [x] `putus` / `lanjut` (break/continue) -- aman dipakai di dalam `coba/tangkap`, di SEMUA jalur eksekusi (native, `via-ir`, AOT, web export)
 - [x] Modulo (`%`), compound assignment (`+=` dst.), increment/decrement (`++`/`--`)
 - [x] Assignment lewat indeks (`daftar[0] = x`, `peta["k"] = x`) -- termasuk nested & campur field, immutable/clone-on-write
 - [x] Negasi boolean (`!ekspr`) -- pakai truthiness yang sama dengan `kalau`/`dan`/`atau`
@@ -65,8 +65,8 @@ di atas (termasuk kenapa Component System bukan pengganti vdom-diffing React).
 - [ ] Error reporting browser yang lebih baik
 - [ ] Dokumentasi pola aplikasi web (tutorial component+router+state end-to-end)
 - [ ] Contoh aplikasi web yang lebih lengkap
-- [ ] Automated regression test yang lebih luas (formal, bukan cuma skrip manual)
-- [ ] `putus`/`lanjut` di jalur `via-ir`/AOT (sekarang panik dengan pesan jelas kalau dicoba, bukan diimplementasikan)
+- [x] Automated regression test yang lebih luas (`scripts/regresi.sh` + `tes_regresi/` -- bandingkan 3 jalur eksekusi (bytecode murni via `ISOTERI_NO_JIT=1`, JIT produksi, via-ir) satu sama lain DAN terhadap golden file `.out`, dengan allowlist eksplisit `tes_regresi/divergensi_diketahui.txt` buat divergensi yang sudah diverifikasi manual sebagai "beda tapi sama-sama benar". Diverifikasi bisa nangkep regresi sungguhan: bug wrap-around overflow JIT sesi sebelumnya sengaja dimasukkan ulang & langsung ketauan lewat 3 cara sekaligus.)
+- [x] `putus`/`lanjut` di jalur `via-ir`/AOT (IrLower sekarang punya loop_stack/LoopCtxIr + coba_depth counter sendiri, pola sama persis dengan Compiler::LoopCtx di bytecode; diverifikasi lewat nested loop & putus/lanjut di dalam coba/tangkap di dalam loop, hasilnya identik dengan jalur biasa)
 - [x] Overflow-trapping di JIT (kedua jalur -- `kompilasi()` produksi & `kompilasi_dari_ir()` via-ir/AOT -- sekarang catchable & konsisten dengan bytecode VM, termasuk lewat rekursi dalam; lihat KETERBATASAN.md)
 
 ## Eksperimen desain bahasa

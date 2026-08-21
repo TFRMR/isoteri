@@ -1,0 +1,10 @@
+fungsi buat_penambah(basis) {
+    kembalikan fungsi(x) {
+        kembalikan x + basis
+    }
+}
+ingat tambah5 = buat_penambah(5)
+ingat tambah10 = buat_penambah(10)
+tampilkan tambah5(1)
+tampilkan tambah10(1)
+tampilkan tambah5(100)

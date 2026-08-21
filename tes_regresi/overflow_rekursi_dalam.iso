@@ -1,0 +1,7 @@
+fungsi tumbuh(n: Angka, acc: Angka) {
+    kalau (n == 0) {
+        kembalikan acc
+    }
+    kembalikan tumbuh(n - 1, acc * 2)
+}
+tampilkan tumbuh(70, 1)

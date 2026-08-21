@@ -1,0 +1,21 @@
+ingat i = 0
+ulang (i < 10) {
+    i = i + 1
+    kalau (i % 2 == 0) {
+        lanjut
+    }
+    kalau (i > 7) {
+        putus
+    }
+    tampilkan i
+}
+ingat n = 4
+kalau (n == 1) {
+    tampilkan "satu"
+} lainnya kalau (n == 2) {
+    tampilkan "dua"
+} lainnya kalau (n == 4) {
+    tampilkan "empat"
+} lainnya {
+    tampilkan "lainnya"
+}

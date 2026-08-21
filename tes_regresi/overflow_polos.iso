@@ -1,0 +1,4 @@
+fungsi tambah(a: Angka, b: Angka) {
+    kembalikan a + b
+}
+tampilkan tambah(9223372036854775807, 1)

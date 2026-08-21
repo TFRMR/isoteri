@@ -1,0 +1,8 @@
+# Divergensi antar jalur eksekusi yang SUDAH diverifikasi manual sebagai "beda tapi sama-sama
+# benar" -- lihat komentar diizinkan() di scripts/regresi.sh buat aturan mainnya. Format:
+# nama_kasus|jalur|alasan
+
+overflow_polos|bytecode|pesan & nomor baris beda: bytecode presisi ke operand+baris ekspresi asli ("Baris 2: ... 9223372036854775807 + 1 ..."), JIT cuma tau ADA overflow lewat flag (bukan LOKASI persisnya di dalam fungsi), jadi pesannya generik & baris yang dilaporkan adalah baris pemanggilan, bukan baris overflow-nya -- lihat catatan panjang di JitEngine::kompilasi. Dua-duanya tetap error jelas & catchable (bukan silent-wrong-value seperti bug wrap-around lama), cuma detailnya beda presisi.
+overflow_polos|via-ir|sama seperti overflow_polos|bytecode di atas (via-ir pakai jalur JIT yang sama, cuma prefix pesannya beda "(via-ir)").
+overflow_rekursi_dalam|bytecode|sama seperti overflow_polos|bytecode di atas.
+overflow_rekursi_dalam|via-ir|sama seperti overflow_polos|via-ir di atas.
