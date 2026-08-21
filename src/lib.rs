@@ -2071,7 +2071,12 @@ enum Instr {
 /// komentar di VMFungsi::native, jadi arity berapa pun tetap satu tipe per mode.
 #[derive(Clone, Copy)]
 enum NativeFn {
-    Angka(extern "C" fn(*const i64) -> i64),
+    /// (ptr argumen, ptr keluaran flag overflow 1-byte) -> hasil. Pemanggil (lihat
+    /// panggil_fungsi_dengan_argumen & Instr::PanggilFungsi) WAJIB baca *ptr_flag setelah
+    /// panggilan -- kalau != 0, buang hasilnya & lempar Result::Err "Angka meluap" yang
+    /// jelas & catchable lewat 'coba/tangkap', KONSISTEN dengan jalur bytecode biasa
+    /// (checked_add dkk di eval BinOp) -- lihat catatan panjang di JitEngine::kompilasi.
+    Angka(extern "C" fn(*const i64, *mut i64) -> i64),
     Desimal(extern "C" fn(*const f64) -> f64),
 }
 
@@ -2445,6 +2450,10 @@ impl JitEngine {
 
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I64)); // pointer ke larik argumen
+        // Mode Angka SAJA dapat parameter ekstra: pointer keluaran 1 byte (I8) buat "flag
+        // overflow" -- lihat catatan panjang di flag_var di bawah kenapa Desimal tidak butuh ini
+        // (float overflow ke +-inf, bukan wrap-around diam-diam yang menyesatkan seperti i64).
+        if mode == TipeJit::Angka { sig.params.push(AbiParam::new(types::I64)); }
         sig.returns.push(AbiParam::new(tipe_cl));
         let func_id = self.module
             .declare_function(&f.nama, Linkage::Local, &sig)
@@ -2478,13 +2487,36 @@ impl JitEngine {
 
         let local_callee = self.module.declare_func_in_func(func_id, builder.func);
 
-        let mut kompiler = KompilerBadan { builder, local_callee, mode };
+        // --- Overflow-trapping (Angka saja): register Variable KHUSUS (indeks tepat setelah
+        // seluruh local slot asli, jadi dijamin tidak bentrok) yang menampung "flag overflow"
+        // SEPANJANG eksekusI fungsi ini -- bukan hardware trap (yang bakal SIGILL/crash seluruh
+        // proses tanpa peduli 'coba/tangkap' pembungkus, beda dari overflow bytecode VM yang
+        // catchable lewat checked_add di eval BinOp), tapi diakumulasi (bor) tiap kali operasi
+        // Tambah/Kurang/Kali overflow (via sadd_overflow/ssub_overflow/smul_overflow, bukan
+        // iadd/isub/imul polos), TERMASUK overflow yang terjadi di panggilan rekursif (flag
+        // dari callee dibaca balik lewat parameter kedua & di-OR ke flag milik caller -- lihat
+        // CExpr::Panggil di kompilasi_nilai). Baru DICEK & ditulis ke ptr_keluaran saat fungsi
+        // benar-benar 'kembalikan' (lihat CStmt::Kembalikan) -- pemanggil Rust (VM) yang baca
+        // ptr ini lalu ubah jadi Result::Err "Angka meluap" yang jelas & catchable, KONSISTEN
+        // dengan pesan/perilaku overflow di jalur bytecode biasa (lihat panggil_fungsi_dengan_argumen
+        // & Instr::PanggilFungsi).
+        let flag_var = if mode == TipeJit::Angka {
+            let v = Variable::new(f.local_slot_count);
+            builder.declare_var(v, types::I8);
+            let nol = builder.ins().iconst(types::I8, 0);
+            builder.def_var(v, nol);
+            Some(v)
+        } else { None };
+        let out_ptr = if mode == TipeJit::Angka { Some(builder.block_params(entry)[1]) } else { None };
+
+        let mut kompiler = KompilerBadan { builder, local_callee, mode, flag_var, out_ptr };
         let selesai = kompiler.kompilasi_blok(&f.body);
         if !selesai {
             let nol = match mode {
                 TipeJit::Angka => kompiler.builder.ins().iconst(types::I64, 0),
                 TipeJit::Desimal => kompiler.builder.ins().f64const(0.0),
             };
+            kompiler.tulis_flag_keluaran();
             kompiler.builder.ins().return_(&[nol]);
         }
         kompiler.builder.seal_all_blocks();
@@ -2516,6 +2548,7 @@ impl JitEngine {
 
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I64));
+        if mode == TipeJit::Angka { sig.params.push(AbiParam::new(types::I64)); }
         sig.returns.push(AbiParam::new(tipe_cl));
         let func_id = self.module
             .declare_function(nama, Linkage::Local, &sig)
@@ -2551,6 +2584,18 @@ impl JitEngine {
 
         let local_callee = self.module.declare_func_in_func(func_id, builder.func);
 
+        // Overflow-trapping (Angka saja) -- pola SAMA PERSIS dengan kompilasi() (lihat catatan
+        // panjang di sana): flag_var pakai index `total_reg` (dijamin belum dipakai Variable
+        // manapun -- register asli cuma 0..total_reg).
+        let flag_var = if mode == TipeJit::Angka {
+            let v = Variable::new(total_reg);
+            builder.declare_var(v, types::I8);
+            let nol = builder.ins().iconst(types::I8, 0);
+            builder.def_var(v, nol);
+            Some(v)
+        } else { None };
+        let out_ptr = if mode == TipeJit::Angka { Some(builder.block_params(entry)[1]) } else { None };
+
         // --- Pemetaan basic block: leader = index 0, tiap target lompatan, dan index PERSIS
         // setelah tiap Jump/JumpJikaSalah (jalur fallthrough). Semua block dibuat di awal TAPI
         // BELUM di-seal sampai akhir (sama seperti kompilasi() -- deferred sealing, valid di
@@ -2571,7 +2616,7 @@ impl JitEngine {
             if leader[idx] { block_of.insert(idx, builder.create_block()); }
         }
 
-        let mut kompiler = KompilerBadanIr { builder, local_callee, mode, tipe_reg_fn: &tipe_reg, block_of: &block_of, ambang_temp, temp_cache: std::collections::HashMap::new() };
+        let mut kompiler = KompilerBadanIr { builder, local_callee, mode, tipe_reg_fn: &tipe_reg, block_of: &block_of, ambang_temp, temp_cache: std::collections::HashMap::new(), flag_var, out_ptr };
         let mut terminated = false;
         for (idx, instr) in ir.iter().enumerate() {
             if idx > 0 && leader[idx] {
@@ -2583,6 +2628,7 @@ impl JitEngine {
         }
         if !terminated {
             let nol = match mode { TipeJit::Angka => kompiler.builder.ins().iconst(types::I64, 0), TipeJit::Desimal => kompiler.builder.ins().f64const(0.0) };
+            kompiler.tulis_flag_keluaran();
             kompiler.builder.ins().return_(&[nol]);
         }
         kompiler.builder.seal_all_blocks();
@@ -2622,9 +2668,28 @@ struct KompilerBadanIr<'a, 'b> {
     /// percabangan (`kalau`/kondisi), register yang masih "in-flight" sudah pasti terkonsumsi
     /// duluan oleh instruksi percabangan itu sendiri sebelum block baru dimulai.
     temp_cache: std::collections::HashMap<Reg, cranelift::prelude::Value>,
+    /// Sama persis semantiknya dengan KompilerBadan::flag_var/out_ptr -- lihat catatan panjang
+    /// di JitEngine::kompilasi.
+    flag_var: Option<cranelift::prelude::Variable>,
+    out_ptr: Option<cranelift::prelude::Value>,
 }
 
 impl<'a, 'b> KompilerBadanIr<'a, 'b> {
+    fn tulis_flag_keluaran(&mut self) {
+        use cranelift::prelude::*;
+        if let (Some(fv), Some(op)) = (self.flag_var, self.out_ptr) {
+            let nilai = self.builder.use_var(fv);
+            self.builder.ins().store(MemFlags::new(), nilai, op, 0);
+        }
+    }
+
+    fn gabung_flag(&mut self, of: cranelift::prelude::Value) {
+        use cranelift::prelude::InstBuilder;
+        let fv = self.flag_var.expect("gabung_flag cuma dipanggil di mode Angka, yang selalu punya flag_var");
+        let cur = self.builder.use_var(fv);
+        let baru = self.builder.ins().bor(cur, of);
+        self.builder.def_var(fv, baru);
+    }
     fn v(&mut self, r: Reg) -> cranelift::prelude::Value {
         use cranelift::prelude::*;
         if (r as usize) < self.ambang_temp { self.builder.use_var(Variable::new(r as usize)) }
@@ -2664,9 +2729,9 @@ impl<'a, 'b> KompilerBadanIr<'a, 'b> {
                 let bv = self.v(*b);
                 let hasil = match op {
                     Tambah | Kurang | Kali => match (self.mode, op) {
-                        (TipeJit::Angka, Tambah) => self.builder.ins().iadd(av, bv),
-                        (TipeJit::Angka, Kurang) => self.builder.ins().isub(av, bv),
-                        (TipeJit::Angka, Kali) => self.builder.ins().imul(av, bv),
+                        (TipeJit::Angka, Tambah) => { let (r, of) = self.builder.ins().sadd_overflow(av, bv); self.gabung_flag(of); r }
+                        (TipeJit::Angka, Kurang) => { let (r, of) = self.builder.ins().ssub_overflow(av, bv); self.gabung_flag(of); r }
+                        (TipeJit::Angka, Kali) => { let (r, of) = self.builder.ins().smul_overflow(av, bv); self.gabung_flag(of); r }
                         (TipeJit::Desimal, Tambah) => self.builder.ins().fadd(av, bv),
                         (TipeJit::Desimal, Kurang) => self.builder.ins().fsub(av, bv),
                         (TipeJit::Desimal, Kali) => self.builder.ins().fmul(av, bv),
@@ -2709,8 +2774,23 @@ impl<'a, 'b> KompilerBadanIr<'a, 'b> {
                 ));
                 for (i, val) in nilai.iter().enumerate() { self.builder.ins().stack_store(*val, slot, (i * 8) as i32); }
                 let addr = self.builder.ins().stack_addr(types::I64, slot, 0);
-                let panggilan = self.builder.ins().call(self.local_callee, &[addr]);
-                let hasil = self.builder.inst_results(panggilan)[0];
+                let hasil = if self.mode == TipeJit::Angka {
+                    // Rekursi mode Angka: sama seperti KompilerBadan::kompilasi_nilai (lihat
+                    // catatan panjang di sana) -- balikin flag overflow dari panggilan ini lewat
+                    // slot khusus, OR-kan ke flag_var milik fungsi ini.
+                    let flag_slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                        StackSlotKind::ExplicitSlot, 1,
+                    ));
+                    let flag_addr = self.builder.ins().stack_addr(types::I64, flag_slot, 0);
+                    let panggilan = self.builder.ins().call(self.local_callee, &[addr, flag_addr]);
+                    let hasil = self.builder.inst_results(panggilan)[0];
+                    let of_callee = self.builder.ins().stack_load(types::I8, flag_slot, 0);
+                    self.gabung_flag(of_callee);
+                    hasil
+                } else {
+                    let panggilan = self.builder.ins().call(self.local_callee, &[addr]);
+                    self.builder.inst_results(panggilan)[0]
+                };
                 self.set(*dst, hasil);
                 false
             }
@@ -2721,7 +2801,7 @@ impl<'a, 'b> KompilerBadanIr<'a, 'b> {
                 self.builder.ins().brif(c, lanjut, &[], self.block_of[t], &[]);
                 true
             }
-            IrInstr::Kembalikan(r) => { let v = self.v(*r); self.builder.ins().return_(&[v]); true }
+            IrInstr::Kembalikan(r) => { let v = self.v(*r); self.tulis_flag_keluaran(); self.builder.ins().return_(&[v]); true }
             IrInstr::LoadGlobal(..) | IrInstr::StoreGlobal(..) | IrInstr::MakeDaftar(..) | IrInstr::MakePeta(..)
             | IrInstr::Indeks(..) | IrInstr::AmbilField(..) | IrInstr::BuatInstans(..) | IrInstr::BuatFungsi(..)
             | IrInstr::PanggilBawaan(..) | IrInstr::PanggilNilai(..) | IrInstr::Tampilkan(..) | IrInstr::IterMulai(..)
@@ -2738,9 +2818,49 @@ struct KompilerBadan<'a> {
     /// Tipe numerik seragam fungsi ini (Angka=i64 atau Desimal=f64) -- menentukan instruksi
     /// Cranelift apa yang dipakai (iadd vs fadd, icmp vs fcmp, dst).
     mode: TipeJit,
+    /// Some(Variable) di mode Angka (akumulator flag overflow, I8, di-OR tiap operasi aritmatika
+    /// & tiap panggilan rekursif -- lihat catatan panjang di kompilasi()), None di mode Desimal.
+    flag_var: Option<cranelift::prelude::Variable>,
+    /// Pointer keluaran (parameter kedua fungsi, mode Angka saja) tempat flag_var ditulis
+    /// pas fungsi 'kembalikan' -- None di mode Desimal (tidak ada parameter kedua).
+    out_ptr: Option<cranelift::prelude::Value>,
 }
 
 impl<'a> KompilerBadan<'a> {
+    /// Tulis flag_var (kalau mode Angka) ke out_ptr SEBELUM tiap 'return_' -- dipanggil di
+    /// SETIAP titik keluar fungsi (CStmt::Kembalikan & fallthrough di akhir kompilasi()),
+    /// supaya pemanggil (Rust/VM) selalu baca flag yang sudah final, bukan cuma sebagian.
+    fn tulis_flag_keluaran(&mut self) {
+        use cranelift::prelude::*;
+        if let (Some(fv), Some(op)) = (self.flag_var, self.out_ptr) {
+            let nilai = self.builder.use_var(fv);
+            self.builder.ins().store(MemFlags::new(), nilai, op, 0);
+        }
+    }
+    /// Jalankan closure yang hasilkan (Value, Value) dari salah satu instruksi *_overflow
+    /// Cranelift (sadd_overflow/ssub_overflow/smul_overflow), OR-kan flag overflow-nya ke
+    /// flag_var, balikin cuma nilai hasilnya (mode Angka SELALU punya flag_var -- lihat
+    /// kompilasi(), jadi unwrap di sini aman).
+    fn aritmatika_cek_overflow(
+        &mut self,
+        lv: cranelift::prelude::Value,
+        rv: cranelift::prelude::Value,
+        f: impl FnOnce(&mut cranelift::prelude::FunctionBuilder<'a>, cranelift::prelude::Value, cranelift::prelude::Value) -> (cranelift::prelude::Value, cranelift::prelude::Value),
+    ) -> cranelift::prelude::Value {
+        let (hasil, of) = f(&mut self.builder, lv, rv);
+        self.gabung_flag(of);
+        hasil
+    }
+
+    /// OR-kan satu nilai flag (I8, 0/1) baru ke akumulator flag_var.
+    fn gabung_flag(&mut self, of: cranelift::prelude::Value) {
+        use cranelift::prelude::InstBuilder;
+        let fv = self.flag_var.expect("gabung_flag cuma dipanggil di mode Angka, yang selalu punya flag_var");
+        let cur = self.builder.use_var(fv);
+        let baru = self.builder.ins().bor(cur, of);
+        self.builder.def_var(fv, baru);
+    }
+
     /// Mengembalikan true kalau blok ini PASTI berakhir dengan 'kembalikan'
     /// (jadi block Cranelift saat ini sudah punya terminator).
     fn kompilasi_blok(&mut self, stmts: &[(usize, CStmt)]) -> bool {
@@ -2807,6 +2927,7 @@ impl<'a> KompilerBadan<'a> {
             }
             CStmt::Kembalikan(e) => {
                 let v = self.kompilasi_nilai(e);
+                self.tulis_flag_keluaran();
                 self.builder.ins().return_(&[v]);
                 true
             }
@@ -2831,9 +2952,9 @@ impl<'a> KompilerBadan<'a> {
                 let lv = self.kompilasi_nilai(l);
                 let rv = self.kompilasi_nilai(r);
                 match (self.mode, op) {
-                    (TipeJit::Angka, BinOp::Tambah) => self.builder.ins().iadd(lv, rv),
-                    (TipeJit::Angka, BinOp::Kurang) => self.builder.ins().isub(lv, rv),
-                    (TipeJit::Angka, BinOp::Kali) => self.builder.ins().imul(lv, rv),
+                    (TipeJit::Angka, BinOp::Tambah) => self.aritmatika_cek_overflow(lv, rv, |b, x, y| b.ins().sadd_overflow(x, y)),
+                    (TipeJit::Angka, BinOp::Kurang) => self.aritmatika_cek_overflow(lv, rv, |b, x, y| b.ins().ssub_overflow(x, y)),
+                    (TipeJit::Angka, BinOp::Kali) => self.aritmatika_cek_overflow(lv, rv, |b, x, y| b.ins().smul_overflow(x, y)),
                     (TipeJit::Desimal, BinOp::Tambah) => self.builder.ins().fadd(lv, rv),
                     (TipeJit::Desimal, BinOp::Kurang) => self.builder.ins().fsub(lv, rv),
                     (TipeJit::Desimal, BinOp::Kali) => self.builder.ins().fmul(lv, rv),
@@ -2853,8 +2974,26 @@ impl<'a> KompilerBadan<'a> {
                     self.builder.ins().stack_store(*v, slot, (i * 8) as i32);
                 }
                 let addr = self.builder.ins().stack_addr(types::I64, slot, 0);
-                let panggilan = self.builder.ins().call(self.local_callee, &[addr]);
-                self.builder.inst_results(panggilan)[0]
+                if self.mode == TipeJit::Angka {
+                    // Rekursi mode Angka: panggilan ini sendiri BISA overflow di suatu tempat di
+                    // dalam pemanggilan rekursifnya -- flag itu balik lewat parameter kedua
+                    // (pointer ke slot 1-byte KHUSUS panggilan ini), kita baca balik lalu OR-kan
+                    // ke flag_var milik fungsi INI, supaya overflow dari rekursi manapun tetap
+                    // "nyangkut" sampai ke titik 'kembalikan' paling luar (lihat catatan
+                    // panjang di kompilasi()).
+                    let flag_slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                        StackSlotKind::ExplicitSlot, 1,
+                    ));
+                    let flag_addr = self.builder.ins().stack_addr(types::I64, flag_slot, 0);
+                    let panggilan = self.builder.ins().call(self.local_callee, &[addr, flag_addr]);
+                    let hasil = self.builder.inst_results(panggilan)[0];
+                    let of_callee = self.builder.ins().stack_load(types::I8, flag_slot, 0);
+                    self.gabung_flag(of_callee);
+                    hasil
+                } else {
+                    let panggilan = self.builder.ins().call(self.local_callee, &[addr]);
+                    self.builder.inst_results(panggilan)[0]
+                }
             }
             _ => unreachable!("cek_jit_murni_nilai seharusnya sudah menyaring ekspresi ini"),
         }
@@ -3286,7 +3425,12 @@ fn panggil_fungsi_dengan_argumen(pustaka: &Pustaka, state: &mut VMState, idx: us
                         lain => return Err(format!("Argumen untuk fungsi native (JIT) harus Angka, ditemukan {}", lain)),
                     }
                 }
-                Ok(Value::Angka(native(larik.as_ptr())))
+                let mut flag: i64 = 0;
+                let hasil = native(larik.as_ptr(), &mut flag as *mut i64);
+                if flag != 0 {
+                    return Err(format!("Angka meluap (overflow) di dalam fungsi terkompilasi JIT: hasil melebihi jangkauan Angka (-9223372036854775808..9223372036854775807). Pertimbangkan pakai Desimal kalau nilainya memang bisa sebesar ini."));
+                }
+                Ok(Value::Angka(hasil))
             }
             NativeFn::Desimal(native) => {
                 let mut larik = Vec::with_capacity(argumen.len());
@@ -3509,7 +3653,12 @@ fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_
                                         lain => return Err(format!("Argumen untuk fungsi native (JIT) harus Angka, ditemukan {}", lain)),
                                     }
                                 }
-                                Value::Angka(native(larik.as_ptr()))
+                                let mut flag: i64 = 0;
+                                let hasil = native(larik.as_ptr(), &mut flag as *mut i64);
+                                if flag != 0 {
+                                    return Err(format!("Angka meluap (overflow) di dalam fungsi terkompilasi JIT: hasil melebihi jangkauan Angka (-9223372036854775808..9223372036854775807). Pertimbangkan pakai Desimal kalau nilainya memang bisa sebesar ini."));
+                                }
+                                Value::Angka(hasil)
                             }
                             NativeFn::Desimal(native) => {
                                 let mut larik: Vec<f64> = Vec::with_capacity(*argc);
@@ -4922,7 +5071,7 @@ fn jalankan_stmt_list(program: Vec<(usize, Stmt)>) -> Result<(), String> {
             match jit.kompilasi(cf, mode) {
                 Ok(ptr) => {
                     vmf.native = Some(match mode {
-                        TipeJit::Angka => NativeFn::Angka(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64) -> i64>(ptr) }),
+                        TipeJit::Angka => NativeFn::Angka(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64, *mut i64) -> i64>(ptr) }),
                         TipeJit::Desimal => NativeFn::Desimal(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const f64) -> f64>(ptr) }),
                     });
                 }
@@ -5605,7 +5754,7 @@ pub fn jalankan_stmt_list_via_ir(program: Vec<(usize, Stmt)>) -> Result<(), Stri
             match jit.kompilasi_dari_ir(nama, &ir, &reg_types, cf.param_count, cf.local_slot_count, mode) {
                 Ok(ptr) => {
                     native = Some(match mode {
-                        TipeJit::Angka => NativeFn::Angka(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64) -> i64>(ptr) }),
+                        TipeJit::Angka => NativeFn::Angka(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64, *mut i64) -> i64>(ptr) }),
                         TipeJit::Desimal => NativeFn::Desimal(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const f64) -> f64>(ptr) }),
                     });
                 }

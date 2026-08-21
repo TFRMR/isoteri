@@ -67,7 +67,7 @@ di atas (termasuk kenapa Component System bukan pengganti vdom-diffing React).
 - [ ] Contoh aplikasi web yang lebih lengkap
 - [ ] Automated regression test yang lebih luas (formal, bukan cuma skrip manual)
 - [ ] `putus`/`lanjut` di jalur `via-ir`/AOT (sekarang panik dengan pesan jelas kalau dicoba, bukan diimplementasikan)
-- [ ] Overflow-trapping di JIT (sekarang bytecode VM sudah aman, JIT masih diam-diam wrap -- lihat KETERBATASAN.md)
+- [x] Overflow-trapping di JIT (kedua jalur -- `kompilasi()` produksi & `kompilasi_dari_ir()` via-ir/AOT -- sekarang catchable & konsisten dengan bytecode VM, termasuk lewat rekursi dalam; lihat KETERBATASAN.md)
 
 ## Eksperimen desain bahasa
 
