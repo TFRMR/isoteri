@@ -387,6 +387,7 @@ muat "sub_folder/petani.iso"
 | Fungsi | Signature | Keterangan |
 |---|---|---|
 | `ke_desimal(x)` | `Angka\|Desimal -> Desimal` | |
+| `ke_angka(x)` | `Angka\|Desimal\|Teks -> Angka` | Dari Teks: parse integer (i64) murni, TANPA titik/notasi ilmiah -- error jelas kalau formatnya bukan integer valid (mis. `"12.5"`) |
 | `ke_bulat(x)` | `Angka\|Desimal -> Angka` | Truncate, bukan round |
 | `ke_teks(x)` | `Nilai apapun -> Teks` | Sama seperti representasi `Display` |
 

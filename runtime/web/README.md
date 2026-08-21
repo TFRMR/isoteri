@@ -182,6 +182,12 @@ ingat komp = komponen_buat({
     "dipasang": fungsi(props, state) { tampilkan "siap" }
 })
 ingat inst = komponen_pasang(komp, dom_pilih("#app"))
+
+catatan: Nested/composed components -- komponen_anak() DI DALAM render() induk, kunci stabil
+catatan: per anak (persis `key` React) -- state anak DIPERTAHANKAN lintas render ulang induk
+fungsi render_induk(props, state) {
+    kembalikan "<div>" + komponen_anak(komp, "counter-1", {}) + "</div>"
+}
 ```
 
 **Filosofi Component System (disengaja):** render-ulang-penuh (HTML string
@@ -191,12 +197,16 @@ dalam. Event lewat atribut `data-aksi="nama"` (opsional
 `data-peristiwa="input"`/`"change"`/`"submit"`/`"keyup"`, default `"click"`)
 karena `render` cuma menghasilkan teks HTML, bukan pointer fungsi hidup —
 handler aksi dapat `(props, state, event)`, nilai kembaliannya jadi state
-baru (pola reducer). Detail lengkap & trade-off di `docs/KETERBATASAN.md`.
+baru (pola reducer). Nested components (`komponen_anak`) tetap render-ulang-
+penuh di level ELEMEN DOM, tapi rekonsiliasi berbasis kunci di level
+KOMPONEN, rekursif tanpa batas kedalaman — detail lengkap & trade-off di
+`docs/KETERBATASAN.md`.
 
 Contoh interaktif lengkap (buka `index.html` masing-masing lewat local
 server, mis. `python3 -m http.server`):
 - `runtime/web/contoh_router_state/` -- Router + State Management (navigasi antar "halaman", hitung kunjungan)
 - `runtime/web/contoh_komponen/` -- Component System (Todo List: state, render, aksi, lifecycle hooks)
+- `runtime/web/contoh_komponen_bersarang/` -- Nested/composed components (daftar komponen counter, satu instans per item, state independen & terjaga lintas render ulang induk)
 
 **Temuan performa penting:** `isoteri-vm.js` TIDAK punya JIT (beda dari
 native Rust yang punya Cranelift) -- diverifikasi langsung, `fib(38)` yang

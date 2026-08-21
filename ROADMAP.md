@@ -49,7 +49,7 @@ dapat berubah berdasarkan hasil eksperimen dan kontribusi komunitas.
 - [x] Bridge fetch/HTTP diperluas (`unduh_lanjut_async` -- POST/header/body/status code)
 - [x] **Router** (`rute_daftar`/`rute_mulai`/`rute_navigasi`/`rute_sekarang`) -- hash-based, path param dinamis (`:id`), catch-all (`*`), query string
 - [x] **State Management** (`state_buat`/`state_nilai`/`state_atur`/`state_ubah`/`state_langgan`) -- pola pub/sub sederhana
-- [x] **Component System** (`komponen_buat`/`komponen_pasang`/`komponen_atur_state`/`komponen_lepas`/dst.) -- render-ulang-penuh + event delegation `data-aksi` + lifecycle hooks (`dipasang`/`diperbarui`/`dilepas`)
+- [x] **Component System** (`komponen_buat`/`komponen_pasang`/`komponen_atur_state`/`komponen_lepas`/dst.) -- render-ulang-penuh + event delegation `data-aksi` + lifecycle hooks (`dipasang`/`diperbarui`/`dilepas`) + nested/composed components otomatis (`komponen_anak`)
 
 Lihat `runtime/web/README.md` untuk kemampuan browser yang benar-benar
 tersedia saat ini, dan `docs/KETERBATASAN.md` untuk batasan jujur tiap fitur
@@ -60,7 +60,7 @@ di atas (termasuk kenapa Component System bukan pengganti vdom-diffing React).
 - [ ] Clipboard (copy/paste)
 - [ ] History API / path routing (alternatif hash routing yang sudah ada)
 - [ ] `dom_ketika()` belum bisa `removeEventListener`
-- [ ] Nested/composed components otomatis (sekarang manual lewat placeholder + `komponen_pasang` di hook)
+- [x] Nested/composed components otomatis (`komponen_anak(komponen, kunci, props)` dipanggil di dalam `render` induk -> runtime otomatis mount/update/unmount anak lewat rekonsiliasi berbasis kunci stabil, rekursif tanpa batas kedalaman, state anak DIPERTAHANKAN lintas render ulang induk -- lihat KETERBATASAN.md)
 - [ ] HTTP Interceptor -- belum primitif bahasa baru, tapi bisa disusun sendiri di atas `unduh_lanjut_async` (lihat KETERBATASAN.md)
 - [ ] Error reporting browser yang lebih baik
 - [ ] Dokumentasi pola aplikasi web (tutorial component+router+state end-to-end)

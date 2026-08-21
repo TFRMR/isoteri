@@ -259,7 +259,17 @@ komponen_lepas(instans)              catatan: panggil "dilepas", copot listener,
 
 **Event lewat `data-aksi`, bukan `onclick=` inline:** karena `render` cuma menghasilkan teks HTML (bukan pointer fungsi hidup), gak ada cara nyuntik handler Isoteri langsung ke atribut `onclick`. Solusinya event delegation: tulis `data-aksi="nama"` di elemen HTML hasil render (opsional `data-peristiwa="input"`/`"change"`/`"submit"`/`"keyup"`, default `"click"`), lalu daftarkan handler yang sesuai lewat opsi `"aksi"` komponen. Handler aksi dapat `(props, state, event)`, **nilai kembaliannya JADI state baru** (pola reducer) -- otomatis memicu render ulang.
 
-**Komposisi/nested components:** belum otomatis (belum ada children/slot bawaan). Pola yang jalan: `render` induk taruh placeholder `<div id='anak-1'></div>`, lalu di hook `"dipasang"`/`"diperbarui"` panggil `komponen_pasang()` manual buat tiap anak, target ke `dom_pilih("#anak-1")`.
+**Komposisi/nested components -- otomatis lewat `komponen_anak()`:** panggil `komponen_anak(komponen_def, kunci, props?)` DI DALAM `render` induk, taruh hasilnya (Teks -- placeholder HTML) di string HTML yang dikembalikan. Runtime otomatis mount/update/unmount anaknya:
+```
+fungsi render_induk(props, state) {
+    kembalikan "<div>" + komponen_anak(komp_counter, "counter-1", { "awal": 10 }) + "</div>"
+}
+```
+`kunci` **wajib stabil & unik antar-saudara** (persis `key` React) -- ini yang dipakai runtime buat tau "anak yang SAMA lintas render ulang induk" (state-nya DIPERTAHANKAN, bukan dibuat ulang dari nol) vs "anak baru". Render DAFTAR anak (satu per item, mis. tiap baris todo): pakai id/identitas unik tiap item sebagai bagian kunci (`"todo-" + t.id`), JANGAN cuma index array kalau daftarnya bisa disisipi/dihapus di tengah (index geser -> state ketuker instans yang salah, footgun yang sama seperti pakai index sebagai key React).
+
+Rekursif tanpa batas kedalaman -- anak yang render-nya sendiri manggil `komponen_anak()` buat cucu, ditangani otomatis juga. Lifecycle-nya benar di semua level: hook `"dipasang"` anak dulu baru induk (bottom-up, konsisten dgn framework komponen lain), kunci yang hilang dari render induk berikutnya otomatis membongkar anak terkait (`"dilepas"` terpanggil, listener dicopot) -- termasuk resursif ke cucu-cucunya. `komponen_anak_instans(instans_induk, kunci)` opsional buat pegang instans anak langsung kalau perlu (jarang dibutuhkan -- pola yang disarankan tetap props-turun/aksi-naik).
+
+**Cara kerja internal (buat yang penasaran/mau extend):** `komponen_anak()` cuma hasilkan `<div data-komponen-anak="..." data-kunci="..." data-props="...">` (props di-encode JSON di atribut). Tiap kali SATU PUN wadah komponen selesai `innerHTML` (`_komponenRenderUlang`), runtime scan wadah itu cari elemen begituan (`_komponenRekonsiliasiAnak`) dan cocokkan `kunci`-nya terhadap anak yang sudah ter-track sebelumnya: kunci+tipe sama -> pindahkan wadah anak ke elemen BARU (elemen lama sudah lenyap ikut `innerHTML` induk) + render ulang pakai state LAMA; kunci baru -> mount baru; kunci hilang -> bongkar. Masih render-ulang-penuh murni (bukan vdom diffing) -- cuma DI LEVEL KOMPONEN, bukan di level elemen DOM individual.
 
 ### Yang masih belum ada
 - **Component System** (React/Vue-style, dengan lifecycle hooks) -- BELUM dikerjakan, ini proyek besar tersendiri (butuh keputusan arsitektur: vdom-diffing vs render-ulang-penuh vs approach lain). Router + State Management di atas adalah FONDASI buat itu -- komponen nantinya = kombinasi state_buat() + fungsi render + rute_daftar(), tinggal disusun jadi pola/helper yang lebih rapi.

@@ -3934,6 +3934,16 @@ fn panggil_bawaan(nama: &str, args: &[Value]) -> Result<Option<Value>, String> {
             Some(lain) => Err(format!("ke_bulat() tidak berlaku untuk {}", lain)),
             None => Err("ke_bulat(desimal) butuh 1 argumen".to_string()),
         },
+        "ke_angka" => match args.get(0) {
+            Some(v @ Value::Angka(_)) => Ok(Some(v.clone())),
+            Some(Value::Desimal(f)) => Ok(Some(Value::Angka(*f as i64))),
+            Some(Value::Teks(s)) => match s.trim().parse::<i64>() {
+                Ok(n) => Ok(Some(Value::Angka(n))),
+                Err(_) => Err(format!("ke_angka(): \"{}\" bukan Angka (i64) yang valid.", s)),
+            },
+            Some(lain) => Err(format!("ke_angka() tidak berlaku untuk {}", lain)),
+            None => Err("ke_angka(nilai) butuh 1 argumen".to_string()),
+        },
         "ke_teks" => match args.get(0) {
             Some(v) => Ok(Some(Value::Teks(v.to_string().into()))),
             None => Err("ke_teks(nilai) butuh 1 argumen".to_string()),

@@ -1,0 +1,764 @@
+{
+  "format": "isoteri-web-bytecode-v1",
+  "fungsi": [
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          5
+        ],
+        [
+          "PushK",
+          15
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "PushK",
+          16
+        ],
+        [
+          "Indeks"
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          17
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          18
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 2,
+      "nama": "render_cucu",
+      "param_count": 2,
+      "param_flat": [
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          44
+        ],
+        [
+          "PushK",
+          19
+        ],
+        [
+          "LoadGlobal",
+          1
+        ],
+        [
+          "PushK",
+          20
+        ],
+        [
+          "MakePeta",
+          []
+        ],
+        [
+          "PanggilBawaan",
+          "komponen_anak",
+          3
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          21
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 2,
+      "nama": "render_kakek",
+      "param_count": 2,
+      "param_flat": [
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          11
+        ],
+        [
+          "PushK",
+          22
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "PushK",
+          23
+        ],
+        [
+          "Indeks"
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "Tampilkan"
+        ]
+      ],
+      "local_slot_count": 2,
+      "nama": "hook_cucu_dilepas",
+      "param_count": 2,
+      "param_flat": [
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          24
+        ],
+        [
+          "PushK",
+          24
+        ],
+        [
+          "StoreLocal",
+          2
+        ],
+        [
+          "TandaiBaris",
+          25
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "AmbilField",
+          "tampilkan_cucu"
+        ],
+        [
+          "LompatJikaSalah",
+          16
+        ],
+        [
+          "TandaiBaris",
+          26
+        ],
+        [
+          "LoadLocal",
+          2
+        ],
+        [
+          "LoadGlobal",
+          0
+        ],
+        [
+          "PushK",
+          25
+        ],
+        [
+          "PushK",
+          26
+        ],
+        [
+          "MakePeta",
+          [
+            "label"
+          ]
+        ],
+        [
+          "PanggilBawaan",
+          "komponen_anak",
+          3
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "StoreLocal",
+          2
+        ],
+        [
+          "TandaiBaris",
+          28
+        ],
+        [
+          "LoadLocal",
+          2
+        ],
+        [
+          "PushK",
+          27
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "StoreLocal",
+          2
+        ],
+        [
+          "TandaiBaris",
+          29
+        ],
+        [
+          "LoadLocal",
+          2
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 3,
+      "nama": "render_induk",
+      "param_count": 2,
+      "param_flat": [
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          32
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "AmbilField",
+          "tampilkan_cucu"
+        ],
+        [
+          "BuatInstans",
+          "IndukState",
+          [
+            "tampilkan_cucu"
+          ]
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 3,
+      "nama": "aksi_induk_naik",
+      "param_count": 3,
+      "param_flat": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          10
+        ],
+        [
+          "PushK",
+          28
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "PushK",
+          29
+        ],
+        [
+          "Indeks"
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "Tampilkan"
+        ]
+      ],
+      "local_slot_count": 2,
+      "nama": "hook_cucu_dipasang",
+      "param_count": 2,
+      "param_flat": [
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          48
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "Tidak"
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 3,
+      "nama": "aksi_toggle",
+      "param_count": 3,
+      "param_flat": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          50
+        ],
+        [
+          "PushK",
+          30
+        ],
+        [
+          "Tampilkan"
+        ]
+      ],
+      "local_slot_count": 2,
+      "nama": "hook_kakek_dipasang",
+      "param_count": 2,
+      "param_flat": [
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          34
+        ],
+        [
+          "PushK",
+          31
+        ],
+        [
+          "Tampilkan"
+        ]
+      ],
+      "local_slot_count": 2,
+      "nama": "hook_induk_dipasang",
+      "param_count": 2,
+      "param_flat": [
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          8
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "PushK",
+          32
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 3,
+      "nama": "aksi_cucu_naik",
+      "param_count": 3,
+      "param_flat": [
+        null,
+        null,
+        null
+      ]
+    }
+  ],
+  "global_slot_count": 3,
+  "konstanta": [
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Teks",
+      "v": "render_cucu"
+    },
+    {
+      "t": "Teks",
+      "v": "aksi_cucu_naik"
+    },
+    {
+      "t": "Teks",
+      "v": "hook_cucu_dipasang"
+    },
+    {
+      "t": "Teks",
+      "v": "hook_cucu_dilepas"
+    },
+    {
+      "t": "Bool",
+      "v": true
+    },
+    {
+      "t": "Teks",
+      "v": "render_induk"
+    },
+    {
+      "t": "Teks",
+      "v": "aksi_induk_naik"
+    },
+    {
+      "t": "Teks",
+      "v": "hook_induk_dipasang"
+    },
+    {
+      "t": "Bool",
+      "v": true
+    },
+    {
+      "t": "Teks",
+      "v": "render_kakek"
+    },
+    {
+      "t": "Teks",
+      "v": "aksi_toggle"
+    },
+    {
+      "t": "Teks",
+      "v": "hook_kakek_dipasang"
+    },
+    {
+      "t": "Teks",
+      "v": "#app"
+    },
+    {
+      "t": "Teks",
+      "v": "semua terpasang"
+    },
+    {
+      "t": "Teks",
+      "v": "<b class='cucu' data-label='"
+    },
+    {
+      "t": "Teks",
+      "v": "label"
+    },
+    {
+      "t": "Teks",
+      "v": "'>cucu:"
+    },
+    {
+      "t": "Teks",
+      "v": "</b>"
+    },
+    {
+      "t": "Teks",
+      "v": "<div class='kakek'>kakek<button data-aksi='toggle'>toggle cucu</button>"
+    },
+    {
+      "t": "Teks",
+      "v": "induk-satu"
+    },
+    {
+      "t": "Teks",
+      "v": "</div>"
+    },
+    {
+      "t": "Teks",
+      "v": "cucu dilepas: "
+    },
+    {
+      "t": "Teks",
+      "v": "label"
+    },
+    {
+      "t": "Teks",
+      "v": "<div class='induk-mid'>induk<button data-aksi='naik'>+induk</button>"
+    },
+    {
+      "t": "Teks",
+      "v": "cucu-satu"
+    },
+    {
+      "t": "Teks",
+      "v": "X"
+    },
+    {
+      "t": "Teks",
+      "v": "</div>"
+    },
+    {
+      "t": "Teks",
+      "v": "cucu dipasang: "
+    },
+    {
+      "t": "Teks",
+      "v": "label"
+    },
+    {
+      "t": "Teks",
+      "v": "kakek dipasang"
+    },
+    {
+      "t": "Teks",
+      "v": "induk dipasang"
+    },
+    {
+      "t": "Angka",
+      "v": 1
+    }
+  ],
+  "nama_ke_indeks": {
+    "aksi_cucu_naik": 9,
+    "aksi_induk_naik": 4,
+    "aksi_toggle": 6,
+    "hook_cucu_dilepas": 2,
+    "hook_cucu_dipasang": 5,
+    "hook_induk_dipasang": 8,
+    "hook_kakek_dipasang": 7,
+    "render_cucu": 0,
+    "render_induk": 3,
+    "render_kakek": 1
+  },
+  "top_kode": [
+    [
+      "TandaiBaris",
+      13
+    ],
+    [
+      "PushK",
+      0
+    ],
+    [
+      "PushK",
+      1
+    ],
+    [
+      "PushK",
+      2
+    ],
+    [
+      "MakePeta",
+      [
+        "naik"
+      ]
+    ],
+    [
+      "PushK",
+      3
+    ],
+    [
+      "PushK",
+      4
+    ],
+    [
+      "MakePeta",
+      [
+        "state_awal",
+        "render",
+        "aksi",
+        "dipasang",
+        "dilepas"
+      ]
+    ],
+    [
+      "PanggilBawaan",
+      "komponen_buat",
+      1
+    ],
+    [
+      "StoreGlobal",
+      0
+    ],
+    [
+      "TandaiBaris",
+      36
+    ],
+    [
+      "PushK",
+      5
+    ],
+    [
+      "BuatInstans",
+      "IndukState",
+      [
+        "tampilkan_cucu"
+      ]
+    ],
+    [
+      "PushK",
+      6
+    ],
+    [
+      "PushK",
+      7
+    ],
+    [
+      "MakePeta",
+      [
+        "naik"
+      ]
+    ],
+    [
+      "PushK",
+      8
+    ],
+    [
+      "MakePeta",
+      [
+        "state_awal",
+        "render",
+        "aksi",
+        "dipasang"
+      ]
+    ],
+    [
+      "PanggilBawaan",
+      "komponen_buat",
+      1
+    ],
+    [
+      "StoreGlobal",
+      1
+    ],
+    [
+      "TandaiBaris",
+      52
+    ],
+    [
+      "PushK",
+      9
+    ],
+    [
+      "PushK",
+      10
+    ],
+    [
+      "PushK",
+      11
+    ],
+    [
+      "MakePeta",
+      [
+        "toggle"
+      ]
+    ],
+    [
+      "PushK",
+      12
+    ],
+    [
+      "MakePeta",
+      [
+        "state_awal",
+        "render",
+        "aksi",
+        "dipasang"
+      ]
+    ],
+    [
+      "PanggilBawaan",
+      "komponen_buat",
+      1
+    ],
+    [
+      "StoreGlobal",
+      2
+    ],
+    [
+      "TandaiBaris",
+      59
+    ],
+    [
+      "LoadGlobal",
+      2
+    ],
+    [
+      "PushK",
+      13
+    ],
+    [
+      "PanggilBawaan",
+      "dom_pilih",
+      1
+    ],
+    [
+      "PanggilBawaan",
+      "komponen_pasang",
+      2
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      60
+    ],
+    [
+      "PushK",
+      14
+    ],
+    [
+      "Tampilkan"
+    ]
+  ]
+}

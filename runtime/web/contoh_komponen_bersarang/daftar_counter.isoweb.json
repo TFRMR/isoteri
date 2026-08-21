@@ -1,0 +1,1165 @@
+{
+  "format": "isoteri-web-bytecode-v1",
+  "fungsi": [
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          20
+        ],
+        [
+          "PushK",
+          15
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "PushK",
+          16
+        ],
+        [
+          "Indeks"
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          17
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          18
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "Tampilkan"
+        ]
+      ],
+      "local_slot_count": 2,
+      "nama": "hook_counter_dilepas",
+      "param_count": 2,
+      "param_flat": [
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          53
+        ],
+        [
+          "LoadLocal",
+          2
+        ],
+        [
+          "AmbilField",
+          "target"
+        ],
+        [
+          "PushK",
+          19
+        ],
+        [
+          "PanggilBawaan",
+          "dom_atribut",
+          2
+        ],
+        [
+          "PanggilBawaan",
+          "ke_angka",
+          1
+        ],
+        [
+          "StoreLocal",
+          3
+        ],
+        [
+          "TandaiBaris",
+          54
+        ],
+        [
+          "MakeDaftar",
+          0
+        ],
+        [
+          "StoreLocal",
+          4
+        ],
+        [
+          "TandaiBaris",
+          55
+        ],
+        [
+          "PushK",
+          20
+        ],
+        [
+          "StoreLocal",
+          5
+        ],
+        [
+          "TandaiBaris",
+          56
+        ],
+        [
+          "LoadLocal",
+          5
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "AmbilField",
+          "daftar_id"
+        ],
+        [
+          "PanggilBawaan",
+          "panjang",
+          1
+        ],
+        [
+          "BinOp",
+          "LebihKecil"
+        ],
+        [
+          "LompatJikaSalah",
+          42
+        ],
+        [
+          "TandaiBaris",
+          57
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "AmbilField",
+          "daftar_id"
+        ],
+        [
+          "LoadLocal",
+          5
+        ],
+        [
+          "Indeks"
+        ],
+        [
+          "LoadLocal",
+          3
+        ],
+        [
+          "BinOp",
+          "TidakSama"
+        ],
+        [
+          "LompatJikaSalah",
+          36
+        ],
+        [
+          "TandaiBaris",
+          57
+        ],
+        [
+          "LoadLocal",
+          4
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "AmbilField",
+          "daftar_id"
+        ],
+        [
+          "LoadLocal",
+          5
+        ],
+        [
+          "Indeks"
+        ],
+        [
+          "PanggilBawaan",
+          "gabung",
+          2
+        ],
+        [
+          "StoreLocal",
+          4
+        ],
+        [
+          "TandaiBaris",
+          58
+        ],
+        [
+          "LoadLocal",
+          5
+        ],
+        [
+          "PushK",
+          21
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "StoreLocal",
+          5
+        ],
+        [
+          "Lompat",
+          14
+        ],
+        [
+          "TandaiBaris",
+          60
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "AmbilField",
+          "item_berikut"
+        ],
+        [
+          "LoadLocal",
+          4
+        ],
+        [
+          "BuatInstans",
+          "InduSt",
+          [
+            "item_berikut",
+            "daftar_id"
+          ]
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 6,
+      "nama": "aksi_hapus",
+      "param_count": 3,
+      "param_flat": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          19
+        ],
+        [
+          "PushK",
+          22
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "PushK",
+          23
+        ],
+        [
+          "Indeks"
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "Tampilkan"
+        ]
+      ],
+      "local_slot_count": 2,
+      "nama": "hook_counter_dipasang",
+      "param_count": 2,
+      "param_flat": [
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          31
+        ],
+        [
+          "PushK",
+          24
+        ],
+        [
+          "StoreLocal",
+          2
+        ],
+        [
+          "TandaiBaris",
+          32
+        ],
+        [
+          "PushK",
+          25
+        ],
+        [
+          "StoreLocal",
+          3
+        ],
+        [
+          "TandaiBaris",
+          33
+        ],
+        [
+          "LoadLocal",
+          3
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "AmbilField",
+          "daftar_id"
+        ],
+        [
+          "PanggilBawaan",
+          "panjang",
+          1
+        ],
+        [
+          "BinOp",
+          "LebihKecil"
+        ],
+        [
+          "LompatJikaSalah",
+          47
+        ],
+        [
+          "TandaiBaris",
+          34
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "AmbilField",
+          "daftar_id"
+        ],
+        [
+          "LoadLocal",
+          3
+        ],
+        [
+          "Indeks"
+        ],
+        [
+          "StoreLocal",
+          4
+        ],
+        [
+          "TandaiBaris",
+          35
+        ],
+        [
+          "LoadLocal",
+          2
+        ],
+        [
+          "PushK",
+          26
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "LoadGlobal",
+          0
+        ],
+        [
+          "PushK",
+          27
+        ],
+        [
+          "LoadLocal",
+          4
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "LoadLocal",
+          4
+        ],
+        [
+          "PushK",
+          28
+        ],
+        [
+          "LoadLocal",
+          4
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "MakePeta",
+          [
+            "id",
+            "label"
+          ]
+        ],
+        [
+          "PanggilBawaan",
+          "komponen_anak",
+          3
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          29
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "LoadLocal",
+          4
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          30
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "StoreLocal",
+          2
+        ],
+        [
+          "TandaiBaris",
+          38
+        ],
+        [
+          "LoadLocal",
+          3
+        ],
+        [
+          "PushK",
+          31
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "StoreLocal",
+          3
+        ],
+        [
+          "Lompat",
+          7
+        ],
+        [
+          "TandaiBaris",
+          40
+        ],
+        [
+          "PushK",
+          32
+        ],
+        [
+          "LoadLocal",
+          2
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          33
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          34
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          35
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          36
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 5,
+      "nama": "render_induk",
+      "param_count": 2,
+      "param_flat": [
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          66
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "AmbilField",
+          "item_berikut"
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "AmbilField",
+          "daftar_id"
+        ],
+        [
+          "BuatInstans",
+          "InduSt",
+          [
+            "item_berikut",
+            "daftar_id"
+          ]
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 3,
+      "nama": "aksi_rerender",
+      "param_count": 3,
+      "param_flat": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          48
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "AmbilField",
+          "daftar_id"
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "AmbilField",
+          "item_berikut"
+        ],
+        [
+          "PanggilBawaan",
+          "gabung",
+          2
+        ],
+        [
+          "StoreLocal",
+          3
+        ],
+        [
+          "TandaiBaris",
+          49
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "AmbilField",
+          "item_berikut"
+        ],
+        [
+          "PushK",
+          37
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "LoadLocal",
+          3
+        ],
+        [
+          "BuatInstans",
+          "InduSt",
+          [
+            "item_berikut",
+            "daftar_id"
+          ]
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 4,
+      "nama": "aksi_tambah",
+      "param_count": 3,
+      "param_flat": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          14
+        ],
+        [
+          "PushK",
+          38
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "PushK",
+          39
+        ],
+        [
+          "Indeks"
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          40
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "PushK",
+          41
+        ],
+        [
+          "Indeks"
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          42
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          43
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "PushK",
+          44
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 2,
+      "nama": "render_counter_anak",
+      "param_count": 2,
+      "param_flat": [
+        null,
+        null
+      ]
+    },
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          18
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "PushK",
+          45
+        ],
+        [
+          "BinOp",
+          "Tambah"
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 3,
+      "nama": "aksi_counter_naik",
+      "param_count": 3,
+      "param_flat": [
+        null,
+        null,
+        null
+      ]
+    }
+  ],
+  "global_slot_count": 2,
+  "konstanta": [
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Teks",
+      "v": "render_counter_anak"
+    },
+    {
+      "t": "Teks",
+      "v": "aksi_counter_naik"
+    },
+    {
+      "t": "Teks",
+      "v": "hook_counter_dipasang"
+    },
+    {
+      "t": "Teks",
+      "v": "hook_counter_dilepas"
+    },
+    {
+      "t": "Angka",
+      "v": 4
+    },
+    {
+      "t": "Angka",
+      "v": 1
+    },
+    {
+      "t": "Angka",
+      "v": 2
+    },
+    {
+      "t": "Angka",
+      "v": 3
+    },
+    {
+      "t": "Teks",
+      "v": "render_induk"
+    },
+    {
+      "t": "Teks",
+      "v": "aksi_tambah"
+    },
+    {
+      "t": "Teks",
+      "v": "aksi_hapus"
+    },
+    {
+      "t": "Teks",
+      "v": "aksi_rerender"
+    },
+    {
+      "t": "Teks",
+      "v": "#app"
+    },
+    {
+      "t": "Teks",
+      "v": "terpasang -- 3 item awal, tiap satu instans komponen counter sendiri"
+    },
+    {
+      "t": "Teks",
+      "v": "  anak dilepas: "
+    },
+    {
+      "t": "Teks",
+      "v": "label"
+    },
+    {
+      "t": "Teks",
+      "v": " (state terakhir: "
+    },
+    {
+      "t": "Teks",
+      "v": ")"
+    },
+    {
+      "t": "Teks",
+      "v": "data-id"
+    },
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Angka",
+      "v": 1
+    },
+    {
+      "t": "Teks",
+      "v": "  anak dipasang: "
+    },
+    {
+      "t": "Teks",
+      "v": "label"
+    },
+    {
+      "t": "Teks",
+      "v": ""
+    },
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Teks",
+      "v": "<li>"
+    },
+    {
+      "t": "Teks",
+      "v": "counter-"
+    },
+    {
+      "t": "Teks",
+      "v": "Item "
+    },
+    {
+      "t": "Teks",
+      "v": " <button data-aksi='hapus' data-id='"
+    },
+    {
+      "t": "Teks",
+      "v": "'>hapus</button></li>"
+    },
+    {
+      "t": "Angka",
+      "v": 1
+    },
+    {
+      "t": "Teks",
+      "v": "<div><ul>"
+    },
+    {
+      "t": "Teks",
+      "v": "</ul>"
+    },
+    {
+      "t": "Teks",
+      "v": "<button data-aksi='tambah'>+ Tambah Item</button> "
+    },
+    {
+      "t": "Teks",
+      "v": "<button data-aksi='rerender'>Paksa Render Ulang Induk</button>"
+    },
+    {
+      "t": "Teks",
+      "v": "</div>"
+    },
+    {
+      "t": "Angka",
+      "v": 1
+    },
+    {
+      "t": "Teks",
+      "v": "<span class='counter' data-id='"
+    },
+    {
+      "t": "Teks",
+      "v": "id"
+    },
+    {
+      "t": "Teks",
+      "v": "'>"
+    },
+    {
+      "t": "Teks",
+      "v": "label"
+    },
+    {
+      "t": "Teks",
+      "v": ": <b>"
+    },
+    {
+      "t": "Teks",
+      "v": "</b> "
+    },
+    {
+      "t": "Teks",
+      "v": "<button data-aksi='naik'>+1</button></span>"
+    },
+    {
+      "t": "Angka",
+      "v": 1
+    }
+  ],
+  "nama_ke_indeks": {
+    "aksi_counter_naik": 7,
+    "aksi_hapus": 1,
+    "aksi_rerender": 4,
+    "aksi_tambah": 5,
+    "hook_counter_dilepas": 0,
+    "hook_counter_dipasang": 2,
+    "render_counter_anak": 6,
+    "render_induk": 3
+  },
+  "top_kode": [
+    [
+      "TandaiBaris",
+      22
+    ],
+    [
+      "PushK",
+      0
+    ],
+    [
+      "PushK",
+      1
+    ],
+    [
+      "PushK",
+      2
+    ],
+    [
+      "MakePeta",
+      [
+        "naik"
+      ]
+    ],
+    [
+      "PushK",
+      3
+    ],
+    [
+      "PushK",
+      4
+    ],
+    [
+      "MakePeta",
+      [
+        "state_awal",
+        "render",
+        "aksi",
+        "dipasang",
+        "dilepas"
+      ]
+    ],
+    [
+      "PanggilBawaan",
+      "komponen_buat",
+      1
+    ],
+    [
+      "StoreGlobal",
+      0
+    ],
+    [
+      "TandaiBaris",
+      69
+    ],
+    [
+      "PushK",
+      5
+    ],
+    [
+      "PushK",
+      6
+    ],
+    [
+      "PushK",
+      7
+    ],
+    [
+      "PushK",
+      8
+    ],
+    [
+      "MakeDaftar",
+      3
+    ],
+    [
+      "BuatInstans",
+      "InduSt",
+      [
+        "item_berikut",
+        "daftar_id"
+      ]
+    ],
+    [
+      "PushK",
+      9
+    ],
+    [
+      "PushK",
+      10
+    ],
+    [
+      "PushK",
+      11
+    ],
+    [
+      "PushK",
+      12
+    ],
+    [
+      "MakePeta",
+      [
+        "tambah",
+        "hapus",
+        "rerender"
+      ]
+    ],
+    [
+      "MakePeta",
+      [
+        "state_awal",
+        "render",
+        "aksi"
+      ]
+    ],
+    [
+      "PanggilBawaan",
+      "komponen_buat",
+      1
+    ],
+    [
+      "StoreGlobal",
+      1
+    ],
+    [
+      "TandaiBaris",
+      79
+    ],
+    [
+      "LoadGlobal",
+      1
+    ],
+    [
+      "PushK",
+      13
+    ],
+    [
+      "PanggilBawaan",
+      "dom_pilih",
+      1
+    ],
+    [
+      "PanggilBawaan",
+      "komponen_pasang",
+      2
+    ],
+    [
+      "Pop"
+    ],
+    [
+      "TandaiBaris",
+      80
+    ],
+    [
+      "PushK",
+      14
+    ],
+    [
+      "Tampilkan"
+    ]
+  ]
+}

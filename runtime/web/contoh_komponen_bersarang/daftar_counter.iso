@@ -1,0 +1,80 @@
+catatan: Uji/contoh Nested & Composed Components -- induk merender DAFTAR komponen anak
+catatan: (counter), satu instans per item, lewat komponen_anak(komponen, kunci, props).
+catatan:
+catatan: Yang dibuktikan di sini (sekaligus alasan fitur ini perlu ada):
+catatan:  1. Tiap anak punya state SENDIRI (klik "+" anak A tidak mengubah anak lain).
+catatan:  2. State anak TETAP TERJAGA walau INDUK render ulang penuh (mis. gara-gara aksi
+catatan:     lain di induk yang gak berhubungan sama sekali) -- BUKAN direset ke nol.
+catatan:  3. Nambah/hapus item di induk otomatis me-mount/membongkar anak terkait dengan
+catatan:     benar (state sibling lain tetap aman), lewat kunci yang stabil per item.
+
+bentuk InduSt { item_berikut, daftar_id }
+
+fungsi render_counter_anak(props, state) {
+    kembalikan "<span class='counter' data-id='" + props["id"] + "'>" +
+        props["label"] + ": <b>" + state + "</b> " +
+        "<button data-aksi='naik'>+1</button></span>"
+}
+fungsi aksi_counter_naik(props, state, e) { kembalikan state + 1 }
+fungsi hook_counter_dipasang(props, state) { tampilkan "  anak dipasang: " + props["label"] }
+fungsi hook_counter_dilepas(props, state) { tampilkan "  anak dilepas: " + props["label"] + " (state terakhir: " + state + ")" }
+
+ingat komp_counter = komponen_buat({
+    "state_awal": 0,
+    "render": "render_counter_anak",
+    "aksi": { "naik": "aksi_counter_naik" },
+    "dipasang": "hook_counter_dipasang",
+    "dilepas": "hook_counter_dilepas"
+})
+
+fungsi render_induk(props, state) {
+    ingat daftar_html = ""
+    ingat i = 0
+    ulang (i < panjang(state.daftar_id)) {
+        ingat id = state.daftar_id[i]
+        daftar_html = daftar_html + "<li>" +
+            komponen_anak(komp_counter, "counter-" + id, { "id": id, "label": "Item " + id }) +
+            " <button data-aksi='hapus' data-id='" + id + "'>hapus</button></li>"
+        i = i + 1
+    }
+    kembalikan "<div>" +
+        "<ul>" + daftar_html + "</ul>" +
+        "<button data-aksi='tambah'>+ Tambah Item</button> " +
+        "<button data-aksi='rerender'>Paksa Render Ulang Induk</button>" +
+        "</div>"
+}
+
+fungsi aksi_tambah(props, state, e) {
+    ingat baru = gabung(state.daftar_id, state.item_berikut)
+    kembalikan InduSt { item_berikut: state.item_berikut + 1, daftar_id: baru }
+}
+
+fungsi aksi_hapus(props, state, e) {
+    ingat id_hapus = ke_angka(dom_atribut(e.target, "data-id"))
+    ingat baru = []
+    ingat i = 0
+    ulang (i < panjang(state.daftar_id)) {
+        kalau (state.daftar_id[i] != id_hapus) { baru = gabung(baru, state.daftar_id[i]) }
+        i = i + 1
+    }
+    kembalikan InduSt { item_berikut: state.item_berikut, daftar_id: baru }
+}
+
+fungsi aksi_rerender(props, state, e) {
+    catatan: Sengaja gak ubah apapun -- state persis sama, cuma buat MEMICU render ulang
+    catatan: penuh induk, buktikan anak-anaknya TIDAK ikut ke-reset gara-gara ini.
+    kembalikan InduSt { item_berikut: state.item_berikut, daftar_id: state.daftar_id }
+}
+
+ingat komp_induk = komponen_buat({
+    "state_awal": InduSt { item_berikut: 4, daftar_id: [1, 2, 3] },
+    "render": "render_induk",
+    "aksi": {
+        "tambah": "aksi_tambah",
+        "hapus": "aksi_hapus",
+        "rerender": "aksi_rerender"
+    }
+})
+
+komponen_pasang(komp_induk, dom_pilih("#app"))
+tampilkan "terpasang -- 3 item awal, tiap satu instans komponen counter sendiri"

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Contoh: Nested/Composed Components Isoteri</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 520px; margin: 40px auto; padding: 0 16px; }
+  button { font-size: 0.9rem; padding: 4px 8px; margin-left: 4px; cursor: pointer; }
+  li { list-style: none; margin: 6px 0; }
+  ul { padding: 0; }
+  .counter { background: #eef; padding: 4px 8px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <h2>Contoh: Nested/Composed Components -- Daftar Counter</h2>
+  <div id="app">Memuat...</div>
+  <p><small>
+    Tiap item di daftar adalah instans komponen "counter" SENDIRI (state independen).
+    Klik "+1" beberapa kali di satu item, lalu klik "Paksa Render Ulang Induk" -- state
+    counter-nya TIDAK ikut ter-reset (ini yang dulu jadi masalah tanpa komponen_anak()).
+    Coba juga "+ Tambah Item" dan "hapus" buat lihat mount/unmount otomatis lewat kunci
+    stabil per item. Buka console (F12) buat lihat log lifecycle hook tiap anak.
+  </small></p>
+
+  <script src="../isoteri-vm.js"></script>
+  <script>
+    (async () => {
+      const res = await fetch("daftar_counter.isoweb.json");
+      const bundel = await res.json();
+      const vm = new IsoteriVM(bundel, { tampilkan: (s) => console.log(s) });
+      try {
+        vm.jalankan();
+      } catch (e) {
+        console.error(e);
+        document.getElementById("app").textContent = "Error: " + (e.message || e);
+      }
+    })();
+  </script>
+</body>
+</html>

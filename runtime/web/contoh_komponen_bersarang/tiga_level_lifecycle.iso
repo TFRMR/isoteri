@@ -1,0 +1,60 @@
+catatan: Uji nested components 3 LEVEL (kakek -> induk -> anak/cucu), plus lifecycle hooks
+catatan: (dipasang/diperbarui/dilepas) terpanggil dengan benar di tiap level.
+
+fungsi render_cucu(props, state) {
+    kembalikan "<b class='cucu' data-label='" + props["label"] + "'>cucu:" + state + "</b>"
+}
+fungsi aksi_cucu_naik(props, state, e) {
+    kembalikan state + 1
+}
+fungsi hook_cucu_dipasang(props, state) { tampilkan "cucu dipasang: " + props["label"] }
+fungsi hook_cucu_dilepas(props, state) { tampilkan "cucu dilepas: " + props["label"] }
+
+ingat komp_cucu = komponen_buat({
+    "state_awal": 0,
+    "render": "render_cucu",
+    "aksi": { "naik": "aksi_cucu_naik" },
+    "dipasang": "hook_cucu_dipasang",
+    "dilepas": "hook_cucu_dilepas"
+})
+
+bentuk IndukState { tampilkan_cucu }
+
+fungsi render_induk(props, state) {
+    ingat html = "<div class='induk-mid'>induk<button data-aksi='naik'>+induk</button>"
+    kalau (state.tampilkan_cucu) {
+        html = html + komponen_anak(komp_cucu, "cucu-satu", { "label": "X" })
+    }
+    html = html + "</div>"
+    kembalikan html
+}
+fungsi aksi_induk_naik(props, state, e) {
+    kembalikan IndukState { tampilkan_cucu: state.tampilkan_cucu }
+}
+fungsi hook_induk_dipasang(props, state) { tampilkan "induk dipasang" }
+
+ingat komp_induk = komponen_buat({
+    "state_awal": IndukState { tampilkan_cucu: benar },
+    "render": "render_induk",
+    "aksi": { "naik": "aksi_induk_naik" },
+    "dipasang": "hook_induk_dipasang"
+})
+
+fungsi render_kakek(props, state) {
+    kembalikan "<div class='kakek'>kakek<button data-aksi='toggle'>toggle cucu</button>" +
+        komponen_anak(komp_induk, "induk-satu", {}) + "</div>"
+}
+fungsi aksi_toggle(props, state, e) {
+    kembalikan !state
+}
+fungsi hook_kakek_dipasang(props, state) { tampilkan "kakek dipasang" }
+
+ingat komp_kakek = komponen_buat({
+    "state_awal": benar,
+    "render": "render_kakek",
+    "aksi": { "toggle": "aksi_toggle" },
+    "dipasang": "hook_kakek_dipasang"
+})
+
+komponen_pasang(komp_kakek, dom_pilih("#app"))
+tampilkan "semua terpasang"

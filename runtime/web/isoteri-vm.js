@@ -404,14 +404,20 @@ class IsoteriVM {
   }
 
   /** Render ulang satu instans komponen: panggil "render"(props, state), tulis hasilnya
-   *  (harus Teks/HTML) ke wadah lewat innerHTML, lalu panggil hook "dipasang" (kalau ini
-   *  render PERTAMA) atau "diperbarui" (render selanjutnya). Dipanggil dari komponen_pasang()
-   *  (render pertama) dan tiap kali state berubah (aksi, komponen_atur_state/ubah_state) atau
-   *  props diganti (komponen_atur_props). */
+   *  (harus Teks/HTML) ke wadah lewat innerHTML, REKONSILIASI anak (lihat
+   *  _komponenRekonsiliasiAnak -- HARUS sebelum hook, biar pas hook "dipasang"/"diperbarui"
+   *  induk jalan, DOM anak sudah lengkap/settled, sama seperti urutan "anak duluan baru induk"
+   *  di framework komponen lain), baru panggil hook "dipasang" (kalau ini render PERTAMA) atau
+   *  "diperbarui" (render selanjutnya). Dipanggil dari komponen_pasang() (render pertama) dan
+   *  tiap kali state berubah (aksi, komponen_atur_state/ubah_state) atau props diganti
+   *  (komponen_atur_props) -- JUGA dipanggil ulang dari _komponenRekonsiliasiAnak buat anak
+   *  yang sudah ada saat kunci-nya masih ketemu di render induk berikutnya (lihat di sana).
+   */
   _komponenRenderUlang(inst) {
     const html = this.panggilCallbackNArg('komponen "render"', inst.definisi.render, [inst.props, inst.state]);
     if (html.t !== "Teks") throw new IsoteriError(`komponen "render" harus mengembalikan Teks (HTML), ditemukan ${tampilkanStr(html)}`);
     inst.wadah.innerHTML = html.v;
+    this._komponenRekonsiliasiAnak(inst);
     if (!inst.sudahDipasang) {
       inst.sudahDipasang = true;
       if (inst.definisi.dipasang) {
@@ -422,6 +428,87 @@ class IsoteriVM {
       try { this.panggilCallbackNArg('komponen "diperbarui"', inst.definisi.diperbarui, [inst.props, inst.state]); }
       catch (e) { console.error('Kesalahan di dalam hook "diperbarui":', e.message || e); }
     }
+  }
+
+  /** Nested/composed components -- cari SEMUA placeholder `<div data-komponen-anak="..."
+   *  data-kunci="..." data-props="...">` yang barusan ditulis lewat innerHTML (dihasilkan
+   *  builtin komponen_anak(), dipanggil pengguna DI DALAM render() induk -- lihat case
+   *  "komponen_anak" di panggilDom), lalu SAMAKAN `inst.anak` (Map kunci -> instans anak)
+   *  dengan yang ketemu:
+   *
+   *  - kunci baru (belum ada di inst.anak)       -> mount instans anak baru di situ.
+   *  - kunci lama, tipe komponen SAMA             -> JANGAN bikin instans baru -- cukup
+   *    pindahkan wadah anak ke elemen BARU (elemen LAMA sudah lenyap ikut innerHTML induk),
+   *    pasang ulang delegasi event (listener lama nempel di node yang sudah lenyap), lalu
+   *    render ulang anak dengan STATE-nya yang LAMA (character defining feature: state anak
+   *    tetap hidup lintas render ulang induk, BUKAN dibuat ulang dari nol tiap kali induk
+   *    render ulang -- itu justru masalah yang bikin fitur ini perlu ada).
+   *  - kunci lama, tipe komponen BEDA              -> tipe-nya berubah untuk kunci yang sama,
+   *    perlakukan sebagai bongkar+pasang baru (state lama dibuang, wajar -- komponennya beda).
+   *  - kunci lama yang SEKARANG TIDAK ketemu lagi  -> induk berhenti me-render anak itu
+   *    (kondisional/list yang menyusut) -- bongkar rapi (hook "dilepas", listener dicopot).
+   *
+   *  Rekursif secara alami: _komponenRenderUlang(anak) di dalam sini akan memanggil
+   *  _komponenRekonsiliasiAnak(anak) miliknya SENDIRI buat cucu, dst -- gak ada batas
+   *  kedalaman yang di-hardcode. */
+  _komponenRekonsiliasiAnak(inst) {
+    if (!inst.anak) inst.anak = new Map();
+    const elList = Array.from(inst.wadah.querySelectorAll("[data-komponen-anak]"));
+    const ditemukan = new Set();
+    for (const el of elList) {
+      const idDef = el.getAttribute("data-komponen-anak");
+      const kunci = el.getAttribute("data-kunci") || idDef;
+      const definisi = this.domRegistry.get(idDef);
+      if (!definisi) {
+        console.error(`komponen_anak: definisi komponen dengan id "${idDef}" sudah tidak valid (mungkin dari komponen_buat() beda program/sesi).`);
+        continue;
+      }
+      let props = KOSONG;
+      const propsJson = el.getAttribute("data-props");
+      if (propsJson) {
+        try { props = jsonUrai(propsJson); }
+        catch (e) { console.error(`komponen_anak (kunci "${kunci}"): props tidak bisa diuraikan sebagai JSON:`, e.message || e); }
+      }
+      ditemukan.add(kunci);
+      const ada = inst.anak.get(kunci);
+      if (ada && ada.definisi === definisi) {
+        ada.wadah = el;
+        ada.props = props;
+        if (ada.definisi.aksi) {
+          ada.listenerTerpasang = []; // listener lama nempel di elemen lama yg sudah lenyap
+          this._komponenPasangDelegasi(ada);
+        }
+        this._komponenRenderUlang(ada); // state LAMA (preserved), render ke elemen BARU
+      } else {
+        if (ada) this._komponenLepasInstans(ada, false); // tipe berubah utk kunci sama -- bongkar yg lama
+        const baru = { definisi, wadah: el, props, state: definisi.stateAwal, sudahDipasang: false, listenerTerpasang: [], anak: new Map() };
+        if (definisi.aksi) this._komponenPasangDelegasi(baru);
+        this._komponenRenderUlang(baru);
+        inst.anak.set(kunci, baru);
+      }
+    }
+    for (const [kunci, anakInst] of inst.anak) {
+      if (!ditemukan.has(kunci)) { this._komponenLepasInstans(anakInst, false); inst.anak.delete(kunci); }
+    }
+  }
+
+  /** Bongkar satu instans komponen (dipakai builtin komponen_lepas() DAN rekonsiliasi anak di
+   *  atas) -- rekursif ke anak-anaknya SENDIRI dulu (cegah hook "dilepas"/listener anak lupa
+   *  dibersihkan cuma karena induknya yang eksplisit dibongkar), baru hook "dilepas" milik
+   *  instans ini, baru copot listener. `kosongkanWadah`: true kalau dipanggil user langsung
+   *  lewat komponen_lepas() (wadahnya masih ada di DOM, perlu dikosongkan manual) -- false
+   *  kalau dipanggil dari rekonsiliasi anak (wadah si anak SUDAH ikut lenyap waktu induk
+   *  menulis innerHTML barunya sendiri, gak ada yang perlu dikosongkan lagi). */
+  _komponenLepasInstans(inst, kosongkanWadah) {
+    if (inst.anak) { for (const anakInst of inst.anak.values()) this._komponenLepasInstans(anakInst, false); inst.anak.clear(); }
+    if (inst.definisi.dilepas) {
+      try { this.panggilCallbackNArg('komponen "dilepas"', inst.definisi.dilepas, [inst.props, inst.state]); }
+      catch (e) { console.error('Kesalahan di dalam hook "dilepas":', e.message || e); }
+    }
+    for (const { tipe, fn } of inst.listenerTerpasang) inst.wadah.removeEventListener(tipe, fn);
+    inst.listenerTerpasang = [];
+    if (kosongkanWadah) inst.wadah.innerHTML = "";
+    if (inst._id) { this.domRegistry.delete(inst._id); inst._id = null; }
   }
 
   /** Pasang event delegation buat satu instans komponen: SATU listener per tipe event umum
@@ -865,11 +952,12 @@ class IsoteriVM {
         const definisi = definisiKomponenDari(args[0]);
         const wadah = elemenDari(args[1]);
         const props = args.length > 2 ? args[2] : KOSONG;
-        const inst = { definisi, wadah, props, state: definisi.stateAwal, sudahDipasang: false, listenerTerpasang: [] };
+        const inst = { definisi, wadah, props, state: definisi.stateAwal, sudahDipasang: false, listenerTerpasang: [], anak: new Map() };
         if (definisi.aksi) this._komponenPasangDelegasi(inst);
         this._komponenRenderUlang(inst);
         if (!this._domIdCounter) this._domIdCounter = 0;
         const id = `el${this._domIdCounter++}`;
+        inst._id = id;
         this.domRegistry.set(id, inst);
         return { t: "Instans", nama: "InstansKomponen", v: [["_id", teks(id)]] };
       }
@@ -895,16 +983,42 @@ class IsoteriVM {
       case "komponen_elemen": return this._bungkusElemenDom(instansKomponenDari(args[0]).wadah);
       case "komponen_lepas": {
         const inst = instansKomponenDari(args[0]);
-        if (inst.definisi.dilepas) {
-          try { this.panggilCallbackNArg('komponen "dilepas"', inst.definisi.dilepas, [inst.props, inst.state]); }
-          catch (e) { console.error('Kesalahan di dalam hook "dilepas":', e.message || e); }
-        }
-        for (const { tipe, fn } of inst.listenerTerpasang) inst.wadah.removeEventListener(tipe, fn);
-        inst.listenerTerpasang = [];
-        inst.wadah.innerHTML = "";
-        const idInst = args[0].v.find(([k]) => k === "_id")[1].v;
-        this.domRegistry.delete(idInst); // cegah komponen_state/atur_state/dst. dipakai lagi setelah dilepas
+        this._komponenLepasInstans(inst, true);
         return KOSONG;
+      }
+      case "komponen_anak": {
+        // komponen_anak(komponen, kunci, props?) -- DIPANGGIL DI DALAM render() induk, bukan
+        // langsung mount seperti komponen_pasang. Hasilnya cuma Teks (potongan HTML placeholder)
+        // yang disisipkan ke string HTML hasil render induk seperti teks biasa -- runtime yang
+        // nanti temukan & urus siklus hidup anaknya secara otomatis lewat
+        // _komponenRekonsiliasiAnak() (dipanggil tiap kali WADAH manapun selesai innerHTML,
+        // baik induk paling atas maupun anak/cucu di level manapun -- rekursif alami). `kunci`
+        // WAJIB stabil & unik antar-saudara (sama seperti `key` di React) -- ini yang dipakai
+        // buat tau anak yang SAMA lintas render ulang induk (state-nya dipertahankan) vs anak
+        // BARU (di-mount dari nol). Kalau render sebuah DAFTAR anak (mis. satu per item todo),
+        // pakai id/identitas unik tiap item sebagai bagian kunci, JANGAN cuma index array kalau
+        // daftarnya bisa disisipi/dihapus di tengah (index bakal "geser" & state ketuker-tuker
+        // instans yg salah -- persis footgun yang sama seperti pakai index sebagai key React).
+        const definisiV = args[0];
+        if (definisiV.t !== "Instans" || definisiV.nama !== "Komponen") throw new IsoteriError('komponen_anak(komponen, kunci, props?): argumen pertama harus hasil komponen_buat(), ditemukan ' + tampilkanStr(definisiV));
+        const idDef = definisiV.v.find(([k]) => k === "_id")[1].v;
+        const kunci = teksArg(args[1], "kunci");
+        const props = args.length > 2 ? args[2] : KOSONG;
+        const esc = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        return teks(`<div data-komponen-anak="${esc(idDef)}" data-kunci="${esc(kunci)}" data-props="${esc(valueKeJsonStr(props))}"></div>`);
+      }
+      case "komponen_anak_instans": {
+        // komponen_anak_instans(instans_induk, kunci) -> InstansKomponen anaknya (atau Kosong
+        // kalau kunci itu gak/tidak lagi ada) -- opsional, buat kasus jarang yang butuh pegang
+        // instans anak langsung (mis. panggil komponen_atur_state anak dari luar). Pola yang
+        // lebih umum & disarankan tetap: props turun dari induk lewat komponen_anak(...,props),
+        // event/perubahan naik lewat "aksi" milik anak itu sendiri.
+        const inst = instansKomponenDari(args[0]);
+        const kunci = teksArg(args[1], "kunci");
+        const anak = inst.anak && inst.anak.get(kunci);
+        if (!anak) return KOSONG;
+        if (!anak._id) { if (!this._domIdCounter) this._domIdCounter = 0; anak._id = `el${this._domIdCounter++}`; this.domRegistry.set(anak._id, anak); }
+        return { t: "Instans", nama: "InstansKomponen", v: [["_id", teks(anak._id)]] };
       }
 
       // --- Canvas 2D (lanjutan Milestone B) ---
@@ -995,7 +1109,7 @@ const DOM_FUNGSI = new Set([
   "rute_daftar", "rute_mulai", "rute_navigasi", "rute_sekarang",
   "state_buat", "state_nilai", "state_atur", "state_ubah", "state_langgan",
   "komponen_buat", "komponen_pasang", "komponen_state", "komponen_atur_state", "komponen_ubah_state",
-  "komponen_atur_props", "komponen_elemen", "komponen_lepas",
+  "komponen_atur_props", "komponen_elemen", "komponen_lepas", "komponen_anak", "komponen_anak_instans",
   "dom_konteks_2d", "kanvas_isi_gaya", "kanvas_garis_gaya", "kanvas_lebar_garis", "kanvas_font",
   "kanvas_isi_persegi", "kanvas_garis_persegi", "kanvas_bersihkan", "kanvas_isi_teks",
   "kanvas_mulai_jalur", "kanvas_pindah_ke", "kanvas_garis_ke", "kanvas_lingkaran", "kanvas_isi", "kanvas_garis",
@@ -1248,6 +1362,21 @@ function panggilBawaanMurni(nama, args) {
       if (args[0].t === "Desimal") return angka(Math.trunc(args[0].v));
       if (args[0].t === "Angka") return args[0];
       throw new IsoteriError(`ke_bulat() tidak berlaku untuk ${tampilkanStr(args[0])}`);
+    }
+    case "ke_angka": {
+      if (args[0].t === "Angka") return args[0];
+      if (args[0].t === "Desimal") return angka(Math.trunc(args[0].v));
+      if (args[0].t === "Teks") {
+        const s = args[0].v.trim();
+        // Regex ketat -- integer opsional tanda minus, TANPA titik/desimal/notasi ilmiah (beda
+        // dari jsonAngka() di bawah yang memang buat parse literal JSON umum). Konsisten dengan
+        // Rust `str::parse::<i64>()` di sisi native: "12.5"/"1e3"/"" semua ditolak jelas.
+        if (!/^-?[0-9]+$/.test(s)) throw new IsoteriError(`ke_angka(): "${args[0].v}" bukan Angka (i64) yang valid.`);
+        const n = Number(s);
+        if (!Number.isSafeInteger(n)) throw new IsoteriError(`ke_angka(): "${args[0].v}" bukan Angka (i64) yang valid.`);
+        return angka(n);
+      }
+      throw new IsoteriError(`ke_angka() tidak berlaku untuk ${tampilkanStr(args[0])}`);
     }
     case "ke_teks": return teks(tampilkanStr(args[0]));
     case "akar": {

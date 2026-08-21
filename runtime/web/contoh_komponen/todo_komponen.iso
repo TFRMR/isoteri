@@ -32,7 +32,7 @@ fungsi aksi_tambah(props, state, e) {
     kalau (panjang(state.teks_input) == 0) {
         kembalikan state
     }
-    ingat baru = gabung(state.item_daftar, [Todo { teks: state.teks_input, selesai: salah }])
+    ingat baru = gabung(state.item_daftar, Todo { teks: state.teks_input, selesai: salah })
     kembalikan TodoState { item_daftar: baru, teks_input: "", jumlah_render: state.jumlah_render + 1 }
 }
 
@@ -41,7 +41,7 @@ fungsi aksi_hapus(props, state, e) {
     ingat baru = []
     ingat i = 0
     ulang (i < panjang(state.item_daftar)) {
-        kalau (i != idx) { baru = gabung(baru, [state.item_daftar[i]]) }
+        kalau (i != idx) { baru = gabung(baru, state.item_daftar[i]) }
         i = i + 1
     }
     kembalikan TodoState { item_daftar: baru, teks_input: state.teks_input, jumlah_render: state.jumlah_render + 1 }
@@ -54,9 +54,9 @@ fungsi aksi_toggle(props, state, e) {
     ulang (i < panjang(state.item_daftar)) {
         kalau (i == idx) {
             ingat lama = state.item_daftar[i]
-            baru = gabung(baru, [Todo { teks: lama.teks, selesai: !lama.selesai }])
+            baru = gabung(baru, Todo { teks: lama.teks, selesai: !lama.selesai })
         } lainnya {
-            baru = gabung(baru, [state.item_daftar[i]])
+            baru = gabung(baru, state.item_daftar[i])
         }
         i = i + 1
     }
