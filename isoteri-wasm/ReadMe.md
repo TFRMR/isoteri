@@ -1,27 +1,44 @@
 # Isoteri Web Runtime (Fase 3 -- Browser Native)
 
-Menjalankan program Isoteri di browser **tanpa server dan tanpa WASM asli**,
-dengan mengekspor bytecode terkompilasi ke JSON lalu menjalankannya lewat
-interpreter JavaScript (`isoteri-vm.js`) yang semantiknya ditulis ulang
-persis mengikuti VM Rust (`src/lib.rs`).
+Menjalankan program Isoteri di browser lewat dua jalur yang hidup
+berdampingan:
 
-## Kenapa bukan WASM langsung?
+1. **Jalur JSON+VM-JS** (jalur pragmatis awal, masih dipakai/didukung):
+   mengekspor bytecode terkompilasi ke JSON lalu menjalankannya lewat
+   interpreter JavaScript (`isoteri-vm.js`) yang semantiknya ditulis ulang
+   persis mengikuti VM Rust (`src/lib.rs`).
+2. **Jalur WASM asli** (`isoteri-wasm/`, sekarang sudah dibangun &
+   divalidasi -- lihat `demo_wasm.html`): source `.iso` dikompilasi
+   langsung di browser lewat compiler Rust yang sama, di-compile ke
+   `wasm32-unknown-unknown`. Hasilnya tetap dijalankan oleh `isoteri-vm.js`
+   yang sama persis dipakai jalur 1 -- yang berbeda cuma CARA bundel
+   JSON-nya dihasilkan (di browser vs lewat CLI), bukan VM eksekusinya.
 
-Blueprint asli menargetkan `Isoteri -> IR -> WASM -> Browser`. Itu tetap
-arah jangka panjang yang benar (lebih cepat dari interpreter JS). Tapi
-mengompilasi ke WASM butuh target `wasm32-unknown-unknown`, yang di banyak
-environment (termasuk environment pengembangan proyek ini) hanya tersedia
-lewat `rustup target add`, dan `rustup` sendiri sering tidak terpasang atau
-tidak bisa mengunduh komponennya (butuh akses ke `static.rust-lang.org`
-yang kerap diblokir jaringan sandbox/CI).
+## Kenapa dua jalur, bukan cuma satu?
 
-Jalan pragmatis: bytecode Isoteri itu sendiri sudah representasi flat &
-portable (array instruksi berisi angka/teks/enum sederhana -- lihat
-`enum Instr` di `src/lib.rs`). Jadi cukup di-dump ke JSON, lalu dijalankan
-oleh VM kecil di JavaScript. Hasilnya: janji "Browser Native" terpenuhi
-*hari ini*, tanpa menunggu toolchain wasm32. Begitu wasm32 tersedia,
-jalur "compile ke WASM asli" tetap layak dikerjakan sebagai peningkatan
-performa -- dua-duanya bisa hidup berdampingan.
+Blueprint asli menargetkan `Isoteri -> IR -> WASM -> Browser`. Mengompilasi
+ke WASM butuh target `wasm32-unknown-unknown`, yang di banyak environment
+(termasuk environment pengembangan sandbox proyek ini) hanya tersedia lewat
+`rustup target add`, dan `rustup` sendiri sering tidak terpasang atau tidak
+bisa mengunduh komponennya (butuh akses ke `static.rust-lang.org` yang
+kerap diblokir jaringan sandbox/CI).
+
+Jalan pragmatis (jalur 1) dibuat lebih dulu: bytecode Isoteri itu sendiri
+sudah representasi flat & portable (array instruksi berisi angka/teks/enum
+sederhana -- lihat `enum Instr` di `src/lib.rs`). Jadi cukup di-dump ke
+JSON, lalu dijalankan oleh VM kecil di JavaScript. Ini memenuhi janji
+"Browser Native" tanpa menunggu toolchain wasm32, dan **tetap dipertahankan**
+sebagai fallback untuk environment yang tidak bisa build wasm32 (mis. CI
+tanpa akses `static.rust-lang.org`).
+
+Begitu toolchain wasm32 tersedia (di mesin lokal dengan akses internet
+penuh), jalur 2 dikerjakan dan **sudah berhasil**: source `.iso` mentah
+sekarang bisa dikompilasi langsung di browser tanpa langkah CLI/ekspor
+bundel terpisah sama sekali. Lihat `../../isoteri-wasm/README.md` untuk
+cara build ulang `pkg/`, dan `demo_wasm.html` di folder ini untuk demo
+jalur 2. Belum divalidasi lewat jalur 2 untuk fitur bahasa yang lebih
+kompleks (struct, closure, loop, DOM binding penuh) -- baru fungsi, string,
+dan aritmatika dasar.
 
 ## Cara pakai
 
