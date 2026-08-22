@@ -3,10 +3,24 @@ name = "isoteri"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# Default ON supaya CLI native (cargo build --release, tanpa flag apa pun)
+# berperilaku PERSIS seperti sebelum fitur ini ada -- nol risiko regresi buat
+# jalur pakai sehari-hari. "jit": JIT Cranelift (JitEngine/KompilerBadan/
+# KompilerBadanIr). "native-http": builtin unduh() (blocking, pakai ureq).
+# Keduanya WAJIB off saat build ke wasm32 (target isoteri-wasm/) --
+# cranelift-native & ureq butuh API OS asli yang gak ada di browser;
+# fungsionalitas yang hilang (JIT jadi bytecode-only -- tetap 100% benar,
+# cuma lebih lambat; unduh() jadi mengembalikan error jelas) dijelaskan di
+# isoteri-wasm/README.md.
+default = ["jit", "native-http"]
+jit = ["cranelift", "cranelift-jit", "cranelift-module", "cranelift-native"]
+native-http = ["ureq"]
+
 [dependencies]
-ureq = "2"
+ureq = { version = "2", optional = true }
 serde_json = "1"
-cranelift = "0.105"
-cranelift-jit = "0.105"
-cranelift-module = "0.105"
-cranelift-native = "0.105"
+cranelift = { version = "0.105", optional = true }
+cranelift-jit = { version = "0.105", optional = true }
+cranelift-module = { version = "0.105", optional = true }
+cranelift-native = { version = "0.105", optional = true }

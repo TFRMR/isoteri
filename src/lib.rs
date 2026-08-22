@@ -917,6 +917,9 @@ pub struct CFungsi {
     param_count: usize,
     local_slot_count: usize,
     body: Vec<(usize, CStmt)>,
+    // Dipakai JitEngine::kompilasi (nama simbol Cranelift) -- di-gate fitur "jit" saja
+    // yang membaca field ini, jadi "tidak pernah dibaca" tanpa fitur itu adalah wajar.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     nama: String,
     slot_tipe: Vec<Option<TipeJit>>,
     /// Some(t) kalau fungsi ini "murni": semua parameter & variabel lokal bertipe SAMA (t),
@@ -2070,6 +2073,10 @@ enum Instr {
 /// Desimal (larik f64 masuk, f64 keluar). Keduanya tetap "satu pointer ke larik" per
 /// komentar di VMFungsi::native, jadi arity berapa pun tetap satu tipe per mode.
 #[derive(Clone, Copy)]
+// Varian-variannya cuma pernah dikonstruksi oleh coba_kompilasi_jit()/coba_kompilasi_jit_dari_ir()
+// (keduanya di-gate fitur "jit") -- "tidak pernah dikonstruksi" tanpa fitur itu adalah wajar,
+// bukan dead code beneran (enum-nya sendiri tetap dipakai penuh di jalur eksekusi lain).
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
 enum NativeFn {
     /// (ptr argumen, ptr keluaran flag overflow 1-byte) -> hasil. Pemanggil (lihat
     /// panggil_fungsi_dengan_argumen & Instr::PanggilFungsi) WAJIB baca *ptr_flag setelah
@@ -2420,10 +2427,17 @@ impl Compiler {
 // perbandingan, kalau/jika, ulang, dan rekursi ke dirinya sendiri. Fungsi yang
 // tidak lolos tetap jalan normal lewat bytecode VM (Pustaka/eksekusi di atas).
 
+// Seluruh region ini (JitEngine, KompilerBadan, KompilerBadanIr) di-gate fitur "jit" --
+// TIDAK dipakai build isoteri-wasm/ (lihat Cargo.toml). Fungsi yang lolos cek_jit_murni_*
+// (didefinisikan DI LUAR region ini, jadi tetap dievaluasi walau fitur ini off) tanpa fitur
+// "jit" otomatis lari ke bytecode VM biasa -- SAMA PERSIS jalur yang sudah dipakai & teruji
+// lewat ISOTERI_NO_JIT=1 (lihat scripts/regresi.sh) -- 100% benar, cuma lebih lambat.
+#[cfg(feature = "jit")]
 struct JitEngine {
     module: cranelift_jit::JITModule,
 }
 
+#[cfg(feature = "jit")]
 impl JitEngine {
     fn new() -> Self {
         use cranelift::prelude::Configurable;
@@ -2647,6 +2661,7 @@ impl JitEngine {
 /// CExpr) dan pakai `Variable::new(reg)` buat SEMUA register (lokal asli MAUPUN temporary --
 /// beda dari KompilerBadan yang cuma punya local_slot_count asli, di sini variabelnya lebih
 /// banyak tapi Cranelift menanganinya sama saja).
+#[cfg(feature = "jit")]
 struct KompilerBadanIr<'a, 'b> {
     builder: cranelift::prelude::FunctionBuilder<'a>,
     local_callee: cranelift::codegen::ir::FuncRef,
@@ -2674,6 +2689,7 @@ struct KompilerBadanIr<'a, 'b> {
     out_ptr: Option<cranelift::prelude::Value>,
 }
 
+#[cfg(feature = "jit")]
 impl<'a, 'b> KompilerBadanIr<'a, 'b> {
     fn tulis_flag_keluaran(&mut self) {
         use cranelift::prelude::*;
@@ -2812,6 +2828,7 @@ impl<'a, 'b> KompilerBadanIr<'a, 'b> {
     }
 }
 
+#[cfg(feature = "jit")]
 struct KompilerBadan<'a> {
     builder: cranelift::prelude::FunctionBuilder<'a>,
     local_callee: cranelift::codegen::ir::FuncRef,
@@ -2826,6 +2843,7 @@ struct KompilerBadan<'a> {
     out_ptr: Option<cranelift::prelude::Value>,
 }
 
+#[cfg(feature = "jit")]
 impl<'a> KompilerBadan<'a> {
     /// Tulis flag_var (kalau mode Angka) ke out_ptr SEBELUM tiap 'return_' -- dipanggil di
     /// SETIAP titik keluar fungsi (CStmt::Kembalikan & fallthrough di akhir kompilasi()),
@@ -3911,6 +3929,7 @@ fn panggil_bawaan(nama: &str, args: &[Value]) -> Result<Option<Value>, String> {
                 (p, s) => Err(format!("tulis_berkas(path, isi) butuh dua Teks, ditemukan {} dan {}", p, s)),
             }
         }
+        #[cfg(feature = "native-http")]
         "unduh" => match args.get(0) {
             Some(Value::Teks(u)) => match ureq::get(u.as_ref()).call() {
                 Ok(resp) => match resp.into_string() {
@@ -3922,6 +3941,13 @@ fn panggil_bawaan(nama: &str, args: &[Value]) -> Result<Option<Value>, String> {
             Some(lain) => Err(format!("unduh() butuh URL berupa Teks, ditemukan {}", lain)),
             None => Err("unduh(url) butuh 1 argumen".to_string()),
         },
+        // Build tanpa fitur "native-http" (mis. isoteri-wasm/, jalur ekspor JSON untuk web) --
+        // browser sudah punya fetch()/unduh_async() sendiri (lihat runtime/web/isoteri-vm.js),
+        // jadi unduh() blocking gaya native memang TIDAK RELEVAN & TIDAK BISA jalan di sana
+        // (butuh socket blocking asli yang gak ada di wasm32/browser) -- error jelas, bukan
+        // silent-gagal-kompilasi programnya.
+        #[cfg(not(feature = "native-http"))]
+        "unduh" => Err("unduh() (versi blocking) tidak tersedia di build ini (mis. isoteri-wasm/) -- pakai unduh_async()/unduh_lanjut_async() kalau target-nya web.".to_string()),
         "ke_desimal" => match args.get(0) {
             Some(Value::Angka(n)) => Ok(Some(Value::Desimal(*n as f64))),
             Some(v @ Value::Desimal(_)) => Ok(Some(v.clone())),
@@ -5057,6 +5083,19 @@ pub fn jalankan_berkas(path: &str) -> Result<(), String> {
 
 /// Inti pipeline resolve -> compile -> JIT -> eksekusi, dipakai bersama oleh jalankan_sumber
 /// dan jalankan_berkas setelah keduanya menyiapkan Vec<Stmt> yang siap diresolve.
+// Helper kecil: bungkus panggilan jit.kompilasi() + transmute jadi NativeFn dalam satu
+// tempat -- dipakai jalankan_stmt_list & (via helper serupa) jalankan_stmt_list_via_ir.
+// Di-cfg fitur "jit" supaya build tanpa Cranelift (mis. isoteri-wasm/) tidak perlu tahu
+// apa-apa soal transmute pointer JIT sama sekali.
+#[cfg(feature = "jit")]
+fn coba_kompilasi_jit(jit: &mut JitEngine, cf: &CFungsi, mode: TipeJit) -> Result<NativeFn, String> {
+    let ptr = jit.kompilasi(cf, mode)?;
+    Ok(match mode {
+        TipeJit::Angka => NativeFn::Angka(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64, *mut i64) -> i64>(ptr) }),
+        TipeJit::Desimal => NativeFn::Desimal(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const f64) -> f64>(ptr) }),
+    })
+}
+
 fn jalankan_stmt_list(program: Vec<(usize, Stmt)>) -> Result<(), String> {
     let mut resolver = Resolver::new();
     let top_level = resolver.resolve_top(&program).map_err(|e| format!("Kesalahan Kompilasi: {}", e))?;
@@ -5072,6 +5111,7 @@ fn jalankan_stmt_list(program: Vec<(usize, Stmt)>) -> Result<(), String> {
 
     let mut compiler = Compiler::new(fungsi_index);
     let top_kode = compiler.compile_top(&top_level);
+    #[cfg(feature = "jit")]
     let mut jit = JitEngine::new();
     // ISOTERI_NO_JIT=1 matikan JIT sama sekali (semua fungsi lari ke bytecode VM murni),
     // TANPA perlu edit/hapus anotasi tipe di kode sumbernya. Dipakai scripts/regresi.sh
@@ -5079,27 +5119,24 @@ fn jalankan_stmt_list(program: Vec<(usize, Stmt)>) -> Result<(), String> {
     // 3 jalur eksekusi yang independen -- persis metodologi yang nemuin bug wrap-around
     // overflow JIT (lihat KETERBATASAN.md & docs/IR.md): kalau bytecode & JIT kasih hasil
     // beda buat program yang SAMA, itu tandanya salah satu jalurnya (biasanya JIT-nya,
-    // karena lebih jarang dites manual) punya bug tersembunyi.
-    let paksa_bytecode = std::env::var("ISOTERI_NO_JIT").map(|v| v == "1").unwrap_or(false);
+    // karena lebih jarang dites manual) punya bug tersembunyi. Tanpa fitur "jit" (mis.
+    // isoteri-wasm/) paksa_bytecode SELALU true -- gak ada JitEngine sama sekali.
+    let paksa_bytecode = cfg!(not(feature = "jit")) || std::env::var("ISOTERI_NO_JIT").map(|v| v == "1").unwrap_or(false);
     let mut fungsi_vm: Vec<Rc<VMFungsi>> = Vec::with_capacity(nama_fungsi.len());
     for nama in &nama_fungsi {
         let cf = resolver.fungsi_out.get(nama).unwrap();
+        #[cfg_attr(not(feature = "jit"), allow(unused_mut))]
         let mut vmf = compiler.compile_fungsi(cf);
+        #[cfg_attr(not(feature = "jit"), allow(unused_variables))]
         if let Some(mode) = cf.tipe_jit {
             if paksa_bytecode {
                 // sengaja skip -- vmf.native tetap None, VM otomatis pakai bytecode biasa.
             } else {
-            match jit.kompilasi(cf, mode) {
-                Ok(ptr) => {
-                    vmf.native = Some(match mode {
-                        TipeJit::Angka => NativeFn::Angka(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64, *mut i64) -> i64>(ptr) }),
-                        TipeJit::Desimal => NativeFn::Desimal(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const f64) -> f64>(ptr) }),
-                    });
+                #[cfg(feature = "jit")]
+                match coba_kompilasi_jit(&mut jit, cf, mode) {
+                    Ok(native) => vmf.native = Some(native),
+                    Err(e) => eprintln!("Peringatan: fungsi \"{}\" gagal dikompilasi JIT ({}), pakai bytecode biasa.", nama, e),
                 }
-                Err(e) => {
-                    eprintln!("Peringatan: fungsi \"{}\" gagal dikompilasi JIT ({}), pakai bytecode biasa.", nama, e);
-                }
-            }
             }
         }
         fungsi_vm.push(Rc::new(vmf));
@@ -5781,6 +5818,17 @@ fn stack_scheduling(instrs: Vec<Instr>, ambang_temp: usize) -> Vec<Instr> {
         .collect()
 }
 
+// Sama seperti coba_kompilasi_jit() tapi untuk jalur via-ir/AOT (kompilasi_dari_ir,
+// bukan kompilasi biasa) -- lihat catatan di sana.
+#[cfg(feature = "jit")]
+fn coba_kompilasi_jit_dari_ir(jit: &mut JitEngine, nama: &str, ir: &[IrInstr], reg_types: &[IrType], param_count: usize, local_slot_count: usize, mode: TipeJit) -> Result<NativeFn, String> {
+    let ptr = jit.kompilasi_dari_ir(nama, ir, reg_types, param_count, local_slot_count, mode)?;
+    Ok(match mode {
+        TipeJit::Angka => NativeFn::Angka(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64, *mut i64) -> i64>(ptr) }),
+        TipeJit::Desimal => NativeFn::Desimal(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const f64) -> f64>(ptr) }),
+    })
+}
+
 pub fn jalankan_stmt_list_via_ir(program: Vec<(usize, Stmt)>) -> Result<(), String> {
     let mut resolver = Resolver::new();
     let top_level = resolver.resolve_top(&program).map_err(|e| format!("Kesalahan Kompilasi: {}", e))?;
@@ -5804,6 +5852,7 @@ pub fn jalankan_stmt_list_via_ir(program: Vec<(usize, Stmt)>) -> Result<(), Stri
     let top_kode = stack_scheduling(top_kode, 0);
 
     let mut fungsi_vm: Vec<Rc<VMFungsi>> = Vec::with_capacity(nama_fungsi.len());
+    #[cfg(feature = "jit")]
     let mut jit = JitEngine::new();
     for nama in &nama_fungsi {
         let cf = resolver.fungsi_out.get(nama).unwrap().clone();
@@ -5815,20 +5864,19 @@ pub fn jalankan_stmt_list_via_ir(program: Vec<(usize, Stmt)>) -> Result<(), Stri
         let (ir, reg_types) = lower_fungsi_ke_ir(&mut compiler, &cf);
         let kode = ir_ke_instr_dgn_konstanta(&mut compiler, &ir);
         let kode = stack_scheduling(kode, cf.local_slot_count);
+        #[cfg_attr(not(feature = "jit"), allow(unused_mut))]
         let mut native = None;
         // Migrasi JIT (docs/IR.md poin 3): fungsi yang SAMA PERSIS lolos elig produksi
         // (cf.tipe_jit, dihitung Resolver -- tidak dihitung ulang di sini) SEKARANG JUGA
         // dicoba dikompilasi lewat IR linear yang baru, bukan cuma bytecode. Kalau gagal,
         // turun ke bytecode biasa (dari `kode` di atas) -- sama seperti perilaku produksi
-        // saat JIT gagal, TIDAK fatal.
+        // saat JIT gagal, TIDAK fatal. Tanpa fitur "jit" (mis. isoteri-wasm/): `native`
+        // otomatis tetap None, langsung lari ke bytecode `kode` -- SAMA seperti JIT gagal.
+        #[cfg_attr(not(feature = "jit"), allow(unused_variables))]
         if let Some(mode) = cf.tipe_jit {
-            match jit.kompilasi_dari_ir(nama, &ir, &reg_types, cf.param_count, cf.local_slot_count, mode) {
-                Ok(ptr) => {
-                    native = Some(match mode {
-                        TipeJit::Angka => NativeFn::Angka(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64, *mut i64) -> i64>(ptr) }),
-                        TipeJit::Desimal => NativeFn::Desimal(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const f64) -> f64>(ptr) }),
-                    });
-                }
+            #[cfg(feature = "jit")]
+            match coba_kompilasi_jit_dari_ir(&mut jit, nama, &ir, &reg_types, cf.param_count, cf.local_slot_count, mode) {
+                Ok(n) => native = Some(n),
                 Err(e) => eprintln!("Peringatan (via-ir): fungsi \"{}\" gagal dikompilasi JIT-dari-IR ({}), pakai bytecode.", nama, e),
             }
         }
