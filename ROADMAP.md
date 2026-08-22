@@ -88,10 +88,43 @@ di atas (termasuk kenapa Component System bukan pengganti vdom-diffing React).
 
 ## WebAssembly
 
-Target WebAssembly asli pernah masuk roadmap, tetapi saat ini ditunda.
-Jalur browser yang digunakan sekarang adalah ekspor bundel + VM JavaScript,
-dan sudah diperluas jadi kerangka kerja aplikasi web (Router + State +
-Component System) di atas jalur itu -- lihat section "Web" di atas.
+Target WebAssembly asli pernah masuk roadmap, sempat ditunda -- sekarang
+**berjalan lagi, scaffold-nya sudah ada**: lihat `isoteri-wasm/` (crate
+`wasm-bindgen` tipis, memanggil `isoteri::ekspor_json_dari_sumber()` langsung
+-- BUKAN reimplementasi compiler, jadi tidak ada risiko divergensi perilaku).
+Sudah divalidasi PENUH secara native (`cargo check`/`build`/`test` semua
+lulus, termasuk perbandingan byte-identik dengan hasil CLI `isoteri
+ekspor-web` untuk source yang sama). Untuk itu, `isoteri/Cargo.toml` sekarang
+punya fitur `jit`/`native-http` (default ON, nol dampak ke CLI biasa) yang
+memisahkan Cranelift/`ureq` (gak jalan di wasm32) dari inti compiler bytecode
+(yang sudah SEJAK AWAL didesain jalan tanpa JIT sama sekali).
+
+**Build sungguhan ke target `wasm32-unknown-unknown` -- SELESAI & TERVALIDASI**
+(build dilakukan di mesin lokal dengan akses internet penuh, bukan di sandbox
+kerja yang tidak punya akses ke `static.rust-lang.org`). Langkah `rustup
+target add wasm32-unknown-unknown` + `wasm-pack build --target web --out-dir
+pkg` dari folder `isoteri-wasm/` berhasil menghasilkan `pkg/isoteri_wasm.js` +
+`pkg/isoteri_wasm_bg.wasm`. Diverifikasi end-to-end lewat
+`runtime/web/demo_wasm.html` (textarea source `.iso` -> `kompilasi()` WASM ->
+`IsoteriVM` dari `isoteri-vm.js`, dilayani via `python3 -m http.server`):
+kode contoh (`fungsi`, `kembalikan`, string concat, ekspresi aritmatika)
+menghasilkan output yang benar (`"Halo, Dunia!"` dan `42`) langsung di
+browser, tanpa CLI sama sekali di jalur ini.
+
+Dengan ini, jalur browser TIDAK LAGI butuh langkah "ekspor bundel lewat CLI"
+sebagai satu-satunya cara -- source `.iso` mentah bisa langsung dikompilasi
+di browser, membuka jalan buat tool semacam Isoteri AI Studio menghasilkan
+satu file HTML utuh yang langsung jalan tanpa compile step terpisah. Jalur
+ekspor bundel + VM JavaScript yang sudah ada (Router + State + Component
+System, lihat section "Web" di atas) TETAP dipakai persis sama --
+`isoteri-wasm` cuma mengganti CARA bundle JSON-nya dihasilkan (di browser,
+bukan CLI), bukan mengganti apa yang dijalankan VM-nya.
+
+Belum: `demo_wasm.html` baru menguji subset kecil bahasa (fungsi, string,
+aritmatika) -- belum diverifikasi lewat WASM untuk fitur yang lebih kompleks
+(struct/`bentuk`, closure, loop, DOM binding penuh). `pkg/` hasil build juga
+belum di-commit permanen ke lokasi final di repo/CI (saat ini disalin manual
+ke `runtime/web/pkg/` di mesin lokal).
 
 ## Prinsip roadmap
 

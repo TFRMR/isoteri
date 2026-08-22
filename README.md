@@ -115,8 +115,8 @@ Isoteri dikembangkan lewat dua kelompok prioritas: **Kelompok 1** (kelengkapan d
 | Kompilasi ke executable native mandiri (AOT) | ✅ Selesai |
 | Struct yang JIT-able (parameter bentuk numerik-murni di-flatten jadi slot langsung) | ✅ Selesai (versi terbatas — baca, bukan return; lihat batasan di REFERENSI.md) |
 | SIMD untuk loop data numerik | ⚠️ Dicoba, TIDAK dilanjutkan — lihat penjelasan di bawah tabel |
-| Target WebAssembly asli | ⏸️ Ditunda — butuh target `wasm32-unknown-unknown` (lihat [INSTALASI.md](docs/INSTALASI.md)) |
-| **Browser Native (Fase 3 blueprint)** | ✅ **Selesai lewat jalur pragmatis**: `isoteri ekspor-web` + VM JavaScript — lihat [runtime/web/README.md](runtime/web/README.md) |
+| Target WebAssembly asli | ✅ **Selesai** — `isoteri-wasm/` crate di-build ke `wasm32-unknown-unknown` & divalidasi jalan di browser lewat [runtime/web/demo_wasm.html](runtime/web/demo_wasm.html) |
+| **Browser Native (Fase 3 blueprint)** | ✅ **Selesai, dua jalur**: (1) `isoteri ekspor-web` + VM JavaScript — lihat [runtime/web/README.md](runtime/web/README.md); (2) compile langsung di browser via WASM asli — lihat `demo_wasm.html` |
 
 **Soal SIMD**: sempat diimplementasikan (AVX2, buat `jumlah()`/`rata_rata()`), tapi **dibenchmark langsung dan ternyata lebih lambat** dari versi scalar biasa (~45% lebih lambat di uji coba nyata), bukan lebih cepat — jadi diputuskan **direvert**, bukan diship. Penyebabnya: representasi nilai di Isoteri (`Value` enum, tagged/boxed) bikin data numerik di dalam `Daftar` gak tersimpan sebagai larik mentah yang bisa langsung diproses SIMD — perlu langkah "ekstraksi" ke buffer sementara dulu, dan biaya ekstraksi itu (yang harus tetap jalan elemen-per-elemen) sama besarnya dengan biaya loop scalar biasa. Jadi SIMD-nya nambah kerjaan, bukan gantiin kerjaan. Supaya SIMD beneran menang, `Daftar` numerik-murni butuh representasi memori flat tersendiri (mirip proyek "struct yang JIT-able" di atas, tapi buat list) — itu perubahan arsitektur lebih besar yang belum dikerjakan.
 
@@ -159,8 +159,28 @@ Bytecode Isoteri diekspor ke JSON lalu dijalankan oleh `isoteri-vm.js`, sebuah V
 tulis-ulang di JavaScript yang semantiknya mengikuti persis VM Rust — **diverifikasi
 identik byte-per-byte** untuk 13/16 program contoh (sisanya sengaja belum didukung:
 `unduh`/`baca_berkas`/`tulis_berkas` dan `ulang selaras`, lihat
-[runtime/web/README.md](runtime/web/README.md) untuk detail & alasan pendekatan ini
-dibanding menunggu target WASM asli). Lihat juga [docs/FILOSOFI.md](docs/FILOSOFI.md)
+[runtime/web/README.md](runtime/web/README.md) untuk detail).
+
+**WASM asli, jalur kedua (sekarang juga selesai):**
+
+```bash
+cd isoteri-wasm
+wasm-pack build --target web --out-dir pkg   # sekali, butuh akses internet penuh
+cp -r pkg ../runtime/web/pkg
+cd ../runtime/web && python3 -m http.server 8000
+# buka http://localhost:8000/demo_wasm.html
+```
+
+Ini mengompilasi source `.iso` **langsung di browser** (fungsi `kompilasi()`
+dari crate `isoteri-wasm`, wrapper tipis di atas
+`isoteri::ekspor_json_dari_sumber()` yang sama dipakai CLI) lalu menjalankan
+hasilnya lewat `isoteri-vm.js` yang sama persis dipakai jalur pertama — tanpa
+langkah `isoteri ekspor-web` terpisah. Divalidasi lewat `demo_wasm.html`
+(kompilasi+eksekusi fungsi, string, dan ekspresi aritmatika langsung di
+browser). Belum divalidasi lewat WASM untuk fitur bahasa yang lebih kompleks
+(struct, closure, loop, DOM binding penuh) — jalur pertama (`ekspor-web`)
+tetap dipakai sebagai fallback untuk environment yang tidak bisa build
+wasm32. Lihat juga [docs/FILOSOFI.md](docs/FILOSOFI.md)
 untuk 10 Hukum Isoteri dan peta jalan fase lengkap.
 
 ### Milestone B — DOM/Event/Storage/Fetch/Canvas/WebSocket/Router/State/Component

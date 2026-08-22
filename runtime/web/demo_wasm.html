@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Isoteri — Compile &amp; Jalankan Langsung di Browser (WASM)</title>
+<style>
+  body {
+    font-family: system-ui, sans-serif;
+    max-width: 900px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    background: #0f1115;
+    color: #e6e6e6;
+  }
+  h1 { font-size: 1.4rem; }
+  p.sub { color: #9aa0a6; margin-top: -0.5rem; }
+  textarea {
+    width: 100%;
+    height: 220px;
+    font-family: "Fira Code", Consolas, monospace;
+    font-size: 14px;
+    background: #1a1d24;
+    color: #e6e6e6;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 12px;
+    box-sizing: border-box;
+    resize: vertical;
+  }
+  button {
+    margin-top: 10px;
+    padding: 10px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    background: #4f8cff;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  button:disabled { background: #555; cursor: not-allowed; }
+  #status { margin-left: 10px; color: #9aa0a6; font-size: 13px; }
+  #output {
+    margin-top: 16px;
+    background: #1a1d24;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 12px;
+    min-height: 80px;
+    white-space: pre-wrap;
+    font-family: "Fira Code", Consolas, monospace;
+    font-size: 14px;
+  }
+  #output .error { color: #ff6b6b; }
+  #output .line { color: #b8f2b8; }
+</style>
+</head>
+<body>
+
+<h1>Isoteri — Browser Native Compile</h1>
+<p class="sub">Kode <code>.iso</code> di bawah dikompilasi LANGSUNG di browser (via WASM), lalu dijalankan oleh isoteri-vm.js. Tanpa CLI, tanpa langkah build terpisah.</p>
+
+<textarea id="sumber">fungsi sapa(nama) {
+    kembalikan "Halo, " + nama + "!"
+}
+
+tampilkan sapa("Dunia")
+tampilkan 6 * 7
+</textarea>
+
+<div>
+  <button id="tombolJalankan" disabled>Memuat compiler...</button>
+  <span id="status"></span>
+</div>
+
+<div id="output"></div>
+
+<script type="module">
+  import init, { kompilasi, versi } from "./pkg/isoteri_wasm.js";
+
+  const tombol = document.getElementById("tombolJalankan");
+  const status = document.getElementById("status");
+  const output = document.getElementById("output");
+  const sumberEl = document.getElementById("sumber");
+
+  function tulisBaris(teks) {
+    const div = document.createElement("div");
+    div.className = "line";
+    div.textContent = teks;
+    output.appendChild(div);
+  }
+
+  function tulisError(teks) {
+    const div = document.createElement("div");
+    div.className = "error";
+    div.textContent = teks;
+    output.appendChild(div);
+  }
+
+  async function mulai() {
+    try {
+      await init(); // memuat modul .wasm
+      status.textContent = `Compiler Isoteri (wasm) v${versi()} siap.`;
+      tombol.disabled = false;
+      tombol.textContent = "Jalankan";
+    } catch (err) {
+      status.textContent = "Gagal memuat compiler WASM.";
+      tulisError(String(err));
+      console.error(err);
+    }
+  }
+
+  tombol.addEventListener("click", () => {
+    output.innerHTML = "";
+    const sumber = sumberEl.value;
+
+    let bundelJson;
+    try {
+      bundelJson = kompilasi(sumber); // compile .iso -> JSON, langsung di browser
+    } catch (pesanError) {
+      tulisError("Gagal kompilasi:\n" + pesanError);
+      return;
+    }
+
+    let bundel;
+    try {
+      bundel = JSON.parse(bundelJson);
+    } catch (err) {
+      tulisError("Bundle JSON tidak valid: " + err);
+      return;
+    }
+
+    try {
+      const vm = new IsoteriVM(bundel, {
+        tampilkan: (baris) => tulisBaris(baris),
+      });
+      vm.jalankan();
+    } catch (err) {
+      tulisError("Gagal menjalankan:\n" + err);
+    }
+  });
+
+  mulai();
+</script>
+
+<!-- VM JavaScript yang mengeksekusi bundle bytecode -->
+<script src="./isoteri-vm.js"></script>
+
+</body>
+</html>

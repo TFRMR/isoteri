@@ -22,3 +22,7 @@ Thumbs.db
 # Keep source .iso and checked-in .isoweb.json files; ignore only ad-hoc output.
 runtime/web/dist/
 runtime/web/build/
+
+# wasm-pack build output (regenerate with: wasm-pack build --target web --out-dir pkg)
+isoteri-wasm/pkg/
+runtime/web/pkg/

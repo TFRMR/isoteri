@@ -54,15 +54,19 @@ Layer 4 — Compiler Backend  : Frontend -> Isoteri IR -> {LLVM | Cranelift |
 - **Fase 2 — Native Performance**: IR, optimizer, native compiler (Cranelift
   JIT sudah ada untuk fungsi numerik murni), SIMD, profiling.
 - **Fase 3 — Web Dominance**: WASM target, DOM binding, Browser API, WebGPU,
-  `<script type=isoteri>`. -> **prototype kuat sudah jadi** lewat jalur
-  pragmatis: ekspor bytecode ke JSON + VM tulis-ulang di JavaScript (lihat
-  `runtime/web/`), karena target `wasm32-unknown-unknown` butuh komponen
-  rustup yang belum tentu tersedia di semua environment build. Ini bukan
-  pengganti permanen WASM asli — begitu toolchain wasm32 tersedia, jalur
-  "compile Isoteri IR -> WASM asli" tetap jalur jangka panjang yang benar
-  (lebih cepat dari interpreter JS), tapi bytecode-JSON+VM-JS ini sudah
-  memenuhi janji "Browser Native" hari ini tanpa menunggu itu. **DOM/Event/
-  Storage/Fetch (Milestone B) sudah ada** — lihat `runtime/web/README.md`.
+  `<script type=isoteri>`. -> **jalur ganda, keduanya sudah jalan**: (1)
+  ekspor bytecode ke JSON + VM tulis-ulang di JavaScript (lihat
+  `runtime/web/`) sebagai jalur pragmatis awal; (2) **WASM asli (target
+  `wasm32-unknown-unknown` via `isoteri-wasm/` + `wasm-pack`) SEKARANG SUDAH
+  DI-BUILD & DIVALIDASI SUNGGUHAN** di mesin dengan akses internet penuh --
+  bukan lagi cuma scaffold. Terverifikasi lewat `runtime/web/demo_wasm.html`:
+  source `.iso` mentah dikompilasi langsung di browser (fungsi `kompilasi()`
+  dari `pkg/isoteri_wasm.js`), lalu dieksekusi oleh `isoteri-vm.js` yang
+  sama persis dipakai jalur (1) -- tidak ada langkah CLI/ekspor bundel
+  terpisah lagi di jalur ini. Jalur (1) tetap dipertahankan sebagai fallback
+  untuk environment yang tidak bisa build wasm32 (mis. sandbox CI tanpa akses
+  `static.rust-lang.org`). **DOM/Event/Storage/Fetch (Milestone B) sudah
+  ada** — lihat `runtime/web/README.md`.
 - **Fase 4 — Systems Capability**: ownership mode eksplisit, unsafe mode,
   embedded, driver, game engine.
 - **Fase 5 — Ecosystem**: package registry, IDE, community, framework.
