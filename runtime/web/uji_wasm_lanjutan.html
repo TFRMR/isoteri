@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Isoteri WASM — Uji Fitur Kompleks (struct, closure, higher-order fn)</title>
+<style>
+  body {
+    font-family: system-ui, sans-serif;
+    max-width: 1000px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    background: #0f1115;
+    color: #e6e6e6;
+  }
+  h1 { font-size: 1.4rem; }
+  p.sub { color: #9aa0a6; margin-top: -0.5rem; }
+  #globalStatus { color: #9aa0a6; font-size: 13px; margin-bottom: 1rem; }
+  button.runall {
+    padding: 10px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    background: #4f8cff;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-bottom: 1.5rem;
+  }
+  button.runall:disabled { background: #555; cursor: not-allowed; }
+  .case {
+    border: 1px solid #333;
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+    overflow: hidden;
+  }
+  .case-header {
+    background: #1a1d24;
+    padding: 10px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .case-title { font-weight: 600; }
+  .badge {
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-weight: 600;
+  }
+  .badge.pending { background: #333; color: #9aa0a6; }
+  .badge.pass { background: #1f4d2e; color: #7ee29b; }
+  .badge.fail { background: #4d1f1f; color: #ff8080; }
+  .case-body { padding: 12px 14px; }
+  textarea {
+    width: 100%;
+    height: 140px;
+    font-family: "Fira Code", Consolas, monospace;
+    font-size: 12.5px;
+    background: #14161b;
+    color: #ccc;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    padding: 10px;
+    box-sizing: border-box;
+    resize: vertical;
+  }
+  .cols { display: flex; gap: 12px; margin-top: 10px; }
+  .col { flex: 1; }
+  .col h4 { margin: 0 0 6px 0; font-size: 12.5px; color: #9aa0a6; font-weight: 600; }
+  pre {
+    background: #14161b;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    padding: 10px;
+    font-size: 12.5px;
+    white-space: pre-wrap;
+    min-height: 60px;
+    margin: 0;
+  }
+  pre.diffline { color: #ff8080; }
+</style>
+</head>
+<body>
+
+<h1>Isoteri WASM — Uji Fitur Kompleks</h1>
+<p class="sub">Membandingkan output kompilasi+eksekusi di browser (via WASM) melawan output referensi dari CLI native (<code>./target/release/isoteri</code>) untuk struct, closure berlapis, dan fungsi higher-order (petakan/saring/urutkan).</p>
+
+<div id="globalStatus">Memuat compiler WASM...</div>
+<button id="tombolJalankanSemua" class="runall" disabled>Jalankan Semua Uji</button>
+
+<div id="casesContainer"></div>
+
+<script type="module">
+  import init, { kompilasi, versi } from "./pkg/isoteri_wasm.js";
+
+  const TESTDATA = {"sources": {"struct_bentuk": "catatan: Uji coba fitur 'bentuk' (struct/tipe custom)\nbentuk Petani {\n    nama: Teks,\n    lahan: Angka,\n    hasil: Desimal\n}\ningat budi = Petani { nama: \"Budi\", lahan: 2, hasil: 15.5 }\ntampilkan budi.nama\ntampilkan budi.lahan\ntampilkan budi.hasil\ntampilkan budi\nbudi.hasil = 20.0\ntampilkan budi.hasil\ningat siti = Petani { hasil: 8.25, nama: \"Siti\", lahan: 1 }\ntampilkan siti\nfungsi ringkas(p) {\n    kembalikan p.nama + \" punya \" + p.lahan + \" hektar lahan\"\n}\ntampilkan ringkas(budi)\ncoba {\n    tampilkan budi.tidak_ada\n} tangkap pesan {\n    tampilkan \"Tertangkap (sengaja): \" + pesan\n}\n", "closure": "catatan: Uji closure/fungsi anonim\ncatatan: --- Closure sederhana di level atas (tanpa tangkapan) ---\ningat kuadrat = fungsi(n) {\n    kembalikan n * n\n}\ntampilkan \"kuadrat(6) = \" + kuadrat(6)\ncatatan: --- Closure sebagai argumen fungsi lain ---\nfungsi terapkan(f, x) {\n    kembalikan f(x)\n}\ntampilkan \"terapkan(kuadrat, 7) = \" + terapkan(kuadrat, 7)\ntampilkan \"terapkan(fungsi(n){kembalikan n + 100}, 5) = \" + terapkan(fungsi(n) {\n    kembalikan n + 100\n}, 5)\ncatatan: --- Closure yang MENANGKAP variabel dari fungsi pembungkusnya ---\nfungsi buat_penambah(tambahan) {\n    kembalikan fungsi(n) {\n        kembalikan n + tambahan\n    }\n}\ningat tambah5 = buat_penambah(5)\ningat tambah100 = buat_penambah(100)\ntampilkan \"tambah5(10) = \" + tambah5(10)\ntampilkan \"tambah100(10) = \" + tambah100(10)\ncatatan: pastikan dua closure beda dari buat_penambah yang sama gak saling ganggu\ntampilkan \"tambah5(1) = \" + tambah5(1)\ncatatan: --- Closure nangkep BEBERAPA variabel sekaligus ---\nfungsi buat_kalkulator(a, b) {\n    kembalikan fungsi(op) {\n        kalau (op == \"tambah\") {\n            kembalikan a + b\n        } lainnya {\n            kalau (op == \"kali\") {\n                kembalikan a * b\n            } lainnya {\n                kembalikan -1\n            }\n        }\n    }\n}\ningat kalk = buat_kalkulator(6, 7)\ntampilkan \"kalk('tambah') = \" + kalk(\"tambah\")\ntampilkan \"kalk('kali') = \" + kalk(\"kali\")\ncatatan: --- Closure disimpan di dalam Daftar ---\ningat operasi = [fungsi(n) {\n    kembalikan n + 1\n}, fungsi(n) {\n    kembalikan n * 2\n}, fungsi(n) {\n    kembalikan n * n\n}]\nulang setiap op dari operasi {\n    tampilkan \"operasi(5) = \" + op(5)\n}\ncatatan: --- Closure nested (closure di dalam closure, tangkapan berlapis) ---\nfungsi buat_akumulator_ganda(basis) {\n    kembalikan fungsi(langkah) {\n        kembalikan fungsi(kali) {\n            kembalikan (basis + langkah) * kali\n        }\n    }\n}\ningat f1 = buat_akumulator_ganda(10)\ningat f2 = f1(5)\ntampilkan \"f2(3) = \" + f2(3)\n", "list_lanjutan": "catatan: Uji petakan (map), saring (filter), urutkan (sort)\nfungsi kuadrat(n) {\n    kembalikan n * n\n}\nfungsi genap(n) {\n    kembalikan n - n / 2 * 2 == 0\n}\ningat angka = [5, 3, 8, 1, 9, 2, 7]\ntampilkan \"Asli: \" + angka\ntampilkan \"petakan(kuadrat): \" + petakan(angka, \"kuadrat\")\ntampilkan \"saring(genap): \" + saring(angka, \"genap\")\ntampilkan \"urutkan(): \" + urutkan(angka)\ncatatan: urutkan dengan kunci custom -- urutkan daftar Bentuk berdasarkan field\nbentuk Petani {\n    nama: Teks,\n    hasil: Desimal\n}\nfungsi ambil_hasil(p) {\n    kembalikan p.hasil\n}\ningat petani = [Petani { nama: \"Budi\", hasil: 15.5 }, Petani { nama: \"Siti\", hasil: 22.0 }, Petani { nama: \"Anto\", hasil: 8.25 }]\ningat terurut = urutkan(petani, \"ambil_hasil\")\ntampilkan \"Urut berdasar hasil panen:\"\nulang setiap p dari terurut {\n    tampilkan \"  \" + p.nama + \": \" + p.hasil\n}\ncatatan: kombinasi -- saring lalu petakan lalu urutkan, dan urutkan(daftar Teks)\ningat nama_desa = [\"Girimulyo\", \"Kokap\", \"Kalibawang\", \"Samigaluh\"]\ntampilkan \"urutkan(nama_desa): \" + urutkan(nama_desa)\nfungsi ganda(n) {\n    kembalikan n * 2\n}\ntampilkan \"urutkan(petakan(saring(angka, genap), ganda)): \" + urutkan(petakan(saring(angka, \"genap\"), \"ganda\"))\n"}, "expected": {"struct_bentuk": "Budi\n2\n15.5\nPetani {nama: Budi, lahan: 2, hasil: 15.5}\n20.0\nPetani {nama: Siti, lahan: 1, hasil: 8.25}\nBudi punya 2 hektar lahan\nTertangkap (sengaja): Baris 21: Bentuk \"Petani\" tidak punya field \"tidak_ada\".", "closure": "kuadrat(6) = 36\nterapkan(kuadrat, 7) = 49\nterapkan(fungsi(n){kembalikan n + 100}, 5) = 105\ntambah5(10) = 15\ntambah100(10) = 110\ntambah5(1) = 6\nkalk('tambah') = 13\nkalk('kali') = 42\noperasi(5) = 6\noperasi(5) = 10\noperasi(5) = 25\nf2(3) = 45", "list_lanjutan": "Asli: [5, 3, 8, 1, 9, 2, 7]\npetakan(kuadrat): [25, 9, 64, 1, 81, 4, 49]\nsaring(genap): [8, 2]\nurutkan(): [1, 2, 3, 5, 7, 8, 9]\nUrut berdasar hasil panen:\n  Anto: 8.25\n  Budi: 15.5\n  Siti: 22.0\nurutkan(nama_desa): [Girimulyo, Kalibawang, Kokap, Samigaluh]\nurutkan(petakan(saring(angka, genap), ganda)): [4, 16]"}};
+
+  const globalStatus = document.getElementById("globalStatus");
+  const tombolSemua = document.getElementById("tombolJalankanSemua");
+  const container = document.getElementById("casesContainer");
+
+  const labels = {
+    struct_bentuk: "1. Struct / Bentuk (+ coba/tangkap)",
+    closure: "2. Closure berlapis & disimpan di Daftar",
+    list_lanjutan: "3. Higher-order fn (petakan/saring/urutkan) + Bentuk",
+  };
+
+  const caseEls = {};
+
+  for (const key of Object.keys(TESTDATA.sources)) {
+    const wrap = document.createElement("div");
+    wrap.className = "case";
+    wrap.innerHTML = `
+      <div class="case-header">
+        <span class="case-title">${labels[key] || key}</span>
+        <span class="badge pending" id="badge-${key}">belum dijalankan</span>
+      </div>
+      <div class="case-body">
+        <textarea id="src-${key}" spellcheck="false">${TESTDATA.sources[key]}</textarea>
+        <div class="cols">
+          <div class="col">
+            <h4>Output WASM (browser)</h4>
+            <pre id="out-${key}"></pre>
+          </div>
+          <div class="col">
+            <h4>Output referensi (CLI native)</h4>
+            <pre id="expected-${key}">${TESTDATA.expected[key]}</pre>
+          </div>
+        </div>
+      </div>
+    `;
+    container.appendChild(wrap);
+    caseEls[key] = {
+      badge: wrap.querySelector(`#badge-${key}`),
+      out: wrap.querySelector(`#out-${key}`),
+      src: wrap.querySelector(`#src-${key}`),
+    };
+  }
+
+  function jalankanSatuKasus(key) {
+    const { badge, out, src } = caseEls[key];
+    out.textContent = "";
+    out.className = "";
+    const sumber = src.value;
+
+    const baris = [];
+    function tampilkan(teks) { baris.push(teks); }
+
+    let bundelJson;
+    try {
+      bundelJson = kompilasi(sumber);
+    } catch (err) {
+      out.textContent = "GAGAL KOMPILASI:\n" + err;
+      badge.textContent = "gagal kompilasi";
+      badge.className = "badge fail";
+      return;
+    }
+
+    let bundel;
+    try {
+      bundel = JSON.parse(bundelJson);
+    } catch (err) {
+      out.textContent = "Bundle JSON tidak valid: " + err;
+      badge.textContent = "gagal parse";
+      badge.className = "badge fail";
+      return;
+    }
+
+    try {
+      const vm = new IsoteriVM(bundel, { tampilkan });
+      vm.jalankan();
+    } catch (err) {
+      out.textContent = baris.join("\n") + (baris.length ? "\n" : "") + "GAGAL EKSEKUSI:\n" + err;
+      badge.textContent = "gagal eksekusi";
+      badge.className = "badge fail";
+      return;
+    }
+
+    const hasil = baris.join("\n");
+    out.textContent = hasil;
+
+    const expected = TESTDATA.expected[key];
+    if (hasil === expected) {
+      badge.textContent = "COCOK";
+      badge.className = "badge pass";
+    } else {
+      badge.textContent = "BEDA dari referensi";
+      badge.className = "badge fail";
+    }
+  }
+
+  function jalankanSemua() {
+    for (const key of Object.keys(TESTDATA.sources)) {
+      jalankanSatuKasus(key);
+    }
+  }
+
+  tombolSemua.addEventListener("click", jalankanSemua);
+
+  async function mulai() {
+    try {
+      await init();
+      globalStatus.textContent = `Compiler Isoteri (wasm) v${versi()} siap.`;
+      tombolSemua.disabled = false;
+    } catch (err) {
+      globalStatus.textContent = "Gagal memuat compiler WASM: " + err;
+      console.error(err);
+    }
+  }
+
+  mulai();
+</script>
+
+<script src="./isoteri-vm.js"></script>
+
+</body>
+</html>
