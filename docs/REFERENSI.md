@@ -325,14 +325,36 @@ coba {
 ```
 muat "matematika.iso"
 muat "sub_folder/petani.iso"
+muat "petani.iso" sebagai petani
 ```
 
 - `muat` mengekspansi (menempel isi file lain) **sebelum** kompilasi — bukan fitur runtime.
 - Path relatif dihitung dari lokasi file yang menulis `muat`-nya (bukan selalu dari file utama) — jadi modul yang di-`muat` boleh `muat` modul lain relatif ke dirinya sendiri.
 - Memuat file yang sama dua kali (langsung atau lewat siklus) otomatis dilewati di kunjungan kedua (include guard) — aman, tidak jadi dobel-definisi.
-- **Nama (fungsi/bentuk/variabel global) yang sama dideklarasikan di DUA FILE BERBEDA akan gagal kompilasi** dengan pesan yang menyebutkan kedua file itu. Duplikasi nama dalam **satu file yang sama** tidak diperiksa aturan ini (lihat aturan duplikat fungsi/parameter/field di atas, yang berlaku terpisah).
 - `muat` hanya boleh dipakai di level atas program (bukan di dalam `fungsi`/`kalau`/`ulang`).
-- **Semua nama tetap satu ruang nama global** — tidak ada namespace/prefix per modul (mis. tidak ada `matematika.kuadrat()`, cukup `kuadrat()` langsung setelah `muat`).
+
+**Tanpa `sebagai` (gaya lama, tetap didukung penuh)**: semua nama (fungsi/bentuk/variabel
+global) tetap satu ruang nama global — tidak ada prefix per modul, cukup `kuadrat()` langsung
+setelah `muat`. **Nama yang sama dideklarasikan di DUA FILE BERBEDA akan gagal kompilasi**
+dengan pesan yang menyebutkan kedua file itu. Duplikasi nama dalam **satu file yang sama** tidak
+diperiksa aturan ini (lihat aturan duplikat fungsi/parameter/field di atas, yang berlaku
+terpisah).
+
+**Dengan `sebagai alias`**: fungsi top-level modul itu diakses lewat `alias.nama(...)`, TIDAK
+numplek ke namespace global — jadi dua modul independen boleh punya fungsi dengan nama yang
+sama persis tanpa bentrok:
+```isoteri
+muat "petani.iso" sebagai petani
+muat "toko.iso" sebagai toko
+
+tampilkan petani.hitung(3, 4)   catatan: fungsi hitung() milik petani.iso
+tampilkan toko.hitung(3, 4)     catatan: fungsi hitung() milik toko.iso -- BEDA fungsi, gak bentrok
+```
+Batasan yang perlu diketahui:
+- Baru mencakup **fungsi**. Akses `bentuk`/variabel global lewat alias (mis. `petani.Petani { ... }`) belum didukung — modul yang diakses lewat alias sebaiknya cuma isi fungsi murni untuk saat ini.
+- Fungsi di dalam modul beralias tetap bisa saling panggil satu sama lain seperti biasa (tanpa perlu prefix alias) — alias cuma berlaku dari LUAR modul itu.
+- Alias yang sama tidak boleh dipakai dua kali di file yang sama (error jelas kalau dilanggar).
+- `x.y(args)` di mana `x` BUKAN alias modul yang dikenal berarti "panggil NILAI di field `y` milik `x`" (mis. closure yang disimpan sebagai field bentuk) — bukan error, tapi kemampuan terpisah yang kebetulan pakai sintaks sama.
 
 ---
 
@@ -452,9 +474,10 @@ Subcommand `bangun` mengompilasi program `.iso` (beserta semua yang di-`muat`-ny
 
 ### Cara kerja
 
-1. Semua berkas yang terhubung lewat `muat` (mulai dari `program.iso`) digabung jadi satu teks sumber (baris `muat "..."` dihapus karena isinya sudah ditempel langsung).
-2. Sumber gabungan itu divalidasi dulu (lexer, parser, resolver) — kalau ada error bahasa Isoteri, langsung ketahuan di sini (nyaris instan), **sebelum** buang waktu kompilasi Rust yang jauh lebih lambat.
-3. Sumber gabungan ditempel sebagai string literal ke sebuah crate Rust kecil yang cuma memanggil `isoteri::jalankan_sumber(...)`, lalu di-`cargo build --release`.
+1. Semua berkas yang terhubung lewat `muat` (mulai dari `program.iso`, termasuk `muat X sebagai alias`) diproses lewat jalur AST yang sama dipakai jalur eksekusi biasa (`program_dari_berkas`) — bukan lagi tempel-teks murni, jadi alias modul berfungsi penuh di sini juga.
+2. Hasilnya dicetak ulang jadi satu teks sumber gabungan (`cetak_program_ke_sumber`) — baris `muat "..."` sudah hilang karena isinya sudah ditempel/di-mangle langsung sesuai aturan alias.
+3. Sumber gabungan itu divalidasi dulu (lexer, parser, resolver) — kalau ada error bahasa Isoteri, langsung ketahuan di sini (nyaris instan), **sebelum** buang waktu kompilasi Rust yang jauh lebih lambat.
+4. Sumber gabungan ditempel sebagai string literal ke sebuah crate Rust kecil yang cuma memanggil `isoteri::jalankan_sumber(...)`, lalu di-`cargo build --release`.
 
 ### Opsi
 
@@ -469,5 +492,4 @@ Build **pertama kali** butuh beberapa menit (kompilasi seluruh dependency — Cr
 ### Batasan
 
 - Butuh Rust & Cargo terpasang di mesin **yang dipakai untuk bangun** (bukan di mesin yang nanti menjalankan hasil executable-nya — hasil buildnya sudah mandiri).
-- Baris `muat "path.iso"` untuk keperluan bundling ini dideteksi secara tekstual (bukan lewat parser token penuh) — jadi setiap statement `muat` harus berada sendirian di baris-nya sendiri (gaya yang memang selalu dipakai di semua contoh Isoteri).
 - Hasil executable spesifik untuk platform (OS + arsitektur CPU) tempat ia dibangun — belum ada cross-compilation.

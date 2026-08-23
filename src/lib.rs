@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
-    Ingat, Kalau, Lainnya, Ulang, Tampilkan, Fungsi, Kembalikan, Muat,
+    Ingat, Kalau, Lainnya, Ulang, Tampilkan, Fungsi, Kembalikan, Muat, Sebagai,
     Dan, Atau, Benar, Salah, Setiap, Dari, Selaras, Coba, Tangkap, Bentuk,
     Putus, Lanjut,
 
@@ -144,6 +144,7 @@ impl Lexer {
                     "fungsi" => Token::Fungsi,
                     "kembalikan" => Token::Kembalikan,
                     "muat" => Token::Muat,
+                    "sebagai" => Token::Sebagai,
                     "dan" => Token::Dan,
                     "atau" => Token::Atau,
                     "benar" => Token::Benar,
@@ -213,6 +214,13 @@ pub enum Expr {
     Peta(Vec<(String, Expr)>),
     Indeks(Box<Expr>, Box<Expr>),
     Field(Box<Expr>, String),
+    /// 'x.y(args)' -- BEDA dari Field (yang cuma baca, tanpa panggil). Resolver memutuskan
+    /// artinya sesuai konteks: kalau 'x' adalah identifier alias modul dikenal (dari
+    /// 'muat "..." sebagai x'), ini jadi panggilan fungsi modul biasa (dikompilasi ulang jadi
+    /// Panggil dengan nama "x.y" yang sudah di-mangle -- lihat tulis_ulang_panggil_alias()).
+    /// Kalau bukan, ini jadi "baca field y dari x, lalu panggil NILAINYA sebagai fungsi" (mis.
+    /// closure yang disimpan di field bentuk) -- lihat PanggilNilai.
+    PanggilMetode(Box<Expr>, String, Vec<Expr>),
     /// Negasi boolean unary ('!ekspr') -- pakai truthiness YANG SAMA seperti kondisi 'kalau'/
     /// 'dan'/'atau' (lihat Value::truthy()), bukan cuma 'ekspr == salah'. Jadi '!5' itu Salah
     /// (5 truthy), '!0' itu Benar, '!""' itu Benar, dst -- konsisten di seluruh bahasa.
@@ -242,9 +250,13 @@ pub enum Stmt {
     Ubah(String, Expr),
     UbahField(String, Vec<String>, Expr),
     BentukDef(String, Vec<(String, Option<String>)>),
-    /// muat "path/relatif.iso" -- diekspansi (diganti isi file itu) SEBELUM resolver jalan,
-    /// lihat fn ekspansi_muat(). Cuma boleh muncul di level atas program.
-    Muat(String),
+    /// muat "path/relatif.iso" [sebagai alias] -- diekspansi (diganti isi file itu) SEBELUM
+    /// resolver jalan, lihat fn ekspansi_muat(). Cuma boleh muncul di level atas program.
+    /// Tanpa 'sebagai': isi file di-inline flat ke namespace global seperti biasa (perilaku
+    /// lama, backward-compatible penuh). Dengan 'sebagai alias': nama fungsi top-level modul
+    /// itu di-mangle jadi "alias.nama" (nggak numplek ke namespace global), diakses lewat
+    /// 'alias.nama(...)' -- lihat ekspansi_muat_beralias().
+    Muat(String, Option<String>),
     Tampilkan(Expr),
     Kalau(Expr, Vec<(usize, Stmt)>, Option<Vec<(usize, Stmt)>>),
     Ulang(Expr, Vec<(usize, Stmt)>),
@@ -387,7 +399,14 @@ impl Parser {
             Token::Muat => {
                 self.maju();
                 match self.sekarang().clone() {
-                    Token::Teks(path) => { self.maju(); Ok(Stmt::Muat(path)) }
+                    Token::Teks(path) => {
+                        self.maju();
+                        let alias = if *self.sekarang() == Token::Sebagai {
+                            self.maju();
+                            Some(self.harap_identifier()?)
+                        } else { None };
+                        Ok(Stmt::Muat(path, alias))
+                    }
                     lain => Err(format!("Baris {}: Diharapkan nama berkas (Teks) setelah 'muat', ditemukan {:?}", self.baris_sekarang(), lain)),
                 }
             }
@@ -649,7 +668,20 @@ impl Parser {
             } else if *self.sekarang() == Token::Titik {
                 self.maju();
                 let field = self.harap_identifier()?;
-                expr = Expr::Field(Box::new(expr), field);
+                if *self.sekarang() == Token::KurungBuka {
+                    self.maju();
+                    let mut args = Vec::new();
+                    if *self.sekarang() != Token::KurungTutup {
+                        loop {
+                            args.push(self.dalam_kurung(|p| p.parse_expr())?);
+                            if *self.sekarang() == Token::Koma { self.maju(); } else { break; }
+                        }
+                    }
+                    self.harap(&Token::KurungTutup)?;
+                    expr = Expr::PanggilMetode(Box::new(expr), field, args);
+                } else {
+                    expr = Expr::Field(Box::new(expr), field);
+                }
             } else {
                 break;
             }
@@ -815,7 +847,7 @@ fn variabel_bebas_stmt(s: &Stmt, terikat: &mut std::collections::HashSet<String>
             variabel_bebas_expr(e, terikat, bebas);
         }
         Stmt::UbahField(nama, _, e) => { if !terikat.contains(nama) { bebas.insert(nama.clone()); } variabel_bebas_expr(e, terikat, bebas); }
-        Stmt::BentukDef(..) | Stmt::Muat(_) => {}
+        Stmt::BentukDef(..) | Stmt::Muat(..) => {}
         Stmt::Tampilkan(e) => variabel_bebas_expr(e, terikat, bebas),
         Stmt::Kalau(c, tb, eb) => {
             variabel_bebas_expr(c, terikat, bebas);
@@ -855,6 +887,10 @@ fn variabel_bebas_expr(e: &Expr, terikat: &mut std::collections::HashSet<String>
         Expr::Peta(entries) => { for (_, v) in entries { variabel_bebas_expr(v, terikat, bebas); } }
         Expr::Indeks(t, i) => { variabel_bebas_expr(t, terikat, bebas); variabel_bebas_expr(i, terikat, bebas); }
         Expr::Field(t, _) => variabel_bebas_expr(t, terikat, bebas),
+        Expr::PanggilMetode(t, _, args) => {
+            variabel_bebas_expr(t, terikat, bebas);
+            for a in args { variabel_bebas_expr(a, terikat, bebas); }
+        }
         Expr::Tidak(e) => variabel_bebas_expr(e, terikat, bebas),
         Expr::BentukLiteral(_, entries) => { for (_, v) in entries { variabel_bebas_expr(v, terikat, bebas); } }
         Expr::FungsiLiteral(params, body) => {
@@ -1170,7 +1206,7 @@ impl Resolver {
                 Ok(CStmt::UbahJalurGlobal(slot, cjalur, ce))
             }
             Stmt::FungsiDef(..) | Stmt::BentukDef(..) => unreachable!(),
-            Stmt::Muat(_) => Err("'muat' cuma boleh dipakai di level atas program (bukan di dalam kalau/ulang).".to_string()),
+            Stmt::Muat(..) => Err("'muat' cuma boleh dipakai di level atas program (bukan di dalam kalau/ulang).".to_string()),
             Stmt::Putus => {
                 if self.loop_depth == 0 { return Err("'putus' hanya boleh dipakai di dalam 'ulang' atau 'ulang setiap'.".to_string()); }
                 Ok(CStmt::Putus)
@@ -1239,6 +1275,13 @@ impl Resolver {
             }
             Expr::Indeks(t, i) => Ok(CExpr::Indeks(Box::new(self.resolve_expr_global(t)?), Box::new(self.resolve_expr_global(i)?))),
             Expr::Field(t, f) => Ok(CExpr::Field(Box::new(self.resolve_expr_global(t)?), f.clone())),
+            // 'x.y(args)' yang BUKAN alias modul (sudah ditulis-ulang jadi Expr::Panggil biasa
+            // sebelum resolver ini jalan, lihat tulis_ulang_panggil_alias()) -- di sini artinya
+            // "baca field y dari x, panggil NILAINYA sebagai fungsi" (mis. closure di field bentuk).
+            Expr::PanggilMetode(t, f, args) => {
+                let cargs: Vec<CExpr> = args.iter().map(|a| self.resolve_expr_global(a)).collect::<Result<_, _>>()?;
+                Ok(CExpr::PanggilNilai(Box::new(CExpr::Field(Box::new(self.resolve_expr_global(t)?), f.clone())), cargs))
+            }
             Expr::Tidak(e) => Ok(CExpr::Tidak(Box::new(self.resolve_expr_global(e)?))),
             Expr::BentukLiteral(nama, entries) => {
                 let terurut = self.urutkan_field_bentuk(nama, entries)?;
@@ -1522,7 +1565,7 @@ impl<'a> LocalResolver<'a> {
             }
             Stmt::FungsiDef(..) => Err("Fungsi di dalam fungsi belum didukung di Fase ini.".to_string()),
             Stmt::BentukDef(..) => Err("'bentuk' hanya boleh dideklarasikan di level atas program.".to_string()),
-            Stmt::Muat(_) => Err("'muat' cuma boleh dipakai di level atas program (bukan di dalam fungsi).".to_string()),
+            Stmt::Muat(..) => Err("'muat' cuma boleh dipakai di level atas program (bukan di dalam fungsi).".to_string()),
             Stmt::Putus => {
                 if self.loop_depth == 0 { return Err("'putus' hanya boleh dipakai di dalam 'ulang' atau 'ulang setiap'.".to_string()); }
                 Ok(CStmt::Putus)
@@ -1609,6 +1652,10 @@ impl<'a> LocalResolver<'a> {
                     }
                 }
                 Ok(CExpr::Field(Box::new(self.resolve_expr(t)?), f.clone()))
+            }
+            Expr::PanggilMetode(t, f, args) => {
+                let cargs: Vec<CExpr> = args.iter().map(|a| self.resolve_expr(a)).collect::<Result<_, _>>()?;
+                Ok(CExpr::PanggilNilai(Box::new(CExpr::Field(Box::new(self.resolve_expr(t)?), f.clone())), cargs))
             }
             Expr::Tidak(e) => Ok(CExpr::Tidak(Box::new(self.resolve_expr(e)?))),
             Expr::BentukLiteral(nama, entries) => {
@@ -4839,6 +4886,7 @@ fn cetak_expr_fmt(e: &Expr, indent: usize, min_prec: u8, komentar: &PetaKomentar
         ),
         Expr::Indeks(t, i) => format!("{}[{}]", cetak_expr_fmt(t, indent, 8, komentar, terpakai), cetak_expr_fmt(i, indent, 0, komentar, terpakai)),
         Expr::Field(t, f) => format!("{}.{}", cetak_expr_fmt(t, indent, 8, komentar, terpakai), f),
+        Expr::PanggilMetode(t, f, args) => format!("{}.{}({})", cetak_expr_fmt(t, indent, 8, komentar, terpakai), f, args.iter().map(|a| cetak_expr_fmt(a, indent, 0, komentar, terpakai)).collect::<Vec<_>>().join(", ")),
         Expr::BentukLiteral(nama, entries) => {
             if entries.is_empty() { format!("{} {{}}", nama) }
             else {
@@ -4908,7 +4956,12 @@ fn cetak_stmt_fmt(s: &Stmt, indent: usize, komentar: &PetaKomentar, terpakai: &m
             out.push_str(&INDENT_FORMAT.repeat(indent));
             out.push('}');
         }
-        Stmt::Muat(path) => { out.push_str("muat \""); out.push_str(&escape_teks_format(path)); out.push('"'); }
+        Stmt::Muat(path, alias) => {
+            out.push_str("muat \"");
+            out.push_str(&escape_teks_format(path));
+            out.push('"');
+            if let Some(a) = alias { out.push_str(" sebagai "); out.push_str(a); }
+        }
         Stmt::Tampilkan(e) => { out.push_str("tampilkan "); out.push_str(&cetak_expr_fmt(e, indent, 0, komentar, terpakai)); }
         Stmt::Kalau(cond, tb, eb) => {
             out.push_str("kalau (");
@@ -4998,6 +5051,20 @@ fn cetak_blok_fmt(stmts: &[(usize, Stmt)], indent: usize, komentar: &PetaKomenta
     }
 }
 
+/// Cetak Vec<Stmt> (hasil ekspansi_muat + rewrite alias, BUKAN dari lexer/parser mentah)
+/// balik jadi teks source Isoteri -- TANPA komentar asli (sudah hilang sejak parsing, wajar,
+/// bukan bug -- AST tidak menyimpan komentar). Dipakai `isoteri bangun` (mode_bangun di
+/// main.rs): setelah semua 'muat' (termasuk alias) diproses lewat program_dari_berkas(), hasil
+/// Vec<Stmt>-nya perlu ditempel sebagai SATU string literal ke crate Rust sementara yang
+/// di-generate -- makanya perlu dicetak balik jadi teks, bukan dikirim sebagai AST langsung.
+pub fn cetak_program_ke_sumber(program: &[(usize, Stmt)]) -> String {
+    let komentar_kosong: PetaKomentar = std::collections::HashMap::new();
+    let mut terpakai = std::collections::HashSet::new();
+    let mut out = String::new();
+    cetak_blok_fmt(program, 0, &komentar_kosong, &mut terpakai, &mut out);
+    out
+}
+
 /// Format satu berkas sumber Isoteri (SATU berkas -- `muat` TIDAK diekspansi, beda dari
 /// kompilasi; format satu berkas seharusnya tidak menarik masuk isi berkas lain).
 pub fn format_sumber(sumber: &str) -> Result<String, String> {
@@ -5048,10 +5115,11 @@ fn ekspansi_muat(
     stmts: Vec<(usize, Stmt)>,    label_saat_ini: &str,
     dir_saat_ini: &std::path::Path,
     sudah_dimuat: &mut std::collections::HashSet<std::path::PathBuf>,
+    alias_dikenal: &mut std::collections::HashSet<String>,
 ) -> Result<Vec<(usize, Stmt, Rc<str>)>, String> {
     let mut hasil = Vec::with_capacity(stmts.len());
     for (baris, s) in stmts {
-        if let Stmt::Muat(rel_path) = &s {
+        if let Stmt::Muat(rel_path, alias) = &s {
             let target = resolusi_muat(rel_path, dir_saat_ini)?;
             let target_kanonik = fs::canonicalize(&target).unwrap_or_else(|_| target.clone());
             if sudah_dimuat.contains(&target_kanonik) {
@@ -5068,12 +5136,106 @@ fn ekspansi_muat(
 
             let sub_dir = target.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
             let label_target = target.display().to_string();
-            hasil.extend(ekspansi_muat(sub_stmts, &label_target, &sub_dir, sudah_dimuat)?);
+            let sub_hasil = ekspansi_muat(sub_stmts, &label_target, &sub_dir, sudah_dimuat, alias_dikenal)?;
+
+            match alias {
+                None => hasil.extend(sub_hasil), // perilaku lama: flat, numplek ke namespace global
+                Some(alias_nama) => {
+                    if !alias_dikenal.insert(alias_nama.clone()) {
+                        return Err(format!("Baris {}: alias modul \"{}\" sudah dipakai sebelumnya -- pakai nama alias lain.", baris, alias_nama));
+                    }
+                    hasil.extend(mangle_modul_beralias(sub_hasil, alias_nama));
+                }
+            }
         } else {
             hasil.push((baris, s, Rc::from(label_saat_ini)));
         }
     }
     Ok(hasil)
+}
+
+/// Ganti nama semua fungsi TOP-LEVEL yang dideklarasikan langsung di modul `sub_hasil` (bukan
+/// yang transitif lewat 'muat' TANPA alias di dalamnya -- itu ikut ke-mangle juga karena sudah
+/// tercampur flat di sub_hasil, itu memang disengaja: apapun yang masuk lewat 'muat X sebagai a'
+/// -- baik langsung atau transitif tanpa alias sendiri -- jadi bagian namespace 'a'). Modul yang
+/// SUDAH punya nama ter-mangle sendiri (dari 'muat Y sebagai b' bersarang di dalam X) TIDAK
+/// di-mangle ulang -- namanya (mis. "b.fungsi") tetap apa adanya, cuma bisa diakses lewat
+/// "b.fungsi" dari MANA PUN (termasuk dari luar alias 'a') -- keterbatasan yang didokumentasikan,
+/// lihat KETERBATASAN.md.
+fn mangle_modul_beralias(sub_hasil: Vec<(usize, Stmt, Rc<str>)>, alias: &str) -> Vec<(usize, Stmt, Rc<str>)> {
+    let nama_fungsi_lokal: std::collections::HashSet<String> = sub_hasil.iter()
+        .filter_map(|(_, s, _)| match s {
+            Stmt::FungsiDef(nama, ..) if !nama.starts_with("__modul_") => Some(nama.clone()),
+            _ => None,
+        })
+        .collect();
+    if nama_fungsi_lokal.is_empty() { return sub_hasil; }
+    sub_hasil.into_iter().map(|(baris, s, label)| {
+        (baris, mangle_stmt(s, alias, &nama_fungsi_lokal), label)
+    }).collect()
+}
+
+fn mangle_nama_jika_perlu(nama: &str, alias: &str, set: &std::collections::HashSet<String>) -> String {
+    // Separator "__modul_X__Y" (BUKAN titik) SENGAJA dipilih: harus tetap jadi SATU token
+    // identifier yang sah kalau di-lex ULANG dari teks -- ini penting karena `isoteri bangun`
+    // (AOT) nge-roundtrip AST modul beralias balik ke TEKS lewat cetak_program_ke_sumber(), lalu
+    // teks itu di-lex+parse ULANG dari nol saat binary hasil bangun-nya dijalankan. Titik ('.')
+    // dulu dicoba duluan tapi GAGAL roundtrip: lexer selalu pecah "a.b" jadi 3 token terpisah
+    // (Identifikator, Titik, Identifikator), bukan 1 identifier utuh, walau di jalur bytecode/
+    // JSON biasa (yang gak pernah nge-lex ulang nama fungsi) itu nggak masalah.
+    if set.contains(nama) { format!("__modul_{}__{}", alias, nama) } else { nama.to_string() }
+}
+
+fn mangle_stmt(s: Stmt, alias: &str, set: &std::collections::HashSet<String>) -> Stmt {
+    match s {
+        Stmt::FungsiDef(nama, params, body) => {
+            let nama_baru = mangle_nama_jika_perlu(&nama, alias, set);
+            let body_baru = body.into_iter().map(|(b, st)| (b, mangle_stmt(st, alias, set))).collect();
+            Stmt::FungsiDef(nama_baru, params, body_baru)
+        }
+        Stmt::Kalau(c, tb, eb) => Stmt::Kalau(
+            mangle_expr(c, alias, set),
+            tb.into_iter().map(|(b, st)| (b, mangle_stmt(st, alias, set))).collect(),
+            eb.map(|blk| blk.into_iter().map(|(b, st)| (b, mangle_stmt(st, alias, set))).collect()),
+        ),
+        Stmt::Ulang(c, body) => Stmt::Ulang(mangle_expr(c, alias, set), body.into_iter().map(|(b, st)| (b, mangle_stmt(st, alias, set))).collect()),
+        Stmt::UlangSetiap(v, e, body) => Stmt::UlangSetiap(v, mangle_expr(e, alias, set), body.into_iter().map(|(b, st)| (b, mangle_stmt(st, alias, set))).collect()),
+        Stmt::UlangSelaras(v, e, body) => Stmt::UlangSelaras(v, mangle_expr(e, alias, set), body.into_iter().map(|(b, st)| (b, mangle_stmt(st, alias, set))).collect()),
+        Stmt::Coba(tb, v, cb) => Stmt::Coba(
+            tb.into_iter().map(|(b, st)| (b, mangle_stmt(st, alias, set))).collect(), v,
+            cb.into_iter().map(|(b, st)| (b, mangle_stmt(st, alias, set))).collect(),
+        ),
+        Stmt::Ingat(nama, tipe, e) => Stmt::Ingat(nama, tipe, mangle_expr(e, alias, set)),
+        Stmt::Ubah(nama, e) => Stmt::Ubah(nama, mangle_expr(e, alias, set)),
+        Stmt::UbahField(nama, jalur, e) => Stmt::UbahField(nama, jalur, mangle_expr(e, alias, set)),
+        Stmt::UbahJalur(nama, jalur, e) => Stmt::UbahJalur(nama, jalur.into_iter().map(|j| match j {
+            Jalur::Indeks(ie) => Jalur::Indeks(mangle_expr(ie, alias, set)),
+            lain => lain,
+        }).collect(), mangle_expr(e, alias, set)),
+        Stmt::Tampilkan(e) => Stmt::Tampilkan(mangle_expr(e, alias, set)),
+        Stmt::Kembalikan(e) => Stmt::Kembalikan(mangle_expr(e, alias, set)),
+        Stmt::EkspresiStmt(e) => Stmt::EkspresiStmt(mangle_expr(e, alias, set)),
+        lain => lain, // BentukDef, Muat, Putus, Lanjut -- tidak ada Expr/nama fungsi di dalamnya
+    }
+}
+
+fn mangle_expr(e: Expr, alias: &str, set: &std::collections::HashSet<String>) -> Expr {
+    match e {
+        Expr::Panggil(nama, args) => {
+            let nama_baru = mangle_nama_jika_perlu(&nama, alias, set);
+            Expr::Panggil(nama_baru, args.into_iter().map(|a| mangle_expr(a, alias, set)).collect())
+        }
+        Expr::Binary(l, op, r) => Expr::Binary(Box::new(mangle_expr(*l, alias, set)), op, Box::new(mangle_expr(*r, alias, set))),
+        Expr::Daftar(items) => Expr::Daftar(items.into_iter().map(|i| mangle_expr(i, alias, set)).collect()),
+        Expr::Peta(entries) => Expr::Peta(entries.into_iter().map(|(k, v)| (k, mangle_expr(v, alias, set))).collect()),
+        Expr::Indeks(t, i) => Expr::Indeks(Box::new(mangle_expr(*t, alias, set)), Box::new(mangle_expr(*i, alias, set))),
+        Expr::Field(t, f) => Expr::Field(Box::new(mangle_expr(*t, alias, set)), f),
+        Expr::PanggilMetode(t, f, args) => Expr::PanggilMetode(Box::new(mangle_expr(*t, alias, set)), f, args.into_iter().map(|a| mangle_expr(a, alias, set)).collect()),
+        Expr::Tidak(e) => Expr::Tidak(Box::new(mangle_expr(*e, alias, set))),
+        Expr::BentukLiteral(nama, entries) => Expr::BentukLiteral(nama, entries.into_iter().map(|(k, v)| (k, mangle_expr(v, alias, set))).collect()),
+        Expr::FungsiLiteral(params, body) => Expr::FungsiLiteral(params, body.into_iter().map(|(b, st)| (b, mangle_stmt(st, alias, set))).collect()),
+        lain => lain, // Angka, Desimal, Teks, Bool, Ident -- tidak ada nama fungsi di dalamnya
+    }
 }
 
 /// Deteksi nama (fungsi/bentuk/variabel global) yang dideklarasikan di LEBIH DARI SATU file
@@ -5102,51 +5264,10 @@ fn cek_tabrakan_nama(stmts: &[(usize, Stmt, Rc<str>)]) -> Result<(), String> {
     Ok(())
 }
 
-/// Kumpulkan semua berkas yang terhubung lewat 'muat' (mulai dari `path`) jadi SATU string
-/// sumber gabungan -- dipakai subcommand 'bangun' (AOT bundling, lihat main.rs) buat
-/// menghasilkan satu program mandiri yang bisa ditempel ke binary tanpa perlu berkas .iso
-/// terpisah lagi saat dijalankan. Baris 'muat "..."' di tiap berkas DIHAPUS dari hasil gabungan
-/// (isinya sudah ditempel langsung di tempatnya). Include-guard sama seperti ekspansi_muat biasa.
-///
-/// CATATAN: deteksi baris 'muat "..."' di sini murni TEKSTUAL (baris yang -- setelah di-trim --
-/// diawali `muat "`), bukan lewat parser token penuh, supaya gak perlu pretty-printer AST->teks.
-/// Konsekuensinya: setiap statement 'muat' HARUS berada sendirian di baris-nya sendiri (gaya
-/// yang memang selalu dipakai di semua contoh & tutorial Isoteri) -- kalau digabung dengan
-/// statement lain di baris yang sama, bundler ini gak akan mengenalinya sebagai 'muat'.
-pub fn kumpulkan_sumber_gabungan(path: &str) -> Result<String, String> {
-    let mut sudah = std::collections::HashSet::new();
-    let mut keluaran = String::new();
-    kumpulkan_rekursif(std::path::Path::new(path), &mut sudah, &mut keluaran)?;
-    Ok(keluaran)
-}
-
-fn kumpulkan_rekursif(path: &std::path::Path, sudah: &mut std::collections::HashSet<std::path::PathBuf>, keluaran: &mut String) -> Result<(), String> {
-    let kanon = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    if sudah.contains(&kanon) { return Ok(()); } // include guard, sama seperti ekspansi_muat biasa
-    sudah.insert(kanon);
-
-    let sumber = fs::read_to_string(path).map_err(|e| format!("Tidak bisa membaca berkas \"{}\": {}", path.display(), e))?;
-    let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
-
-    for baris in sumber.lines() {
-        let terpangkas = baris.trim();
-        if let Some(sisa) = terpangkas.strip_prefix("muat ") {
-            let sisa = sisa.trim();
-            if let Some(isi_kutip) = sisa.strip_prefix('"') {
-                if let Some(akhir) = isi_kutip.find('"') {
-                    let rel_path = &isi_kutip[..akhir];
-                    let target = resolusi_muat(rel_path, &dir)?;
-                    kumpulkan_rekursif(&target, sudah, keluaran)?;
-                    continue;
-                }
-            }
-        }
-        keluaran.push_str(baris);
-        keluaran.push('\n');
-    }
-    Ok(())
-}
-
+// kumpulkan_sumber_gabungan/kumpulkan_rekursif (implementasi TEKSTUAL lama buat gabungan
+// 'muat' -- tanpa alias) sudah DIHAPUS, digantikan program_dari_berkas() yang berbasis AST
+// (paham 'sebagai alias') dan dipakai SEMUA entry point sekarang -- lihat komentar
+// program_dari_berkas() untuk kenapa dua implementasi terpisah itu berbahaya.
 
 /// diekspansi lagi -- entah karena memang gak pakai modul, atau karena sudah diekspansi/
 /// digabung sebelumnya, mis. oleh bundler AOT lewat `bangun_bundel`). Dipakai baik oleh CLI
@@ -5205,27 +5326,12 @@ pub fn jalankan_sumber_via_ir(sumber: &str) -> Result<(), String> {
 /// 'muat' yang ditulis di dalamnya (lihat ekspansi_muat) dan mengecek tabrakan nama lintas
 /// modul (lihat cek_tabrakan_nama). Ini yang dipakai CLI normal (`isoteri program.iso`).
 pub fn jalankan_berkas(path: &str) -> Result<(), String> {
-    let sumber = fs::read_to_string(path).unwrap_or_else(|_| {
+    if !std::path::Path::new(path).exists() {
         eprintln!("Peringatan: tidak bisa membaca '{}', pakai skrip contoh bawaan.", path);
-        String::from("ingat nilai = 80\nkalau (nilai >= 75) {\n    tampilkan \"Lulus\"\n} lainnya {\n    tampilkan \"Tidak lulus\"\n}")
-    });
-
-    let mut lexer = Lexer::new(&sumber);
-    let tokens = lexer.tokenize().map_err(|e| format!("Kesalahan Lexer: {}", e))?;
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().map_err(|e| format!("Kesalahan Parser: {}", e))?;
-
-    let entry_path = std::path::Path::new(path);
-    let entry_dir = entry_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
-    let entry_label = entry_path.display().to_string();
-    let mut sudah_dimuat = std::collections::HashSet::new();
-    if let Ok(kanon) = fs::canonicalize(entry_path) { sudah_dimuat.insert(kanon); }
-    let program_berlabel = ekspansi_muat(program, &entry_label, &entry_dir, &mut sudah_dimuat)
-        .map_err(|e| format!("Kesalahan Muat: {}", e))?;
-    cek_tabrakan_nama(&program_berlabel).map_err(|e| format!("Kesalahan Muat: {}", e))?;
-    let program: Vec<(usize, Stmt)> = program_berlabel.into_iter().map(|(baris, s, _)| (baris, s)).collect();
-
-    jalankan_stmt_list(program)
+        let sumber = "ingat nilai = 80\nkalau (nilai >= 75) {\n    tampilkan \"Lulus\"\n} lainnya {\n    tampilkan \"Tidak lulus\"\n}";
+        return jalankan_sumber(sumber);
+    }
+    jalankan_stmt_list(program_dari_berkas(path)?)
 }
 
 /// Inti pipeline resolve -> compile -> JIT -> eksekusi, dipakai bersama oleh jalankan_sumber
@@ -6055,13 +6161,7 @@ pub fn jalankan_stmt_list_via_ir(program: Vec<(usize, Stmt)>) -> Result<(), Stri
 }
 
 pub fn jalankan_berkas_via_ir(path: &str) -> Result<(), String> {
-    let sumber_gabungan = kumpulkan_sumber_gabungan(path)?;
-    periksa_sumber(&sumber_gabungan)?;
-    let mut lexer = Lexer::new(&sumber_gabungan);
-    let tokens = lexer.tokenize().map_err(|e| format!("Kesalahan Lexer: {}", e))?;
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().map_err(|e| format!("Kesalahan Parser: {}", e))?;
-    jalankan_stmt_list_via_ir(program)
+    jalankan_stmt_list_via_ir(program_dari_berkas(path)?)
 }
 
 // =====================================================================
@@ -6185,7 +6285,12 @@ pub fn ekspor_json_dari_sumber(sumber: &str) -> Result<String, String> {
     let tokens = lexer.tokenize().map_err(|e| format!("Kesalahan Lexer: {}", e))?;
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().map_err(|e| format!("Kesalahan Parser: {}", e))?;
+    ekspor_json_dari_program(program)
+}
 
+/// Inti ekspor_json_dari_sumber, dipisah supaya bisa dipakai dari Vec<Stmt> yang sudah
+/// melewati ekspansi_muat (dan rewrite alias) -- dipakai ekspor_json_dari_berkas.
+fn ekspor_json_dari_program(program: Vec<(usize, Stmt)>) -> Result<String, String> {
     let mut resolver = Resolver::new();
     let top_level = resolver.resolve_top(&program).map_err(|e| format!("Kesalahan Kompilasi: {}", e))?;
     let top_level = optimisasi_blok(top_level);
@@ -6236,11 +6341,91 @@ pub fn ekspor_json_dari_sumber(sumber: &str) -> Result<String, String> {
     serde_json::to_string_pretty(&keluaran).map_err(|e| format!("Gagal menyusun JSON: {}", e))
 }
 
-/// Sama seperti `ekspor_json_dari_sumber`, tapi dari path berkas -- mengikuti semua
-/// 'muat' persis seperti `isoteri bangun` (lewat kumpulkan_sumber_gabungan), supaya
-/// proyek multi-file juga bisa diekspor jadi satu bundel bytecode JSON.
+/// Satu-satunya jalur pemuatan modul (parse + ekspansi_muat + deteksi tabrakan nama + rewrite
+/// panggilan lewat alias) -- dipakai SEMUA entry point yang baca dari berkas (jalankan_berkas,
+/// jalankan_berkas_via_ir, ekspor_json_dari_berkas). SEBELUM ini, ada DUA implementasi terpisah
+/// (ekspansi_muat berbasis AST buat jalankan_berkas, kumpulkan_sumber_gabungan berbasis TEKS
+/// MENTAH buat dua entry point lain) yang bisa diam-diam berbeda perilaku -- ditemukan sewaktu
+/// menambah fitur alias modul ini: kumpulkan_sumber_gabungan (pencocokan baris tekstual, tidak
+/// paham AST) langsung membuang bagian "sebagai alias" tanpa merasa perlu tahu artinya, jadi
+/// fitur alias TIDAK akan bekerja sama sekali di jalur IR/JIT dan ekspor-web kalau kedua
+/// implementasi ini dibiarkan terpisah. Disatukan supaya kelakuan modul (termasuk alias) IDENTIK
+/// di semua jalur, dan supaya perbaikan/fitur modul ke depan cukup ditulis SEKALI.
+pub fn program_dari_berkas(path: &str) -> Result<Vec<(usize, Stmt)>, String> {
+    let sumber = fs::read_to_string(path).map_err(|e| format!("Tidak bisa membaca berkas \"{}\": {}", path, e))?;
+    let mut lexer = Lexer::new(&sumber);
+    let tokens = lexer.tokenize().map_err(|e| format!("Kesalahan Lexer: {}", e))?;
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().map_err(|e| format!("Kesalahan Parser: {}", e))?;
+
+    let entry_path = std::path::Path::new(path);
+    let entry_dir = entry_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
+    let entry_label = entry_path.display().to_string();
+    let mut sudah_dimuat = std::collections::HashSet::new();
+    if let Ok(kanon) = fs::canonicalize(entry_path) { sudah_dimuat.insert(kanon); }
+    let mut alias_dikenal = std::collections::HashSet::new();
+    let program_berlabel = ekspansi_muat(program, &entry_label, &entry_dir, &mut sudah_dimuat, &mut alias_dikenal)
+        .map_err(|e| format!("Kesalahan Muat: {}", e))?;
+    cek_tabrakan_nama(&program_berlabel).map_err(|e| format!("Kesalahan Muat: {}", e))?;
+
+    let program: Vec<(usize, Stmt)> = program_berlabel.into_iter()
+        .map(|(baris, s, _)| (baris, tulis_ulang_panggil_alias(s, &alias_dikenal)))
+        .collect();
+    Ok(program)
+}
+
+/// Terjemahkan 'alias.fungsi(args)' (di-parse jadi Expr::PanggilMetode(Ident(alias), fungsi,
+/// args) karena parser gak tahu 'alias' itu alias modul atau sekadar variabel biasa) jadi
+/// panggilan fungsi langsung ke nama yang sudah di-mangle ("alias.fungsi") -- HANYA kalau base-
+/// nya persis satu Ident yang cocok nama alias yang dikenal. PanggilMetode lain (base bukan Ident
+/// polos, atau Ident tapi bukan alias) DIBIARKAN apa adanya -- itu artinya "panggil NILAI di
+/// field itu sebagai fungsi" (mis. closure disimpan di field bentuk), ditangani generik di
+/// resolver/compiler lewat CExpr::PanggilNilai, bukan di sini.
+fn tulis_ulang_panggil_alias(s: Stmt, alias_dikenal: &std::collections::HashSet<String>) -> Stmt {
+    fn expr(e: Expr, set: &std::collections::HashSet<String>) -> Expr {
+        match e {
+            Expr::PanggilMetode(base, nama, args) => {
+                let args_baru: Vec<Expr> = args.into_iter().map(|a| expr(a, set)).collect();
+                if let Expr::Ident(alias) = base.as_ref() {
+                    if set.contains(alias) {
+                        return Expr::Panggil(format!("__modul_{}__{}", alias, nama), args_baru);
+                    }
+                }
+                Expr::PanggilMetode(Box::new(expr(*base, set)), nama, args_baru)
+            }
+            Expr::Panggil(nama, args) => Expr::Panggil(nama, args.into_iter().map(|a| expr(a, set)).collect()),
+            Expr::Binary(l, op, r) => Expr::Binary(Box::new(expr(*l, set)), op, Box::new(expr(*r, set))),
+            Expr::Daftar(items) => Expr::Daftar(items.into_iter().map(|i| expr(i, set)).collect()),
+            Expr::Peta(entries) => Expr::Peta(entries.into_iter().map(|(k, v)| (k, expr(v, set))).collect()),
+            Expr::Indeks(t, i) => Expr::Indeks(Box::new(expr(*t, set)), Box::new(expr(*i, set))),
+            Expr::Field(t, f) => Expr::Field(Box::new(expr(*t, set)), f),
+            Expr::Tidak(e) => Expr::Tidak(Box::new(expr(*e, set))),
+            Expr::BentukLiteral(nama, entries) => Expr::BentukLiteral(nama, entries.into_iter().map(|(k, v)| (k, expr(v, set))).collect()),
+            Expr::FungsiLiteral(params, body) => Expr::FungsiLiteral(params, body.into_iter().map(|(b, st)| (b, stmt(st, set))).collect()),
+            lain => lain,
+        }
+    }
+    fn stmt(s: Stmt, set: &std::collections::HashSet<String>) -> Stmt {
+        match s {
+            Stmt::FungsiDef(nama, params, body) => Stmt::FungsiDef(nama, params, body.into_iter().map(|(b, st)| (b, stmt(st, set))).collect()),
+            Stmt::Kalau(c, tb, eb) => Stmt::Kalau(expr(c, set), tb.into_iter().map(|(b, st)| (b, stmt(st, set))).collect(), eb.map(|blk| blk.into_iter().map(|(b, st)| (b, stmt(st, set))).collect())),
+            Stmt::Ulang(c, body) => Stmt::Ulang(expr(c, set), body.into_iter().map(|(b, st)| (b, stmt(st, set))).collect()),
+            Stmt::UlangSetiap(v, e, body) => Stmt::UlangSetiap(v, expr(e, set), body.into_iter().map(|(b, st)| (b, stmt(st, set))).collect()),
+            Stmt::UlangSelaras(v, e, body) => Stmt::UlangSelaras(v, expr(e, set), body.into_iter().map(|(b, st)| (b, stmt(st, set))).collect()),
+            Stmt::Coba(tb, v, cb) => Stmt::Coba(tb.into_iter().map(|(b, st)| (b, stmt(st, set))).collect(), v, cb.into_iter().map(|(b, st)| (b, stmt(st, set))).collect()),
+            Stmt::Ingat(nama, tipe, e) => Stmt::Ingat(nama, tipe, expr(e, set)),
+            Stmt::Ubah(nama, e) => Stmt::Ubah(nama, expr(e, set)),
+            Stmt::UbahField(nama, jalur, e) => Stmt::UbahField(nama, jalur, expr(e, set)),
+            Stmt::UbahJalur(nama, jalur, e) => Stmt::UbahJalur(nama, jalur.into_iter().map(|j| match j { Jalur::Indeks(ie) => Jalur::Indeks(expr(ie, set)), lain => lain }).collect(), expr(e, set)),
+            Stmt::Tampilkan(e) => Stmt::Tampilkan(expr(e, set)),
+            Stmt::Kembalikan(e) => Stmt::Kembalikan(expr(e, set)),
+            Stmt::EkspresiStmt(e) => Stmt::EkspresiStmt(expr(e, set)),
+            lain => lain,
+        }
+    }
+    stmt(s, alias_dikenal)
+}
+
 pub fn ekspor_json_dari_berkas(path: &str) -> Result<String, String> {
-    let sumber_gabungan = kumpulkan_sumber_gabungan(path)?;
-    periksa_sumber(&sumber_gabungan)?;
-    ekspor_json_dari_sumber(&sumber_gabungan)
+    ekspor_json_dari_program(program_dari_berkas(path)?)
 }

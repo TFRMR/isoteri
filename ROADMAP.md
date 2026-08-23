@@ -94,7 +94,41 @@ di atas (termasuk kenapa Component System bukan pengganti vdom-diffing React).
 - [x] ~~Evaluasi `putus` / `lanjut`~~ -- selesai (native+web), lihat "Sudah ada" di atas
 - [x] ~~Evaluasi `else-if`~~ -- selesai, lihat "Sudah ada" di atas
 - [x] ~~Evaluasi closure pada `petakan` / `saring` / `urutkan`~~ -- selesai, lihat "Sudah ada" di atas
-- [ ] Evaluasi namespace modul -- masih terbuka, belum dikerjakan
+- [x] **Evaluasi namespace modul -- SELESAI & TERVALIDASI.** `muat "path" sebagai alias`
+  (baru): fungsi top-level modul diakses lewat `alias.fungsi(...)`, tidak numplek ke namespace
+  global -- dua modul independen boleh punya fungsi bernama sama tanpa bentrok. `muat "path"`
+  tanpa alias (lama) tetap 100% seperti sebelumnya (flat, backward-compatible penuh). Scope
+  sengaja dibatasi ke FUNGSI saja untuk sekarang (belum `bentuk`/variabel global lewat alias) --
+  lihat docs/REFERENSI.md untuk detail & batasan.
+
+  **Temuan arsitektur penting sewaktu implementasi**: ternyata ada DUA implementasi `muat` yang
+  independen dan berpotensi berbeda kelakuan -- `ekspansi_muat` (berbasis AST, dipakai
+  `jalankan_berkas`) dan `kumpulkan_sumber_gabungan`/`kumpulkan_rekursif` (berbasis PENCOCOKAN
+  TEKS MENTAH per baris, dipakai `jalankan_berkas_via_ir`, `ekspor_json_dari_berkas`, DAN
+  `isoteri bangun` di main.rs). Implementasi teks itu buta total soal `sebagai alias` (langsung
+  dibuang tanpa diproses) -- kalau dibiarkan terpisah, fitur alias ini TIDAK akan bekerja di 3
+  dari 4 jalur eksekusi (IR/JIT, ekspor-web, AOT build), termasuk jalur web/WASM yang baru saja
+  divalidasi minggu ini. Diperbaiki dengan menyatukan SEMUA jalur lewat satu fungsi
+  `program_dari_berkas()` (AST-based) -- `kumpulkan_sumber_gabungan`/`kumpulkan_rekursif` DIHAPUS
+  sepenuhnya (bukan cuma tidak dipakai) supaya tidak ada risiko dua implementasi paralel diam-diam
+  berbeda lagi di masa depan.
+
+  Rincian teknis: fungsi top-level modul beralias di-mangle secara internal dengan pola
+  `__modul_<alias>__<nama>` (BUKAN titik seperti percobaan pertama -- titik gagal roundtrip
+  lewat teks karena lexer selalu memecahnya jadi token terpisah, ketahuan lewat kegagalan nyata
+  di jalur `isoteri bangun` yang butuh cetak-ulang AST jadi teks source lalu di-parse ulang dari
+  nol saat binary hasil build dijalankan). `Expr::PanggilMetode` (AST baru buat `x.y(args)`)
+  general-purpose: kalau `x` alias modul dikenal -> panggilan fungsi langsung (mangled); kalau
+  bukan -> "panggil NILAI di field itu" (mis. closure disimpan di field bentuk), lewat mekanisme
+  `PanggilNilai` yang sudah ada -- manfaat sampingan, bukan cuma buat modul.
+
+  Diverifikasi: (1) 17/17 program contoh masih cocok persis dengan golden output (nol regresi),
+  (2) dua modul beda nama fungsi sama diakses lewat alias masing-masing, output benar, (3)
+  fungsi di dalam modul beralias saling panggil satu sama lain dengan benar (mangling konsisten
+  di definisi maupun call site internal), (4) alias dipakai dua kali -> error jelas, (5) `muat`
+  tanpa alias tetap identik perilaku lama, (6) hasil identik di SEMUA EMPAT jalur eksekusi (CLI
+  bytecode biasa, `via-ir`, `ekspor-web` + dijalankan via `isoteri-vm.js` lewat Node, DAN
+  `isoteri bangun` -- AOT native binary dijalankan langsung).
 - [x] **Representasi data numerik yang lebih flat -- SELESAI & TERVALIDASI.**
   `Value` punya 2 varian baru: `DaftarAngka(Rc<Vec<i64>>)` dan
   `DaftarDesimal(Rc<Vec<f64>>)`. Literal daftar (`[1, 2, 3]`) otomatis naik

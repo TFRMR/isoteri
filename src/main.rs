@@ -236,11 +236,12 @@ fn mode_ekspor_web(argv: &[String]) -> Result<(), String> {
 }
 
 /// Subcommand `isoteri bangun program.iso -o keluaran` -- kompilasi AOT: bundel program .iso
-/// (+ semua yang di-'muat'-nya) jadi SATU executable native mandiri, yang bisa dijalankan
-/// langsung tanpa perlu `isoteri` atau berkas .iso terpisah lagi. Caranya: kumpulkan semua
-/// sumber jadi satu teks gabungan (lewat isoteri::kumpulkan_sumber_gabungan), tempel sebagai
-/// string literal ke sebuah crate Rust kecil yang cuma manggil isoteri::jalankan_sumber(),
-/// lalu `cargo build --release` crate itu.
+/// (+ semua yang di-'muat'-nya, termasuk 'muat X sebagai alias') jadi SATU executable native
+/// mandiri, yang bisa dijalankan langsung tanpa perlu `isoteri` atau berkas .iso terpisah lagi.
+/// Caranya: proses semua 'muat' lewat isoteri::program_dari_berkas (jalur AST, paham alias),
+/// cetak ulang jadi teks lewat isoteri::cetak_program_ke_sumber, tempel sebagai string literal
+/// ke sebuah crate Rust kecil yang cuma manggil isoteri::jalankan_sumber(), lalu
+/// `cargo build --release` crate itu.
 fn mode_bangun(argv: &[String]) -> Result<(), String> {
     let mut path_masukan: Option<String> = None;
     let mut path_keluaran: Option<String> = None;
@@ -261,7 +262,8 @@ fn mode_bangun(argv: &[String]) -> Result<(), String> {
     let path_keluaran = path_keluaran.unwrap_or_else(|| nama_program.clone());
 
     eprintln!("Mengumpulkan sumber (mengikuti semua 'muat')...");
-    let sumber_gabungan = isoteri::kumpulkan_sumber_gabungan(&path_masukan)?;
+    let program = isoteri::program_dari_berkas(&path_masukan)?;
+    let sumber_gabungan = isoteri::cetak_program_ke_sumber(&program);
 
     eprintln!("Memvalidasi program sebelum dibangun...");
     isoteri::periksa_sumber(&sumber_gabungan)?;
