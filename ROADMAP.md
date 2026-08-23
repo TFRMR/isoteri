@@ -59,7 +59,26 @@ di atas (termasuk kenapa Component System bukan pengganti vdom-diffing React).
 
 - [ ] Clipboard (copy/paste)
 - [ ] History API / path routing (alternatif hash routing yang sudah ada)
-- [ ] `dom_ketika()` belum bisa `removeEventListener`
+- [x] **`dom_ketika()` sekarang bisa `removeEventListener` -- SELESAI & TERVALIDASI.**
+  `dom_ketika(el, event, callback)` sekarang mengembalikan sebuah handle
+  (`Instans "PawangEvent"`, bukan `Kosong` seperti sebelumnya) yang bisa
+  disimpan lalu dilewatkan ke fungsi baru `dom_hapus_ketika(handle)` buat
+  melepas listener tersebut. Implementasinya di `runtime/web/isoteri-vm.js`
+  (murni JS -- fitur DOM ini memang tidak ada representasinya di Rust sama
+  sekali, browser-only): referensi fungsi JS asli yang dibungkus
+  `addEventListener()` disimpan di `listenerRegistry` (pola yang sama
+  dengan `domRegistry` yang sudah ada buat elemen DOM), supaya
+  `removeEventListener()` bisa dipanggil dengan referensi fungsi yang
+  PERSIS SAMA (syarat wajib JS -- kalau bukan referensi yang sama,
+  `removeEventListener` diam-diam gagal tanpa error). Melepas handle yang
+  sudah dilepas (atau dipanggil dua kali) tidak error -- idempotent, sama
+  seperti `dom_hapus()` terhadap elemen yang sudah hilang. Sistem listener
+  komponen (`_komponenPasangDelegasi`, dipakai `komponen_pasang`/
+  `komponen_lepas`) TIDAK terpengaruh -- itu jalur terpisah yang sudah
+  pakai pola cleanup sendiri sejak awal. Diverifikasi lewat
+  `runtime/web/uji_hapus_ketika.html`: listener terbukti berhenti merespons
+  event (termasuk event yang dipicu programatik) tepat setelah
+  `dom_hapus_ketika()` dipanggil.
 - [x] Nested/composed components otomatis (`komponen_anak(komponen, kunci, props)` dipanggil di dalam `render` induk -> runtime otomatis mount/update/unmount anak lewat rekonsiliasi berbasis kunci stabil, rekursif tanpa batas kedalaman, state anak DIPERTAHANKAN lintas render ulang induk -- lihat KETERBATASAN.md)
 - [ ] HTTP Interceptor -- belum primitif bahasa baru, tapi bisa disusun sendiri di atas `unduh_lanjut_async` (lihat KETERBATASAN.md)
 - [ ] Error reporting browser yang lebih baik

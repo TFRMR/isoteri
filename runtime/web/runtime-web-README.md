@@ -136,6 +136,17 @@ kalau ada), `tombol` (tombol keyboard kalau event keyboard), `target`
 (`ElemenDOM`). Form input: `dom_nilai`/`dom_atur_nilai`/`dom_dicentang`/
 `dom_atur_dicentang`/`dom_fokus`.
 
+**Melepas event listener** -- `dom_ketika()` mengembalikan sebuah handle
+(bukan Kosong) yang bisa disimpan lalu dilewatkan ke `dom_hapus_ketika()`
+buat melepas listener tersebut nanti (mis. saat komponen dibongkar manual,
+atau listener sekali-pakai yang melepas dirinya sendiri):
+```isoteri
+ingat pawang = dom_ketika(tombol, "klik", fungsi() { tampilkan "Diklik!" })
+dom_hapus_ketika(pawang)   catatan: listener berhenti merespons event setelah ini
+```
+Melepas handle yang sudah dilepas (atau dipanggil dua kali) TIDAK error --
+idempotent, sama seperti `dom_hapus()` terhadap elemen yang sudah hilang.
+
 **Storage** (localStorage):
 ```isoteri
 simpan_lokal("kunci", "nilai")

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Uji dom_hapus_ketika()</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 700px; margin: 2rem auto; padding: 0 1rem; background: #0f1115; color: #e6e6e6; }
+  button { padding: 8px 16px; margin: 4px; background: #4f8cff; color: white; border: none; border-radius: 6px; cursor: pointer; }
+  #log { background: #1a1d24; border: 1px solid #333; border-radius: 8px; padding: 12px; margin-top: 1rem; white-space: pre-wrap; font-family: monospace; font-size: 13px; min-height: 100px; }
+  #hasil { font-weight: bold; margin-top: 1rem; }
+  .pass { color: #7ee29b; }
+  .fail { color: #ff8080; }
+</style>
+</head>
+<body>
+<h1>Uji dom_hapus_ketika()</h1>
+<button id="tombol">Klik saya</button>
+<button id="lepas">Lepas Listener</button>
+<div id="log"></div>
+<div id="hasil"></div>
+
+<script src="./isoteri-vm.js"></script>
+<script>
+  // KOSONG dan teks() SUDAH tersedia di scope global dari isoteri-vm.js
+  // (script itu tidak dibungkus module/IIFE) -- jangan deklarasi ulang di sini,
+  // itu penyebab "Identifier 'KOSONG' has already been declared" sebelumnya.
+
+  const bundleKosong = { format: "isoteri-web-bytecode-v1", top_kode: [], global_slot_count: 0, konstanta: [], fungsi: [], nama_ke_indeks: {} };
+  const vm = new IsoteriVM(bundleKosong, {});
+
+  const logEl = document.getElementById("log");
+  let klikCount = 0;
+  function log(msg) { logEl.textContent += msg + "\n"; }
+
+  // Simulasi callback Isoteri: fungsi native JS biasa (bukan lewat compiler),
+  // langsung dites lewat panggilDom seperti kalau dipanggil dari bytecode VM.
+  const callbackNative = { __isNativeTest: true };
+  vm.panggilCallbackFleksibel = function(nama, cb, arg) {
+    klikCount++;
+    log(`Event diterima! (klik ke-${klikCount})`);
+  };
+
+  const tombolEl = document.getElementById("tombol");
+  const idTombol = "el0";
+  vm.domRegistry.set(idTombol, tombolEl);
+  const elemenValue = { t: "Instans", nama: "ElemenDOM", v: [["_id", teks(idTombol)]] };
+
+  // Pasang listener via dom_ketika()
+  const handle = vm.panggilDom("dom_ketika", [elemenValue, teks("click"), callbackNative]);
+  log("dom_ketika() dipanggil, handle diterima: " + JSON.stringify(handle));
+
+  let hasilAkhir = "";
+  document.getElementById("lepas").addEventListener("click", () => {
+    if (klikCount === 0) {
+      log("(klik tombol atas dulu sebelum lepas, biar ketahuan listenernya beneran jalan)");
+      return;
+    }
+    const sebelumLepas = klikCount;
+    vm.panggilDom("dom_hapus_ketika", [handle]);
+    log("dom_hapus_ketika() dipanggil.");
+    log("Sekarang coba klik 'Klik saya' lagi -- seharusnya TIDAK menambah log baru.");
+    // otomatis klik programatik buat verifikasi tanpa perlu manual
+    tombolEl.click();
+    setTimeout(() => {
+      const hasilEl = document.getElementById("hasil");
+      if (klikCount === sebelumLepas) {
+        hasilEl.textContent = "LULUS: listener berhasil dilepas, event tidak lagi terpicu setelah dom_hapus_ketika().";
+        hasilEl.className = "pass";
+      } else {
+        hasilEl.textContent = "GAGAL: listener masih terpicu setelah dom_hapus_ketika()!";
+        hasilEl.className = "fail";
+      }
+    }, 50);
+  });
+</script>
+</body>
+</html>

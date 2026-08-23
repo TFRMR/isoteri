@@ -62,6 +62,7 @@ class IsoteriVM {
     this.globals = new Array(bundle.global_slot_count).fill(KOSONG);
     this.domRegistry = new Map(); // id -> Element asli (lihat panggilDom)
     this._domIdCounter = 0;
+    this.listenerRegistry = new Map(); // id -> {el, namaEvent, fn} (lihat dom_ketika/dom_hapus_ketika)
     this.stack = [];
     this.locals = [];
     this.iterStack = []; // {items: Value[], pos: number}[]
@@ -751,7 +752,7 @@ class IsoteriVM {
         const el = elemenDari(args[0]);
         const namaEvent = teksArg(args[1], "nama event");
         const callback = args[2];
-        el.addEventListener(namaEvent, (ev) => {
+        const fn = (ev) => {
           // Bungkus data event yang paling sering dibutuhkan jadi instans 'Event' langsung
           // bisa diakses field-nya (ev.nilai, ev.tombol, dst) -- desain ini SENGAJA gak minta
           // pemula manggil fungsi accessor terpisah kayak dom_teks/dom_atribut, cukup akses
@@ -772,7 +773,31 @@ class IsoteriVM {
           } catch (e) {
             console.error(`Kesalahan di dalam pawang event "${namaEvent}":`, e.message || e);
           }
-        });
+        };
+        el.addEventListener(namaEvent, fn);
+        // Simpan referensi FUNGSI JS asli (fn) yang dibungkus tadi -- ini WAJIB, karena
+        // removeEventListener() di JS butuh referensi fungsi yang PERSIS SAMA dengan yang
+        // dipasang addEventListener(), bukan callback Isoteri aslinya (yang sudah dibungkus
+        // di dalam fn). Kembalikan handle (bukan KOSONG seperti sebelumnya) supaya user bisa
+        // simpan lalu lepas listener ini nanti lewat dom_hapus_ketika(handle).
+        if (!this._listenerIdCounter) this._listenerIdCounter = 0;
+        const id = `lsn${this._listenerIdCounter++}`;
+        this.listenerRegistry.set(id, { el, namaEvent, fn });
+        return { t: "Instans", nama: "PawangEvent", v: [["_id", teks(id)]] };
+      }
+      case "dom_hapus_ketika": {
+        const v = args[0];
+        if (v.t !== "Instans" || v.nama !== "PawangEvent") {
+          throw new IsoteriError(`dom_hapus_ketika(): argumen harus hasil dom_ketika(), ditemukan ${tampilkanStr(v)}`);
+        }
+        const id = v.v.find(([k]) => k === "_id")[1].v;
+        const entry = this.listenerRegistry.get(id);
+        if (entry) {
+          entry.el.removeEventListener(entry.namaEvent, entry.fn);
+          this.listenerRegistry.delete(id);
+        }
+        // Handle yang sudah dilepas (atau dilepas dua kali) TIDAK error -- idempotent,
+        // konsisten dengan dom_hapus() yang juga tidak protes kalau elemen sudah tidak ada.
         return KOSONG;
       }
       case "dom_nilai": { const el = elemenDari(args[0]); return "value" in el ? teks(String(el.value)) : KOSONG; }
@@ -1102,7 +1127,7 @@ const KOSONG = { t: "Kosong" };
 const DOM_FUNGSI = new Set([
   "dom_pilih", "dom_pilih_semua", "dom_teks", "dom_atur_teks", "dom_html", "dom_atur_html",
   "dom_atribut", "dom_atur_atribut", "dom_tambah_kelas", "dom_hapus_kelas", "dom_punya_kelas",
-  "dom_buat", "dom_tambah_anak", "dom_hapus", "dom_ketika",
+  "dom_buat", "dom_tambah_anak", "dom_hapus", "dom_ketika", "dom_hapus_ketika",
   "dom_nilai", "dom_atur_nilai", "dom_dicentang", "dom_atur_dicentang", "dom_fokus",
   "simpan_lokal", "ambil_lokal", "hapus_lokal", "unduh_async", "unduh_lanjut_async",
   "tunda", "interval_mulai", "interval_hentikan",
