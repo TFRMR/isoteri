@@ -12,6 +12,16 @@ bagi manusia.**
 Posisi Isoteri bukan "Rust yang mudah" atau "JavaScript yang cepat", tapi ruang
 di antara keduanya: high-level simplicity bertemu low-level performance.
 
+**Niche konkret (bukan cuma filosofi abstrak)**: Hukum #3 di bawah ("One
+language, multiple worlds") bukan sekadar prinsip desain -- itu jadi dasar
+niche paling tajam Isoteri: memotong duplikasi skema/validasi antara
+frontend dan backend yang selalu terjadi di stack web manapun (JS+bahasa
+backend lain), karena satu compiler Isoteri bisa hasilkan target native
+(backend) DAN target browser (frontend) dari satu sumber yang sama. Lihat
+bagian "Arah strategis" di awal `ROADMAP.md` untuk pembahasan lengkap
+(masalah yang dipotong, kenapa ini jujur soal klaim performa, dan urutan
+prasyarat yang masih perlu dibangun).
+
 ## 10 Hukum Isoteri (jangan dilanggar tanpa alasan kuat)
 
 1. **Simplicity over cleverness** — fitur baru harus lolos uji "apakah programmer

@@ -3,6 +3,93 @@
 Roadmap ini adalah peta eksplorasi, bukan janji jadwal. Status dan prioritas
 dapat berubah berdasarkan hasil eksperimen dan kontribusi komunitas.
 
+## Arah strategis: kenapa Isoteri DIBUTUHKAN (bukan cuma "bahasa lain")
+
+**Ditulis setelah diskusi mendalam soal identitas & niche -- dicatat di sini
+supaya arah ini tidak hilang di tengah pekerjaan teknis kecil-kecil.**
+
+Isoteri TIDAK diposisikan sebagai pengganti JavaScript di web (itu perlombaan
+yang tidak akan menang -- ekosistem JS/npm terlalu besar & matang). Isoteri
+juga BUKAN "JS dengan sintaks Indonesia" -- itu cuma gaya, bukan alasan
+dibutuhkan. Nilai intinya harus lebih tajam dari itu.
+
+### Masalah nyata yang mau dipotong
+
+Di stack web modern (apapun bahasa backend-nya -- Node, Python, Go), ada
+pemborosan struktural yang SELALU terjadi: skema data & aturan validasi
+ditulis **dua kali** -- sekali di frontend (TypeScript + Zod/Yup, buat UX,
+validasi instan sebelum submit) dan sekali lagi di backend (bahasa lain,
+wajib, karena frontend tidak bisa dipercaya). Dua penulisan itu gampang
+kehilangan sinkron -- sumber bug klasik ("kenapa validasi form beda dari
+validasi API?"). Ini bukan soal gaya penulisan, ini SATU KELAS BUG yang
+melekat di arsitektur client-server manapun, di bahasa manapun.
+
+### Kenapa Isoteri kebetulan punya properti arsitektur yang pas buat ini
+
+Isoteri sudah (per hari ini) punya SATU compiler yang bisa menghasilkan
+target native/AOT (buat backend, tervalidasi lewat `isoteri bangun`) DAN
+target browser (bytecode/WASM, tervalidasi lewat ekspor-web +
+`isoteri-vm.js`) dari SATU SUMBER yang sama, tanpa rewrite. Artinya:
+definisi `bentuk` + fungsi validasi bisa ditulis SEKALI, di-`muat` dari
+kedua sisi (frontend & backend), dan DIJAMIN selalu sinkron karena memang
+cuma ada satu salinan kodenya -- bukan disiplin tim yang harus dijaga
+manual.
+
+### Klaim "lebih cepat" yang jujur (bukan overclaim)
+
+Isoteri BELUM bisa diklaim lebih cepat dari JS murni **di dalam browser**
+(saat ini `isoteri-wasm` cuma memindahkan COMPILER ke browser -- hasilnya
+tetap dieksekusi interpreter JS `isoteri-vm.js`, bukan instruksi WASM asli
+-- lihat item "Backend WASM asli" di bagian IR). Klaim cepat yang JUJUR dan
+bisa dibuktikan itu ada di **sisi backend/server**: logika yang sama bisa
+di-AOT-compile jadi binary native atau di-JIT (Cranelift) -- itu beneran
+lebih cepat dari backend Node.js/Python buat logika berat, karena tidak
+lewat interpreter bahasa dinamis sama sekali. Belum ada benchmark head-to-head
+yang mempublikasikan angka ini -- lihat item di bawah.
+
+### Melengkapi, bukan menyaingi
+
+JS tetap pegang peran yang dia jago: interaktivitas UI, ekosistem
+library visual/animasi/DOM kompleks. Isoteri numpang di situ lewat rencana
+interop JS (lihat item di bawah). Yang Isoteri ambil alih cuma LAPISAN
+DEFINISI TIPE + ATURAN BISNIS + BACKEND -- potongan yang di stack JS
+biasanya dipecah jadi 3 hal terpisah (TypeScript types, Zod/Yup validation,
+Node/Python backend) yang harus dijaga manual tetap sinkron. Isoteri
+menyatukannya jadi satu penulisan.
+
+### Prasyarat yang masih harus dibangun supaya cerita ini nyata (urutan prioritas)
+
+1. **Interop JS/npm** (`js_panggil()` dkk, scope awal: library yang nempel
+   ke `window` lewat CDN) -- prasyarat "melengkapi bukan menyaingi" jadi
+   nyata; tanpa ini Isoteri terisolasi dari ekosistem JS yang dibutuhkan
+   buat UI (chart, date-picker, form library, dst). Status: baru didesain,
+   belum diimplementasikan.
+2. **HTTP server dasar** (dengarkan port, terima request masuk, balas
+   respons) -- prasyarat MUTLAK buat cerita "satu skema, dua sisi": saat
+   ini Isoteri cuma bisa `unduh()` (GET keluar), belum bisa jadi sisi
+   backend yang menjalankan logika bersama itu. Ini gap besar, belum ada
+   sama sekali. Status: belum dikerjakan.
+3. **Contoh nyata + dokumentasi pola "satu skema, dua sisi"** -- setelah
+   server dasar ada, buktikan lewat contoh konkret (bukan cuma teori):
+   `bentuk` + fungsi validasi yang sama dipakai identik di form browser dan
+   endpoint backend.
+4. **Benchmark backend Isoteri (AOT) vs Node.js/Python** untuk beban kerja
+   yang representatif -- supaya klaim "lebih cepat" punya angka publik,
+   bukan janji.
+5. **Backend WASM asli** (compile IR Isoteri langsung ke instruksi WASM,
+   bukan bytecode JSON yang ditafsirkan `isoteri-vm.js`) -- baru ini yang
+   bisa membuka klaim "lebih cepat" DI DALAM browser juga, bukan cuma di
+   backend. Prioritas lebih rendah dari 4 poin di atas karena backend dulu
+   yang punya cerita jelas.
+
+Item-item lain di roadmap ini (namespace modul lengkap, LSP/tooling editor,
+semver registry v2, dst.) tetap berguna dan tetap dikerjakan, tapi arah di
+atas ini yang jadi KOMPAS -- kalau ada pilihan mengerjakan item mana
+duluan dan tidak jelas, dahulukan yang paling dekat mendukung 5 poin di
+atas.
+
+---
+
 ## Sudah ada
 
 ### Bahasa & compiler
@@ -18,6 +105,7 @@ dapat berubah berdasarkan hasil eksperimen dan kontribusi komunitas.
 - [x] modul dengan `muat`
 - [x] penanganan error `coba` / `tangkap`
 - [x] fungsi teks, matematika, list, JSON, file, dan HTTP
+
 - [x] `lainnya kalau` (else-if) -- gula sintaksis murni, jalan di semua jalur eksekusi
 - [x] `putus` / `lanjut` (break/continue) -- aman dipakai di dalam `coba/tangkap`, di SEMUA jalur eksekusi (native, `via-ir`, AOT, web export)
 - [x] Modulo (`%`), compound assignment (`+=` dst.), increment/decrement (`++`/`--`)
