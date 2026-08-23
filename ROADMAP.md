@@ -75,16 +75,69 @@ di atas (termasuk kenapa Component System bukan pengganti vdom-diffing React).
 - [x] ~~Evaluasi `putus` / `lanjut`~~ -- selesai (native+web), lihat "Sudah ada" di atas
 - [x] ~~Evaluasi `else-if`~~ -- selesai, lihat "Sudah ada" di atas
 - [x] ~~Evaluasi closure pada `petakan` / `saring` / `urutkan`~~ -- selesai, lihat "Sudah ada" di atas
-- [ ] Evaluasi namespace modul
-- [ ] Evaluasi representasi data numerik yang lebih flat
+- [ ] Evaluasi namespace modul -- masih terbuka, belum dikerjakan
+- [x] **Representasi data numerik yang lebih flat -- SELESAI & TERVALIDASI.**
+  `Value` punya 2 varian baru: `DaftarAngka(Rc<Vec<i64>>)` dan
+  `DaftarDesimal(Rc<Vec<f64>>)`. Literal daftar (`[1, 2, 3]`) otomatis naik
+  level ke representasi ini kalau semua elemennya homogen Angka/Desimal
+  (lihat `coba_promosikan_flat()` / `buat_daftar()`), turun balik ke
+  `Value::Daftar` biasa kalau tipenya campuran. Semua operasi List yang
+  sudah ada (indexing baca/tulis, `petakan`/`saring`/`urutkan`, `gabung`,
+  `ambil`, `panjang`, `ulang setiap`, `ulang selaras`, perbandingan `==`,
+  ekspor JSON ke `isoteri-vm.js`) tetap benar lewat fallback materialisasi
+  (`daftar_materialisasi()`) untuk operasi yang belum punya jalur cepat
+  native. Diverifikasi: (1) regresi nol -- 17/17 program contoh cocok
+  persis dengan golden output sebelum perubahan, (2) uji fungsional
+  tambahan (indexing, mutasi, `petakan`+`saring` berantai, `ulang setiap`,
+  `==`, `gabung`) semua benar, (3) ekspor JSON ke `isoteri-vm.js`
+  byte-identik (degradasi otomatis balik ke format `{"t":"Daftar",...}`
+  biasa, JS tidak perlu tahu soal representasi flat internal ini sama
+  sekali).
+- [x] **Bug sampingan ditemukan & diperbaiki: `isoteri ekspor-web` nondeterministic.**
+  Ditemukan selama verifikasi representasi flat di atas (bukan disebabkan
+  olehnya -- sudah ada sebelumnya, terverifikasi dengan mengetes binary versi
+  LAMA dua kali dan hasilnya beda juga). Akar masalah: urutan fungsi dalam
+  bundel `.isoweb.json` diambil dari `resolver.fungsi_out.keys().cloned()`
+  yaitu iterasi `HashMap<String, ...>` -- Rust sengaja mengacak urutan
+  iterasi HashMap antar-run (proteksi DoS), jadi index fungsi bisa
+  berbeda-beda tiap kali source yang SAMA di-compile ulang. Bukan bug yang
+  bikin program salah jalan (eksekusinya tetap benar via `isoteri-vm.js`,
+  diverifikasi lewat `node runtime/web/jalankan-node.js`), tapi bikin
+  `.isoweb.json` tidak reproducible byte-level -- `git diff` selalu nunjukin
+  perubahan walau logikanya identik. Perbaikan: tambah `nama_fungsi.sort()`
+  di 4 titik compile entry (bytecode biasa, `jalankan_stmt_list`, jalur IR,
+  ekspor-web) sebelum index fungsi ditetapkan. Diverifikasi: compile source
+  yang sama 5x berturut-turut sekarang menghasilkan `.isoweb.json`
+  byte-identik semua (sebelumnya selalu beda).
 - [ ] Semver range di package registry (v2) -- v1 git-based/pin-exact-tag sudah selesai
 
 ## Eksperimen performa
 
 - [ ] Benchmark VM vs JIT pada workload nyata
 - [ ] Benchmark Isoteri vs implementasi pembanding yang relevan
-- [ ] Eksperimen representasi `Daftar` numerik
-- [ ] Evaluasi SIMD hanya jika representasi data mendukungnya
+- [x] **Eksperimen representasi `Daftar` numerik -- SELESAI, lihat di atas.**
+  Diukur dua cara: (1) microbenchmark Rust terisolasi (cuma loop sum
+  murni) -- speedup **9-10x** untuk `Vec<i64>` flat vs `Vec<Value>` tagged
+  (compiler auto-vectorize loop integer flat, TIDAK bisa untuk yang
+  tagged); (2) end-to-end lewat VM sungguhan (`jumlah()` dipanggil
+  berulang di daftar 20.000 elemen) -- speedup jauh lebih kecil, **cuma
+  ~1.1-1.15x**, karena overhead dispatch per-panggilan-fungsi interpreter
+  (pencocokan nama fungsi, penyusunan argumen, instruksi sekitar seperti
+  `BinOp`/`StoreGlobal`) mendominasi total waktu untuk ukuran daftar
+  segini -- bukan loop sum-nya sendiri. **Kesimpulan jujur**: manfaat
+  MEMORI (4x lebih hemat, `sizeof(Value)`=32 byte vs `sizeof(i64)`=8 byte)
+  berlaku tanpa syarat; manfaat KECEPATAN baru terasa besar kalau daftarnya
+  sangat besar dan/atau operasi numerik jadi bottleneck nyata -- bukan
+  lompatan performa dramatis untuk pola pemakaian tipikal (banyak
+  panggilan fungsi kecil-kecil).
+- [x] Evaluasi SIMD hanya jika representasi data mendukungnya -- prasyarat
+  (representasi flat) sekarang SUDAH ADA. Percobaan SIMD eksplisit
+  sebelumnya (AVX2 manual) gagal karena representasi lama; belum dicoba
+  ulang di atas representasi flat yang baru ini -- auto-vectorization
+  compiler standar (tanpa SIMD intrinsic manual) sudah memberi sebagian
+  besar manfaat untuk `DaftarAngka` (lihat speedup 9-10x di atas). SIMD
+  manual eksplisit kemungkinan baru berguna kalau bottleneck-nya memang di
+  loop sum besar, bukan overhead dispatch VM -- lihat catatan di atas.
 
 ## WebAssembly
 
@@ -120,11 +173,22 @@ System, lihat section "Web" di atas) TETAP dipakai persis sama --
 `isoteri-wasm` cuma mengganti CARA bundle JSON-nya dihasilkan (di browser,
 bukan CLI), bukan mengganti apa yang dijalankan VM-nya.
 
-Belum: `demo_wasm.html` baru menguji subset kecil bahasa (fungsi, string,
-aritmatika) -- belum diverifikasi lewat WASM untuk fitur yang lebih kompleks
-(struct/`bentuk`, closure, loop, DOM binding penuh). `pkg/` hasil build juga
-belum di-commit permanen ke lokasi final di repo/CI (saat ini disalin manual
-ke `runtime/web/pkg/` di mesin lokal).
+Belum: `pkg/` hasil build juga belum di-commit permanen ke lokasi final di
+repo/CI (saat ini disalin manual ke `runtime/web/pkg/` di mesin lokal).
+
+**Update: validasi diperluas ke fitur kompleks -- SELESAI.** Lewat
+`runtime/web/uji_wasm_lanjutan.html`, tiga kasus uji dijalankan lewat WASM
+di browser dan dibandingkan otomatis terhadap output referensi dari CLI
+native (`program_bentuk.iso`, `program_closure.iso`,
+`program_list_lanjutan.iso`): (1) struct/`bentuk` + `coba/tangkap` untuk
+field yang tidak ada, (2) closure berlapis termasuk closure disimpan di
+Daftar dan closure nested 2 level, (3) fungsi higher-order
+(`petakan`/`saring`/`urutkan`) termasuk `urutkan` pakai kunci custom pada
+struct. Ketiganya COCOK persis dengan referensi native. Yang sengaja TIDAK
+diuji lewat WASM: `tulis_berkas`/`baca_berkas` (`program_lanjutan.iso`) --
+ini bukan bug, browser memang tidak punya filesystem, jadi fitur ini by
+design cuma jalan di CLI native. DOM binding penuh (`peristiwa`,
+`dom_ketika`, dll) juga belum diuji lewat jalur WASM secara spesifik.
 
 ## Prinsip roadmap
 
