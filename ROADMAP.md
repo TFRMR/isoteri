@@ -59,16 +59,29 @@ menyatukannya jadi satu penulisan.
 
 ### Prasyarat yang masih harus dibangun supaya cerita ini nyata (urutan prioritas)
 
-1. **Interop JS/npm** (`js_panggil()` dkk, scope awal: library yang nempel
-   ke `window` lewat CDN) -- prasyarat "melengkapi bukan menyaingi" jadi
-   nyata; tanpa ini Isoteri terisolasi dari ekosistem JS yang dibutuhkan
-   buat UI (chart, date-picker, form library, dst). Status: baru didesain,
-   belum diimplementasikan.
+1. **Interop JS/npm -- SELESAI & TERVALIDASI.** `js_global`, `js_panggil`,
+   `js_panggil_bebas`, `js_baru`, `js_ambil`, `js_atur`, `js_ke_peta`
+   (`runtime/web/isoteri-vm.js`, murni JS seperti fitur DOM lainnya --
+   tidak ada representasinya di Rust, browser-only). Scope: library yang
+   nempel ke `window` lewat CDN (bukan sistem import/bundler modern).
+   Konversi nilai dua arah otomatis (primitif, Daftar<->array, Peta<->
+   object JS literal, ElemenDOM<->Element JS asli, closure Isoteri<->
+   callback JS asli dengan batasan 1 argumen pertama saja diteruskan).
+   Objek/fungsi JS "hidup" dibungkus jadi handle (`Instans "JsObjek"`,
+   pola sama dengan `domRegistry`/`listenerRegistry`), bukan langsung
+   dikonversi jadi Peta -- supaya kemampuan panggil method/baca properti
+   live-nya tidak hilang. Diverifikasi lewat `runtime/web/uji_interop_js.html`
+   (5 kasus, semua LULUS): `Math.max` multi-argumen, constructor `Date` +
+   panggil method pada instansnya, baca/tulis properti objek, konversi
+   otomatis Peta Isoteri -> object JS (viaJSON.stringify), dan closure
+   Isoteri dipanggil sebagai callback asli oleh `setTimeout` milik JS.
+   Lihat `runtime/web/README.md` bagian "Interop JS" untuk dokumentasi &
+   referensi fungsi lengkap.
 2. **HTTP server dasar** (dengarkan port, terima request masuk, balas
    respons) -- prasyarat MUTLAK buat cerita "satu skema, dua sisi": saat
    ini Isoteri cuma bisa `unduh()` (GET keluar), belum bisa jadi sisi
    backend yang menjalankan logika bersama itu. Ini gap besar, belum ada
-   sama sekali. Status: belum dikerjakan.
+   sama sekali. Status: belum dikerjakan. **Prioritas berikutnya.**
 3. **Contoh nyata + dokumentasi pola "satu skema, dua sisi"** -- setelah
    server dasar ada, buktikan lewat contoh konkret (bukan cuma teori):
    `bentuk` + fungsi validasi yang sama dipakai identik di form browser dan

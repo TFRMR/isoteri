@@ -63,6 +63,7 @@ class IsoteriVM {
     this.domRegistry = new Map(); // id -> Element asli (lihat panggilDom)
     this._domIdCounter = 0;
     this.listenerRegistry = new Map(); // id -> {el, namaEvent, fn} (lihat dom_ketika/dom_hapus_ketika)
+    this.jsRegistry = new Map(); // id -> objek/fungsi JS asli (lihat panggilJs, interop js_*)
     this.stack = [];
     this.locals = [];
     this.iterStack = []; // {items: Value[], pos: number}[]
@@ -570,6 +571,7 @@ class IsoteriVM {
       return daftar(d);
     }
     if (DOM_FUNGSI.has(nama)) return this.panggilDom(nama, args);
+    if (JS_FUNGSI.has(nama)) return this.panggilJs(nama, args);
     return panggilBawaanMurni(nama, args);
   }
 
@@ -647,6 +649,124 @@ class IsoteriVM {
       }
     }
     console.warn(`rute_mulai(): tidak ada rute cocok buat path "${hash}". Tambahkan rute berpola "*" sebagai catch-all/404 kalau perlu.`);
+  }
+
+  /**
+   * Interop JS: manggil fungsi/method/constructor JavaScript ASLI (termasuk library pihak
+   * ketiga yang nempel ke `window` lewat CDN, mis. Chart.js) dari kode Isoteri, tanpa perlu
+   * nulis ulang library itu di Isoteri. Scope v1 SENGAJA dibatasi ke pola "global lewat CDN"
+   * (window.NamaLibrary) -- BUKAN sistem import/bundler modern (ES modules, tree-shaking, dst)
+   * yang jauh lebih kompleks. Filosofinya: Isoteri TIDAK mencoba membangun ekosistem paket
+   * sendiri buat saingan npm (perlombaan yang tidak akan menang) -- sebaliknya numpang penuh
+   * di ekosistem JS yang sudah ada, cukup jadi JEMBATAN.
+   *
+   * Objek/fungsi JS yang "hidup" (bukan primitif) disimpan di `jsRegistry` dan dikembalikan ke
+   * Isoteri sebagai handle (Instans "JsObjek") -- pola yang SAMA PERSIS dengan `domRegistry`
+   * buat elemen DOM (lihat panggilDom) dan `listenerRegistry` buat event listener. Primitif
+   * (angka/teks/bool/null) dikonversi langsung, TANPA handle.
+   */
+  panggilJs(nama, args) {
+    const global = typeof window !== "undefined" ? window : globalThis;
+    const teksArg = (v, label) => { if (v.t !== "Teks") throw new IsoteriError(`${nama}(): ${label} harus Teks, ditemukan ${tampilkanStr(v)}`); return v.v; };
+
+    const jsDariIsoteri = (v) => {
+      switch (v.t) {
+        case "Angka": case "Desimal": return v.v;
+        case "Teks": return v.v;
+        case "Bool": return v.v;
+        case "Kosong": return null;
+        case "Daftar": return v.v.map(jsDariIsoteri);
+        case "Peta": { const o = {}; for (const [k, vv] of v.v) o[k] = jsDariIsoteri(vv); return o; }
+        case "Instans":
+          if (v.nama === "ElemenDOM") { const id = v.v.find(([k]) => k === "_id")[1].v; return this.domRegistry.get(id); }
+          if (v.nama === "JsObjek") { const id = v.v.find(([k]) => k === "_id")[1].v; return this.jsRegistry.get(id); }
+          // Instans bentuk biasa (bukan hasil js_*) -- kirim sebagai plain object snapshot,
+          // best-effort (nggak ada method, cuma data). Cukup buat lewatin sebagai config.
+          { const o = {}; for (const [k, vv] of v.v) o[k] = jsDariIsoteri(vv); return o; }
+        case "Fungsi":
+          // Closure Isoteri dilewatkan sebagai callback JS asli -- penting buat library yang
+          // minta callback (mis. onClick, event handler kustom milik library pihak ketiga).
+          // CATATAN: cuma argumen JS PERTAMA yang diteruskan ke closure Isoteri (konsisten
+          // dengan panggilCallbackFleksibel yang cuma dukung fungsi 0 atau 1 parameter, sama
+          // seperti dom_ketika/tunda/dst) -- kalau callback JS-nya dapat argumen lebih dari
+          // satu (mis. (event, index)), argumen ke-2 dst DIABAIKAN di sisi Isoteri untuk saat ini.
+          return (...jsArgs) => {
+            const argPertama = jsArgs.length > 0 ? isoteriDariJs(jsArgs[0]) : KOSONG;
+            const hasil = this.panggilCallbackFleksibel("js_panggil (callback)", v, argPertama);
+            return jsDariIsoteri(hasil);
+          };
+        default: return null;
+      }
+    };
+    const isoteriDariJs = (v) => {
+      if (v === null || v === undefined) return KOSONG;
+      if (typeof v === "number") return Number.isInteger(v) ? angka(v) : desimal(v);
+      if (typeof v === "string") return teks(v);
+      if (typeof v === "boolean") return bool(v);
+      if (Array.isArray(v)) return daftar(v.map(isoteriDariJs));
+      if (typeof document !== "undefined" && v instanceof Element) return this.bungkusElemenPublik(v);
+      // Objek/fungsi JS "hidup" lainnya -- simpan di registry, kembalikan handle. TIDAK
+      // dikonversi jadi Peta (itu akan bikin snapshot mati, kehilangan kemampuan panggil
+      // method/akses live-nya) -- pakai js_ke_peta() eksplisit kalau memang mau snapshot.
+      if (!this._jsIdCounter) this._jsIdCounter = 0;
+      const id = `js${this._jsIdCounter++}`;
+      this.jsRegistry.set(id, v);
+      return { t: "Instans", nama: "JsObjek", v: [["_id", teks(id)]] };
+    };
+
+    switch (nama) {
+      case "js_global": {
+        const namaGlobal = teksArg(args[0], "nama global");
+        const nilai = global[namaGlobal];
+        if (nilai === undefined) throw new IsoteriError(`js_global(): "${namaGlobal}" tidak ditemukan di window/global -- pastikan library-nya sudah dimuat (mis. lewat <script src> di HTML) SEBELUM kode Isoteri ini jalan.`);
+        return isoteriDariJs(nilai);
+      }
+      case "js_panggil": {
+        const objekJs = jsDariIsoteri(args[0]);
+        const metode = teksArg(args[1], "nama metode");
+        if (typeof objekJs[metode] !== "function") throw new IsoteriError(`js_panggil(): "${metode}" bukan fungsi/method pada objek JS ini.`);
+        const hasil = objekJs[metode](...args.slice(2).map(jsDariIsoteri));
+        return isoteriDariJs(hasil);
+      }
+      case "js_panggil_bebas": {
+        const fnJs = jsDariIsoteri(args[0]);
+        if (typeof fnJs !== "function") throw new IsoteriError(`js_panggil_bebas(): argumen pertama bukan fungsi JS yang bisa dipanggil.`);
+        return isoteriDariJs(fnJs(...args.slice(1).map(jsDariIsoteri)));
+      }
+      case "js_baru": {
+        const konstruktor = jsDariIsoteri(args[0]);
+        if (typeof konstruktor !== "function") throw new IsoteriError(`js_baru(): argumen pertama bukan constructor JS yang valid.`);
+        const instans = new konstruktor(...args.slice(1).map(jsDariIsoteri));
+        return isoteriDariJs(instans);
+      }
+      case "js_ambil": {
+        const objekJs = jsDariIsoteri(args[0]);
+        const properti = teksArg(args[1], "nama properti");
+        return isoteriDariJs(objekJs[properti]);
+      }
+      case "js_atur": {
+        const objekJs = jsDariIsoteri(args[0]);
+        const properti = teksArg(args[1], "nama properti");
+        objekJs[properti] = jsDariIsoteri(args[2]);
+        return KOSONG;
+      }
+      case "js_ke_peta": {
+        // Snapshot EKSPLISIT objek JS jadi Peta Isoteri biasa (data mati, bukan live handle) --
+        // dipakai kalau memang cuma butuh datanya, bukan kemampuan panggil method lagi.
+        const objekJs = jsDariIsoteri(args[0]);
+        return isoteriDariJs(JSON.parse(JSON.stringify(objekJs)));
+      }
+      default:
+        throw new IsoteriError(`Fungsi interop JS "${nama}" tidak dikenal.`);
+    }
+  }
+
+  /** Versi publik bungkusElemen -- dipakai panggilJs buat bungkus Element hasil balik dari JS. */
+  bungkusElemenPublik(el) {
+    if (!this._domIdCounter) this._domIdCounter = 0;
+    const id = `el${this._domIdCounter++}`;
+    this.domRegistry.set(id, el);
+    return { t: "Instans", nama: "ElemenDOM", v: [["_id", teks(id)]] };
   }
 
   panggilDom(nama, args) {
@@ -1123,6 +1243,12 @@ class IsoteriVM {
 // ---------------------------------------------------------------------
 
 const KOSONG = { t: "Kosong" };
+/** Nama fungsi interop JS (js_*) -- lihat IsoteriVM.panggilJs. Scope v1: library global lewat
+ *  CDN (window.NamaLibrary), BUKAN sistem import/bundler modern. */
+const JS_FUNGSI = new Set([
+  "js_global", "js_panggil", "js_panggil_bebas", "js_baru", "js_ambil", "js_atur", "js_ke_peta",
+]);
+
 /** Nama fungsi bawaan Milestone B (DOM/Event/Fetch/Storage) -- lihat IsoteriVM.panggilDom. */
 const DOM_FUNGSI = new Set([
   "dom_pilih", "dom_pilih_semua", "dom_teks", "dom_atur_teks", "dom_html", "dom_atur_html",

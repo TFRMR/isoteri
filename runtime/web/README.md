@@ -286,6 +286,70 @@ ws_tutup(soket)
 
 Lihat `runtime/web/contoh_kanvas_ws.iso` buat contoh lengkap.
 
+## Interop JS -- manggil library JavaScript pihak ketiga (`js_*`)
+
+Isoteri TIDAK mencoba membangun ekosistem paket sendiri buat saingan npm --
+itu perlombaan yang tidak akan menang. Sebaliknya, `js_*` jadi JEMBATAN:
+numpang penuh di ekosistem JS yang sudah ada (chart, date-picker, form
+library, dst) tanpa perlu nulis ulang semuanya di Isoteri.
+
+**Scope v1 (sengaja dibatasi)**: library yang nempel ke `window` lewat CDN
+(`<script src="https://cdn.../chart.js"></script>` di HTML, otomatis ada
+`window.Chart`) -- BUKAN sistem import/bundler modern (ES modules,
+tree-shaking, npm install). Ini mencakup mayoritas library populer yang
+dipakai langsung di HTML tanpa build step.
+
+```isoteri
+catatan: ambil referensi ke objek/fungsi global JS
+ingat Math = js_global("Math")
+tampilkan js_panggil(Math, "max", 3, 7, 2)          catatan: -> 7
+
+catatan: bikin instans lewat constructor JS (pola 'new Foo(...)')
+ingat DateKtor = js_global("Date")
+ingat sekarang = js_baru(DateKtor)
+tampilkan js_panggil(sekarang, "getFullYear")
+
+catatan: baca/tulis properti objek JS
+js_atur(objek, "nama", "Budi")
+tampilkan js_ambil(objek, "nama")
+
+catatan: panggil fungsi global langsung (bukan method di suatu objek)
+ingat setTimeoutJs = js_global("setTimeout")
+js_panggil_bebas(setTimeoutJs, fungsi() { tampilkan "Selesai!" }, 1000)
+```
+
+**Konversi nilai otomatis** (dua arah):
+- Angka/Desimal/Teks/Bool/Kosong <-> primitif JS biasa.
+- Daftar <-> array JS, Peta <-> object JS literal -- rekursif, otomatis
+  (bisa langsung lewatkan Peta Isoteri sebagai objek konfigurasi library,
+  mis. `js_baru(ChartKtor, kanvas, peta_konfigurasi)`).
+- Elemen DOM (`Instans "ElemenDOM"`, hasil `dom_pilih` dkk) <-> Element JS
+  asli -- bisa langsung dilewatkan ke library yang butuh elemen DOM.
+- Closure/fungsi Isoteri <-> fungsi callback JS asli -- penting buat
+  library yang minta callback (event handler, dst). **Batasan**: cuma
+  argumen JS PERTAMA yang diteruskan ke closure Isoteri (closure harus
+  0 atau 1 parameter, sama seperti `dom_ketika`/`tunda`) -- argumen
+  ke-2 dst dari sisi JS diabaikan untuk saat ini.
+- Objek/fungsi JS lain yang "hidup" (bukan primitif) -> dibungkus jadi
+  **handle** (`Instans "JsObjek"`), BUKAN langsung dikonversi jadi Peta --
+  supaya kemampuan panggil method & baca properti live-nya tetap ada.
+  Pakai `js_ke_peta(objek)` eksplisit kalau memang cuma butuh snapshot
+  datanya (mis. buat `tampilkan`/JSON export).
+
+**Referensi fungsi lengkap**:
+| Fungsi | Kegunaan |
+|---|---|
+| `js_global(nama)` | Ambil referensi ke `window[nama]` (fungsi, constructor, atau namespace). |
+| `js_panggil(objek, metode, ...args)` | Panggil `objek.metode(...args)`. |
+| `js_panggil_bebas(fungsi, ...args)` | Panggil `fungsi(...args)` langsung (bukan method di suatu objek). |
+| `js_baru(konstruktor, ...args)` | `new konstruktor(...args)`. |
+| `js_ambil(objek, properti)` | Baca `objek.properti`. |
+| `js_atur(objek, properti, nilai)` | Tulis `objek.properti = nilai`. |
+| `js_ke_peta(objek)` | Snapshot objek JS jadi Peta Isoteri biasa (data mati, bukan live handle lagi). |
+
+Lihat `runtime/web/uji_interop_js.html` untuk contoh & uji otomatis
+(`Math.max`, `Date`, properti objek, konversi Peta, dan callback).
+
 ## Arsitektur singkat
 
 ```

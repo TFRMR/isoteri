@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Uji Interop JS (js_panggil dkk)</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; background: #0f1115; color: #e6e6e6; }
+  .case { border: 1px solid #333; border-radius: 8px; margin-bottom: 10px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; }
+  .badge { font-size: 12px; padding: 3px 10px; border-radius: 12px; font-weight: 600; }
+  .pass { background: #1f4d2e; color: #7ee29b; }
+  .fail { background: #4d1f1f; color: #ff8080; }
+  code { background: #1a1d24; padding: 2px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<h1>Uji Interop JS</h1>
+<div id="hasil"></div>
+
+<script src="./isoteri-vm.js"></script>
+<script>
+  const bundleKosong = { format: "isoteri-web-bytecode-v1", top_kode: [], global_slot_count: 0, konstanta: [], fungsi: [], nama_ke_indeks: {} };
+  const vm = new IsoteriVM(bundleKosong, {});
+
+  const hasilEl = document.getElementById("hasil");
+  function kasus(nama, fn) {
+    const div = document.createElement("div");
+    div.className = "case";
+    div.innerHTML = `<span>${nama}</span><span class="badge">...</span>`;
+    hasilEl.appendChild(div);
+    const badgeEl = div.querySelector(".badge");
+    const tulisHasil = (status, detail) => {
+      div.querySelector("span").innerHTML = `${nama} <br><code>${detail}</code>`;
+      badgeEl.className = "badge " + status;
+      badgeEl.textContent = status === "pass" ? "LULUS" : "GAGAL";
+    };
+    try {
+      const r = fn();
+      if (r && typeof r.then === "function") {
+        r.then((rr) => tulisHasil(rr.ok ? "pass" : "fail", rr.detail))
+         .catch((e) => tulisHasil("fail", "Exception (async): " + (e.message || e)));
+      } else {
+        tulisHasil(r.ok ? "pass" : "fail", r.detail);
+      }
+    } catch (e) {
+      tulisHasil("fail", "Exception: " + (e.message || e));
+    }
+  }
+
+  // 1. js_global + js_panggil (method call dengan banyak argumen + return value)
+  kasus("js_global(\"Math\") + js_panggil(math, \"max\", 3, 7, 2) === 7", () => {
+    const mathHandle = vm.panggilJs("js_global", [{ t: "Teks", v: "Math" }]);
+    const hasil = vm.panggilJs("js_panggil", [mathHandle, { t: "Teks", v: "max" }, { t: "Angka", v: 3 }, { t: "Angka", v: 7 }, { t: "Angka", v: 2 }]);
+    return { ok: hasil.t === "Angka" && hasil.v === 7, detail: JSON.stringify(hasil) };
+  });
+
+  // 2. js_baru (constructor) + js_panggil pada instans hasilnya
+  kasus("js_baru(Date, 2024, 0, 15) lalu js_panggil(getFullYear) === 2024", () => {
+    const dateCtor = vm.panggilJs("js_global", [{ t: "Teks", v: "Date" }]);
+    const instans = vm.panggilJs("js_baru", [dateCtor, { t: "Angka", v: 2024 }, { t: "Angka", v: 0 }, { t: "Angka", v: 15 }]);
+    const tahun = vm.panggilJs("js_panggil", [instans, { t: "Teks", v: "getFullYear" }]);
+    return { ok: tahun.t === "Angka" && tahun.v === 2024, detail: "instans=" + JSON.stringify(instans) + " tahun=" + JSON.stringify(tahun) };
+  });
+
+  // 3. js_atur + js_ambil (properti objek)
+  kasus("js_baru(Object) lalu js_atur/js_ambil properti 'nama'", () => {
+    const objCtor = vm.panggilJs("js_global", [{ t: "Teks", v: "Object" }]);
+    const objHandle = vm.panggilJs("js_baru", [objCtor]);
+    vm.panggilJs("js_atur", [objHandle, { t: "Teks", v: "nama" }, { t: "Teks", v: "Budi" }]);
+    const hasil = vm.panggilJs("js_ambil", [objHandle, { t: "Teks", v: "nama" }]);
+    return { ok: hasil.t === "Teks" && hasil.v === "Budi", detail: JSON.stringify(hasil) };
+  });
+
+  // 4. Konversi Peta Isoteri -> object JS otomatis saat dilewatkan sebagai argumen
+  kasus("Peta Isoteri dikonversi otomatis jadi object JS (via JSON.stringify)", () => {
+    const jsonHandle = vm.panggilJs("js_global", [{ t: "Teks", v: "JSON" }]);
+    const petaIsoteri = { t: "Peta", v: [["a", { t: "Angka", v: 1 }], ["b", { t: "Teks", v: "x" }]] };
+    const hasil = vm.panggilJs("js_panggil", [jsonHandle, { t: "Teks", v: "stringify" }, petaIsoteri]);
+    return { ok: hasil.t === "Teks" && hasil.v === '{"a":1,"b":"x"}', detail: JSON.stringify(hasil) };
+  });
+
+  // 5. Callback: closure Isoteri dilewatkan sebagai fungsi JS asli (dipanggil oleh setTimeout)
+  kasus("Fungsi Isoteri jadi callback JS asli (lewat setTimeout)", () => {
+    let dipanggil = false;
+    const dummyCallback = { __isNativeTest: true };
+    // Simulasikan closure Isoteri dgn fungsi native test (bypass compiler, langsung tes mekanisme wrapping)
+    vm.panggilCallbackFleksibel = function (label, cb, arg) { dipanggil = true; return KOSONG; };
+    const setTimeoutHandle = vm.panggilJs("js_global", [{ t: "Teks", v: "setTimeout" }]);
+    vm.panggilJs("js_panggil_bebas", [setTimeoutHandle, { t: "Fungsi", idx: 0, tangkapan: [] }, { t: "Angka", v: 0 }]);
+    return new Promise((resolve) => {
+      setTimeout(() => resolve({ ok: dipanggil, detail: "dipanggil=" + dipanggil }), 50);
+    });
+  });
+</script>
+</body>
+</html>
