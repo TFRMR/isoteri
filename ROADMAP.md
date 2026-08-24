@@ -124,6 +124,60 @@ atas ini yang jadi KOMPAS -- kalau ada pilihan mengerjakan item mana
 duluan dan tidak jelas, dahulukan yang paling dekat mendukung 5 poin di
 atas.
 
+### Fondasi jangka panjang: identity, effect, provenance (ditanam dini, bukan ditempel belakangan)
+
+**Dicatat setelah diskusi mendalam soal menanam fondasi analisis statis di
+IR/runtime SEKARANG (selagi arsitektur masih muda & bebas diubah), bukan
+sebagai fitur security yang ditempel belakangan.** Tiga hal, urutan
+prioritas berdasar rasio manfaat:biaya:
+
+1. **Stable Identity** -- setiap operasi bisa ditelusuri balik ke source
+   code. Sudah SETENGAH JALAN: nomor baris per statement sudah ada di
+   seluruh pipeline (`(usize, Stmt)`, dipakai semua pesan error "Baris
+   N: ..."). Yang belum: identitas stabil sampai level
+   instruksi/ekspresi yang BERTAHAN lewat `optimisasi_blok` (mirip debug
+   info gaya DWARF). Manfaat bukan cuma buat analisis keamanan nanti --
+   ini juga jalan pintas ke source map buat debug WASM di browser (celah
+   yang dicatat di bagian WASM) dan pesan error yang lebih presisi.
+   **Worth dikerjakan, biaya moderat.**
+2. **Effect & Boundary** -- compiler tahu operasi mana yang `pure`,
+   `network`, `filesystem`, `database`, dst. INI TITIK KUAT ISOTERI SECARA
+   KEBETULAN: builtin adalah himpunan TERTUTUP (satu `match nama { ... }`
+   di `Instr::PanggilBawaan`/`panggil_bawaan`, tidak ada reflection atau
+   FFI sembarang) -- beda jauh dari JS/Python yang effect-tracking-nya
+   susah sound karena ekosistem paket nyaris tak terbatas. Bikin tabel
+   statis `nama_builtin -> kategori_efek` itu kerja DEFINISI, bukan
+   riset. Propagasi lewat fungsi buatan user (whole-program, fixed-point
+   atas call graph) lebih berat, tapi PAS nempel di titik yang sudah ada:
+   `ekspansi_muat` sudah meratakan semua modul jadi satu program flat
+   sebelum compile -- itu titik alami buat pass analisis whole-program.
+   **Sinergi langsung dengan arah strategis "satu skema, dua sisi" di
+   atas**: compiler yang bisa JAMIN fungsi validasi client-side benar-benar
+   `pure` (nggak nyelip panggil jaringan/filesystem diam-diam) memperkuat
+   cerita itu, bukan proyek yang bersaing arah. **Worth dikerjakan,
+   sinergi tinggi dengan kompas utama.**
+3. **Provenance/taint tracking** -- compiler tahu asal aliran data (input
+   HTTP, file, database, parameter). INI YANG DISCOPE ULANG, bukan
+   dikerjakan penuh: taint tracking granular PER-VALUE (nempel tag di tiap
+   `Value`) punya dua masalah nyata -- (a) biaya memori/performa, langsung
+   berlawanan arah dengan kerjaan representasi flat (`DaftarAngka`/
+   `DaftarDesimal`, 32 byte -> 8 byte per elemen) yang baru selesai; (b)
+   taint analysis yang SOUND itu masalah riset -- bahkan tool besar
+   (CodeQL, Semgrep) masih sering false-positive/negative karena implicit
+   flow, sanitization detection, alias analysis. **Rekomendasi: turunkan
+   granularitas dari hasil poin #2** -- lacak di level FUNGSI (fungsi mana
+   yang bersentuhan dengan `req` parameter HTTP, `baca_berkas`, `unduh`,
+   dst), bukan di level value individual. Jauh lebih murah, masih berguna
+   buat kasus pakai yang dituju (`isoteri test --security`, bug tracing),
+   TANPA butuh riset taint-analysis penuh. **Revisit sebagai proyek
+   terpisah setelah #1 dan #2 solid -- jangan mulai dari sini.**
+
+Potensi jangka panjang (belum dikerjakan, dicatat biar tidak hilang):
+`isoteri test --security`, bug tracing berbasis effect graph, capability
+security (fungsi cuma boleh dipanggil kalau efeknya diizinkan pemanggil),
+AI bug finder yang jalan di atas graph effect+identity ini tanpa perlu
+membongkar arsitektur VM/compiler yang sudah ada.
+
 ---
 
 ## Sudah ada
