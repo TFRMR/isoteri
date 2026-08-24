@@ -1,0 +1,13 @@
+catatan: Workload "fib_rekursif" -- CPU-bound murni, tanpa alokasi objek/list,
+catatan: dipilih supaya mengukur overhead PEMANGGILAN FUNGSI & aritmatika
+catatan: dasar seteliti mungkin, terlepas dari struktur data. N harus identik
+catatan: dengan versi Node.js & Python (lihat README.md di folder ini).
+
+fungsi fib(n: Angka) {
+    kalau (n <= 1) {
+        kembalikan n
+    }
+    kembalikan fib(n - 1) + fib(n - 2)
+}
+
+tampilkan fib(32)

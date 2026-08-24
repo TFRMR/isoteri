@@ -26,3 +26,7 @@ runtime/web/build/
 # wasm-pack build output (regenerate with: wasm-pack build --target web --out-dir pkg)
 isoteri-wasm/pkg/
 runtime/web/pkg/
+
+# Binary hasil `isoteri bangun` (AOT) -- regenerate via perintah di
+# benchmarks/head_to_head/README.md, jangan commit binary besar ke git.
+benchmarks/head_to_head/isoteri/*_aot

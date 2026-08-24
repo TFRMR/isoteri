@@ -1,0 +1,72 @@
+catatan: Workload "validasi_petani" -- beban kerja REPRESENTATIF (bukan
+catatan: micro-benchmark abstrak): logika bisnis nyata dari
+catatan: contoh_satu_skema/skema_petani.iso, dijalankan berulang atas
+catatan: dataset sintetis buat mensimulasikan validasi batch/API di server.
+catatan: N & pola data HARUS identik dengan versi Node.js & Python supaya
+catatan: perbandingan adil (lihat README.md di folder ini).
+
+fungsi validasi_petani(data) {
+    coba {
+        ingat nama = data["nama"]
+        ingat lahan = data["lahan"]
+        ingat hasil_panen = data["hasil_panen"]
+    } tangkap e {
+        kembalikan "Field wajib hilang -- pastikan nama, lahan, dan hasil_panen semua diisi."
+    }
+
+    kalau (nama == "") {
+        kembalikan "Nama tidak boleh kosong."
+    }
+    kalau (panjang(nama) > 100) {
+        kembalikan "Nama terlalu panjang (maksimal 100 karakter)."
+    }
+    kalau (lahan <= 0) {
+        kembalikan "Luas lahan harus lebih dari 0."
+    }
+    kalau (lahan > 10000) {
+        kembalikan "Luas lahan tidak masuk akal (maksimal 10.000 hektar)."
+    }
+    kalau (hasil_panen < 0) {
+        kembalikan "Hasil panen tidak boleh negatif."
+    }
+
+    kembalikan ""
+}
+
+catatan: Generator dataset sintetis deterministik (bukan random asli --
+catatan: supaya Isoteri/Node/Python menghasilkan pola valid/invalid yang
+catatan: PERSIS SAMA dan hasil akhirnya bisa dibandingkan byte-per-byte).
+fungsi buat_data(i) {
+    ingat sisa = i % 5
+    kalau (sisa == 0) {
+        catatan: valid
+        kembalikan {"nama": "Petani Menoreh", "lahan": 2.5, "hasil_panen": 12.0}
+    }
+    kalau (sisa == 1) {
+        catatan: nama kosong -- invalid
+        kembalikan {"nama": "", "lahan": 2.5, "hasil_panen": 12.0}
+    }
+    kalau (sisa == 2) {
+        catatan: lahan negatif -- invalid
+        kembalikan {"nama": "Petani Menoreh", "lahan": -1, "hasil_panen": 12.0}
+    }
+    kalau (sisa == 3) {
+        catatan: lahan kelewat besar -- invalid
+        kembalikan {"nama": "Petani Menoreh", "lahan": 99999, "hasil_panen": 12.0}
+    }
+    catatan: field hilang -- invalid
+    kembalikan {"nama": "Petani Menoreh", "lahan": 2.5}
+}
+
+ingat n = 500000
+ingat jumlah_valid = 0
+ingat i = 0
+ulang (i < n) {
+    ingat data = buat_data(i)
+    ingat pesan = validasi_petani(data)
+    kalau (pesan == "") {
+        jumlah_valid = jumlah_valid + 1
+    }
+    i = i + 1
+}
+tampilkan jumlah_valid

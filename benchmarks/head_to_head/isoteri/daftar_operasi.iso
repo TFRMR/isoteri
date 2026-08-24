@@ -1,0 +1,31 @@
+catatan: Workload "daftar_operasi" -- mensimulasikan pemrosesan data hasil
+catatan: panen: bangun daftar, petakan (transformasi), saring (filter), lalu
+catatan: jumlahkan. N SENGAJA lebih kecil dari workload lain: gabung() di
+catatan: Isoteri itu immutable (mengembalikan Daftar BARU tiap panggilan,
+catatan: lihat docs/REFERENSI.md) -- artinya build list lewat gabung() di
+catatan: dalam loop itu O(n) per panggilan / O(n^2) total. Ini KETERBATASAN
+catatan: NYATA yang jujur dicatat di README.md folder ini, bukan disembunyikan
+catatan: -- N dipilih supaya representatif tanpa jadi micro-benchmark O(n^2)
+catatan: yang menyesatkan. Bandingkan dengan versi Node.js/Python yang pakai
+catatan: push()/append() (O(1) amortized, idiomatik di bahasa masing-masing).
+
+fungsi konversi_ke_rupiah(kg) {
+    kembalikan kg * 5000
+}
+
+fungsi di_atas_ambang(x) {
+    kembalikan x > 1000000
+}
+
+ingat n = 20000
+ingat data = []
+ingat i = 0
+ulang (i < n) {
+    data = gabung(data, i % 500)
+    i = i + 1
+}
+
+ingat nilai_rupiah = petakan(data, "konversi_ke_rupiah")
+ingat signifikan = saring(nilai_rupiah, "di_atas_ambang")
+
+tampilkan jumlah(signifikan)
