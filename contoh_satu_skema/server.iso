@@ -1,0 +1,42 @@
+catatan: server.iso -- sisi BACKEND dari contoh "satu skema, dua sisi".
+catatan: Pakai fungsi validasi_petani() dari skema_petani.iso -- SAMA PERSIS
+catatan: dengan yang dipakai frontend (demo_satu_skema.html) lewat ekspor-web.
+catatan: Tidak ada logika validasi yang ditulis ulang di sini.
+
+muat "skema_petani.iso"
+
+catatan: mock "database" -- daftar in-memory, cukup buat demo (hilang kalau
+catatan: server di-restart). Backend sungguhan tentu pakai database asli.
+ingat data_petani = []
+
+fungsi tangani(req) {
+    kalau (req["metode"] == "OPTIONS") {
+        catatan: preflight CORS -- browser ngirim ini duluan sebelum POST
+        catatan: lintas-origin (demo_satu_skema.html dibuka via file://
+        catatan: atau port beda dari server ini)
+        kembalikan respons_status(204, "")
+    }
+
+    kalau (req["path"] == "/api/petani" dan req["metode"] == "POST") {
+        ingat data = urai_json(req["body"])
+        ingat pesan_error = validasi_petani(data)
+
+        kalau (pesan_error) {
+            tampilkan "Ditolak: " + pesan_error
+            kembalikan respons_status(400, {"error": pesan_error})
+        }
+
+        data_petani = gabung(data_petani, data)
+        tampilkan "Diterima: " + data["nama"]
+        kembalikan {"status": "ok", "pesan": "Data petani tersimpan.", "total": panjang(data_petani)}
+    }
+
+    kalau (req["path"] == "/api/petani" dan req["metode"] == "GET") {
+        kembalikan {"data": data_petani, "total": panjang(data_petani)}
+    }
+
+    kembalikan respons_status(404, {"error": "Rute tidak ditemukan: " + req["path"]})
+}
+
+tampilkan "Server contoh 'satu skema, dua sisi' -- validasi_petani() dipakai identik di backend & frontend."
+server_mulai(8899, "tangani")

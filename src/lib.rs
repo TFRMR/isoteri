@@ -4536,9 +4536,9 @@ fn jalankan_http_server(pustaka: &Pustaka, state: &mut VMState, port: u16, handl
                 eprintln!("Kesalahan di dalam handler server_mulai(): {}", e);
                 let _ = permintaan.respond(tiny_http::Response::from_string(
                     format!("{{\"error\":\"{}\"}}", json_escape(&e))
-                ).with_status_code(500).with_header(
-                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap()
-                ));
+                ).with_status_code(500)
+                .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap())
+                .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap()));
                 continue;
             }
         };
@@ -4546,7 +4546,10 @@ fn jalankan_http_server(pustaka: &Pustaka, state: &mut VMState, port: u16, handl
         let (status_kode, body_teks, content_type) = respons_dari_value(&hasil);
         let respons = tiny_http::Response::from_string(body_teks)
             .with_status_code(status_kode)
-            .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()).unwrap());
+            .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()).unwrap())
+            .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap())
+            .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, PUT, DELETE, OPTIONS"[..]).unwrap())
+            .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type"[..]).unwrap());
         let _ = permintaan.respond(respons);
     }
     Ok(())

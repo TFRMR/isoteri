@@ -105,13 +105,39 @@ menyatukannya jadi satu penulisan.
    HTTP 404 benar, POST ke path custom -> metode & path di `req` terbaca
    benar. Lihat `docs/REFERENSI.md` bagian "HTTP Server" untuk dokumentasi
    & tabel referensi lengkap.
-3. **Contoh nyata + dokumentasi pola "satu skema, dua sisi"** -- prasyarat
-   (interop JS + HTTP server) sekarang SUDAH ADA. Buktikan lewat contoh
-   konkret (bukan cuma teori): `bentuk` + fungsi validasi yang sama dipakai
-   identik di form browser dan endpoint backend. **Prioritas berikutnya.**
+3. **Contoh nyata + dokumentasi pola "satu skema, dua sisi" -- SELESAI &
+   TERVALIDASI.** Folder `contoh_satu_skema/`: `skema_petani.iso` (satu
+   `bentuk Petani` + `fungsi validasi_petani(data)`, SATU sumber
+   kebenaran) dipakai LANGSUNG lewat `muat` oleh `server.iso` (backend,
+   `server_mulai()`) DAN lewat `ekspor-web` (`skema_petani.isoweb.json`)
+   oleh `demo_satu_skema.html` (frontend, validasi instan di browser
+   sebelum `fetch()` ke backend).
+
+   **Perbaikan sampingan ditemukan & dikerjakan selama bikin contoh ini**:
+   `server_mulai()` (item #2) belum kirim header CORS -- browser pasti
+   memblokir `fetch()` lintas-origin (demo dibuka di port static-server
+   beda dari port backend) tanpa ini. Ditambahkan
+   `Access-Control-Allow-Origin: *` dkk ke semua respons (termasuk respons
+   error 500), plus penanganan `OPTIONS` preflight lewat
+   `respons_status(204, "")` biasa di level handler (tidak perlu logika
+   khusus baru di VM).
+
+   Diverifikasi: (1) backend teruji lewat `curl` untuk semua kasus (valid,
+   nama kosong, lahan negatif, field kurang, `OPTIONS` preflight, header
+   CORS ada) -- semua benar; (2) fungsi `validasi_petani()` dipanggil
+   LANGSUNG dari bundel hasil `ekspor-web` lewat Node.js, hasilnya
+   IDENTIK byte-per-byte dengan hasil native (valid -> Teks kosong,
+   invalid -> pesan error yang sama persis) -- bukti konkret "satu skema,
+   dua sisi" bekerja, bukan cuma teori; (3) request cross-origin (header
+   `Origin` disertakan, simulasi kondisi browser sungguhan) dibalas
+   dengan header CORS lengkap; (4) kedua file statis (`demo_satu_skema.html`,
+   `skema_petani.isoweb.json`) bisa diakses lewat static server. **Belum
+   diuji interaksi visual di browser sungguhan** (sandbox kerja tidak
+   punya browser) -- perlu dicoba manual, lihat `contoh_satu_skema/README.md`
+   buat cara menjalankan.
 4. **Benchmark backend Isoteri (AOT) vs Node.js/Python** untuk beban kerja
    yang representatif -- supaya klaim "lebih cepat" punya angka publik,
-   bukan janji.
+   bukan janji. **Prioritas berikutnya.**
 5. **Backend WASM asli** (compile IR Isoteri langsung ke instruksi WASM,
    bukan bytecode JSON yang ditafsirkan `isoteri-vm.js`) -- baru ini yang
    bisa membuka klaim "lebih cepat" DI DALAM browser juga, bukan cuma di

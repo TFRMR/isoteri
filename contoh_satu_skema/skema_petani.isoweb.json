@@ -1,0 +1,337 @@
+{
+  "format": "isoteri-web-bytecode-v1",
+  "fungsi": [
+    {
+      "kode": [
+        [
+          "TandaiBaris",
+          25
+        ],
+        [
+          "MulaiCobaLocal",
+          19,
+          4
+        ],
+        [
+          "TandaiBaris",
+          26
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "PushK",
+          0
+        ],
+        [
+          "Indeks"
+        ],
+        [
+          "StoreLocal",
+          1
+        ],
+        [
+          "TandaiBaris",
+          27
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "PushK",
+          1
+        ],
+        [
+          "Indeks"
+        ],
+        [
+          "StoreLocal",
+          2
+        ],
+        [
+          "TandaiBaris",
+          28
+        ],
+        [
+          "LoadLocal",
+          0
+        ],
+        [
+          "PushK",
+          2
+        ],
+        [
+          "Indeks"
+        ],
+        [
+          "StoreLocal",
+          3
+        ],
+        [
+          "SelesaiCoba"
+        ],
+        [
+          "Lompat",
+          22
+        ],
+        [
+          "TandaiBaris",
+          30
+        ],
+        [
+          "PushK",
+          3
+        ],
+        [
+          "Kembalikan"
+        ],
+        [
+          "TandaiBaris",
+          33
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "PushK",
+          4
+        ],
+        [
+          "BinOp",
+          "SamaDengan"
+        ],
+        [
+          "LompatJikaSalah",
+          30
+        ],
+        [
+          "TandaiBaris",
+          34
+        ],
+        [
+          "PushK",
+          5
+        ],
+        [
+          "Kembalikan"
+        ],
+        [
+          "TandaiBaris",
+          36
+        ],
+        [
+          "LoadLocal",
+          1
+        ],
+        [
+          "PanggilBawaan",
+          "panjang",
+          1
+        ],
+        [
+          "PushK",
+          6
+        ],
+        [
+          "BinOp",
+          "LebihBesar"
+        ],
+        [
+          "LompatJikaSalah",
+          39
+        ],
+        [
+          "TandaiBaris",
+          37
+        ],
+        [
+          "PushK",
+          7
+        ],
+        [
+          "Kembalikan"
+        ],
+        [
+          "TandaiBaris",
+          39
+        ],
+        [
+          "LoadLocal",
+          2
+        ],
+        [
+          "PushK",
+          8
+        ],
+        [
+          "BinOp",
+          "LebihKecilSama"
+        ],
+        [
+          "LompatJikaSalah",
+          47
+        ],
+        [
+          "TandaiBaris",
+          40
+        ],
+        [
+          "PushK",
+          9
+        ],
+        [
+          "Kembalikan"
+        ],
+        [
+          "TandaiBaris",
+          42
+        ],
+        [
+          "LoadLocal",
+          2
+        ],
+        [
+          "PushK",
+          10
+        ],
+        [
+          "BinOp",
+          "LebihBesar"
+        ],
+        [
+          "LompatJikaSalah",
+          55
+        ],
+        [
+          "TandaiBaris",
+          43
+        ],
+        [
+          "PushK",
+          11
+        ],
+        [
+          "Kembalikan"
+        ],
+        [
+          "TandaiBaris",
+          45
+        ],
+        [
+          "LoadLocal",
+          3
+        ],
+        [
+          "PushK",
+          12
+        ],
+        [
+          "BinOp",
+          "LebihKecil"
+        ],
+        [
+          "LompatJikaSalah",
+          63
+        ],
+        [
+          "TandaiBaris",
+          46
+        ],
+        [
+          "PushK",
+          13
+        ],
+        [
+          "Kembalikan"
+        ],
+        [
+          "TandaiBaris",
+          49
+        ],
+        [
+          "PushK",
+          14
+        ],
+        [
+          "Kembalikan"
+        ]
+      ],
+      "local_slot_count": 5,
+      "nama": "validasi_petani",
+      "param_count": 1,
+      "param_flat": [
+        null
+      ]
+    }
+  ],
+  "global_slot_count": 0,
+  "konstanta": [
+    {
+      "t": "Teks",
+      "v": "nama"
+    },
+    {
+      "t": "Teks",
+      "v": "lahan"
+    },
+    {
+      "t": "Teks",
+      "v": "hasil_panen"
+    },
+    {
+      "t": "Teks",
+      "v": "Field wajib hilang -- pastikan nama, lahan, dan hasil_panen semua diisi."
+    },
+    {
+      "t": "Teks",
+      "v": ""
+    },
+    {
+      "t": "Teks",
+      "v": "Nama tidak boleh kosong."
+    },
+    {
+      "t": "Angka",
+      "v": 100
+    },
+    {
+      "t": "Teks",
+      "v": "Nama terlalu panjang (maksimal 100 karakter)."
+    },
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Teks",
+      "v": "Luas lahan harus lebih dari 0."
+    },
+    {
+      "t": "Angka",
+      "v": 10000
+    },
+    {
+      "t": "Teks",
+      "v": "Luas lahan tidak masuk akal (maksimal 10.000 hektar)."
+    },
+    {
+      "t": "Angka",
+      "v": 0
+    },
+    {
+      "t": "Teks",
+      "v": "Hasil panen tidak boleh negatif."
+    },
+    {
+      "t": "Teks",
+      "v": ""
+    }
+  ],
+  "nama_ke_indeks": {
+    "validasi_petani": 0
+  },
+  "top_kode": []
+}

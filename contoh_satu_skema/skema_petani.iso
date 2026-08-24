@@ -1,0 +1,50 @@
+catatan: skema_petani.iso -- SATU sumber kebenaran, dipakai backend (server.iso)
+catatan: dan frontend (demo_satu_skema.html, via ekspor-web) TANPA duplikasi.
+catatan: Ini contoh nyata pola "satu skema, dua sisi" -- lihat bagian
+catatan: "Arah strategis" di ROADMAP.md buat penjelasan lengkap kenapa ini penting.
+
+bentuk Petani {
+    nama: Teks,
+    lahan: Angka,
+    hasil_panen: Desimal
+}
+
+catatan: validasi_petani menerima Peta (data mentah, belum tepercaya -- dari
+catatan: body JSON HTTP di backend, atau dari field form di browser), BUKAN
+catatan: langsung Instans Petani -- karena konstruksi Instans di Isoteri
+catatan: mensyaratkan semua field lengkap & bertipe benar SEJAK AWAL (tidak
+catatan: bisa dipakai buat validasi data yang MUNGKIN belum lengkap/salah
+catatan: tipe). Validasi dulu di sini, baru konstruksi Instans Petani kalau
+catatan: sudah lolos.
+catatan:
+catatan: Kembalikan Teks KOSONG ("") kalau valid, atau pesan error (Teks
+catatan: tidak kosong) kalau tidak valid -- caller cukup `kalau (pesan) {...}`
+catatan: buat cek ada error atau tidak (Teks kosong = salah, sesuai aturan
+catatan: truthy Isoteri).
+fungsi validasi_petani(data) {
+    coba {
+        ingat nama = data["nama"]
+        ingat lahan = data["lahan"]
+        ingat hasil_panen = data["hasil_panen"]
+    } tangkap e {
+        kembalikan "Field wajib hilang -- pastikan nama, lahan, dan hasil_panen semua diisi."
+    }
+
+    kalau (nama == "") {
+        kembalikan "Nama tidak boleh kosong."
+    }
+    kalau (panjang(nama) > 100) {
+        kembalikan "Nama terlalu panjang (maksimal 100 karakter)."
+    }
+    kalau (lahan <= 0) {
+        kembalikan "Luas lahan harus lebih dari 0."
+    }
+    kalau (lahan > 10000) {
+        kembalikan "Luas lahan tidak masuk akal (maksimal 10.000 hektar)."
+    }
+    kalau (hasil_panen < 0) {
+        kembalikan "Hasil panen tidak boleh negatif."
+    }
+
+    kembalikan ""
+}
