@@ -8,17 +8,23 @@ edition = "2021"
 # berperilaku PERSIS seperti sebelum fitur ini ada -- nol risiko regresi buat
 # jalur pakai sehari-hari. "jit": JIT Cranelift (JitEngine/KompilerBadan/
 # KompilerBadanIr). "native-http": builtin unduh() (blocking, pakai ureq).
-# Keduanya WAJIB off saat build ke wasm32 (target isoteri-wasm/) --
-# cranelift-native & ureq butuh API OS asli yang gak ada di browser;
+# "native-server": builtin server_mulai() (blocking, pakai tiny_http --
+# dipilih karena sinkron/blocking, TANPA runtime async (tokio dkk) --
+# konsisten dengan model eksekusi VM yang memang sinkron, dan jauh lebih
+# ringan dependency-nya dibanding server async penuh).
+# SEMUA WAJIB off saat build ke wasm32 (target isoteri-wasm/) --
+# cranelift-native/ureq/tiny_http butuh API OS asli yang gak ada di browser;
 # fungsionalitas yang hilang (JIT jadi bytecode-only -- tetap 100% benar,
-# cuma lebih lambat; unduh() jadi mengembalikan error jelas) dijelaskan di
-# isoteri-wasm/README.md.
-default = ["jit", "native-http"]
+# cuma lebih lambat; unduh()/server_mulai() jadi mengembalikan error jelas)
+# dijelaskan di isoteri-wasm/README.md.
+default = ["jit", "native-http", "native-server"]
 jit = ["cranelift", "cranelift-jit", "cranelift-module", "cranelift-native"]
 native-http = ["ureq"]
+native-server = ["tiny_http"]
 
 [dependencies]
 ureq = { version = "2", optional = true }
+tiny_http = { version = "0.12", optional = true }
 serde_json = "1"
 cranelift = { version = "0.105", optional = true }
 cranelift-jit = { version = "0.105", optional = true }

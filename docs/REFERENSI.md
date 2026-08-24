@@ -428,6 +428,61 @@ Batasan yang perlu diketahui:
 | `tulis_berkas(path, isi)` | `Teks, Teks -> Bool` | Tulis Teks ke file |
 | `unduh(url)` | `Teks -> Teks` | HTTP GET, kembalikan body sebagai Teks |
 
+### HTTP Server (`server_mulai`)
+
+**Cuma native (CLI, `isoteri bangun`), TIDAK tersedia di browser/wasm32**
+(browser tidak bisa buka listening socket TCP -- batasan platform, bukan
+batasan Isoteri). Blocking secara sengaja (konsisten dengan model eksekusi
+VM yang sinkron, sama seperti `unduh()`) -- TIDAK ada runtime async.
+
+Ini prasyarat inti buat pola **"satu skema, dua sisi"** (lihat bagian "Arah
+strategis" di `ROADMAP.md`): `bentuk` + fungsi validasi yang sama bisa
+`muat` dari backend (di sini) DAN frontend (browser, lewat `ekspor-web`)
+tanpa duplikasi/drift antara keduanya.
+
+```isoteri
+fungsi tangani(req) {
+    kalau (req["path"] == "/") {
+        kembalikan "Halo!"                       catatan: Teks -> 200, text/plain
+    }
+    kalau (req["path"] == "/api/petani") {
+        kembalikan {"nama": "Budi", "lahan": 2}   catatan: Peta -> 200, application/json (otomatis)
+    }
+    kembalikan respons_status(404, "Tidak ditemukan")   catatan: status custom
+}
+
+server_mulai(8899, "tangani")   catatan: blocking -- program "berhenti" di sini, layani request selamanya
+```
+
+| Fungsi | Signature | Keterangan |
+|---|---|---|
+| `server_mulai(port, handler)` | `Angka, (Teks \| Fungsi) -> Kosong` | Buka HTTP server di `port`, blocking selamanya (Ctrl+C buat berhenti). `handler` gaya sama seperti callback `petakan`/`urutkan` -- boleh nama fungsi (Teks) atau closure 1 parameter. |
+| `respons_status(kode, nilai)` | `Angka, Nilai -> Instans` | Bungkus `nilai` supaya respons pakai kode status `kode` (100-599) alih-alih default 200. `nilai`-nya sendiri tetap ikut aturan konversi biasa (Teks/Peta/dst) di bawah. |
+
+**Argumen `req` yang diterima `handler`** -- sebuah `Peta` (akses lewat
+`req["..."]`, BUKAN `req....` -- itu cuma berlaku buat `bentuk`):
+
+| Kunci | Tipe | Isi |
+|---|---|---|
+| `"metode"` | Teks | `"GET"`, `"POST"`, dst. |
+| `"path"` | Teks | Path URL, TANPA query string (mis. `/api/petani`). |
+| `"query"` | Peta | Parameter query string (`?a=1&b=2` -> `{"a": "1", "b": "2"}`), semua nilai Teks. |
+| `"header"` | Peta | Header request, nama header -> nilai (Teks). |
+| `"body"` | Teks | Isi body mentah (kosong untuk GET biasa). |
+
+**Nilai balik `handler` diinterpretasi otomatis**:
+
+| Tipe nilai balik | Status | Content-Type | Body |
+|---|---|---|---|
+| `Teks` | 200 | `text/plain` | Teks itu apa adanya |
+| `Peta` / `Daftar` / `Instans` / `Angka` / dst | 200 | `application/json` | Di-serialize otomatis lewat mesin JSON yang sama dipakai `tulis_berkas()` |
+| `Kosong` | 204 | - | kosong |
+| hasil `respons_status(kode, nilai)` | `kode` | ikut aturan `nilai` di atas | ikut aturan `nilai` di atas |
+
+Error yang terjadi DI DALAM `handler` (mis. field yang salah diakses) TIDAK
+menghentikan server -- request itu dibalas 500 dengan pesan error sebagai
+JSON, server tetap jalan melayani request berikutnya.
+
 ---
 
 ## Kompilasi JIT

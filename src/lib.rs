@@ -3919,6 +3919,19 @@ fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_
                             };
                             buat_daftar(hasil_daftar)
                         }
+                        "server_mulai" if *argc == 2 => {
+                            let port = match &state.stack[args_start] {
+                                Value::Angka(n) => *n,
+                                lain => return Err(format!("server_mulai(port, handler): argumen pertama (port) harus Angka, ditemukan {}", lain)),
+                            };
+                            if !(1..=65535).contains(&port) {
+                                return Err(format!("server_mulai(): port harus 1-65535, ditemukan {}", port));
+                            }
+                            let handler = state.stack[args_start + 1].clone();
+                            state.stack.truncate(args_start);
+                            jalankan_http_server(pustaka, state, port as u16, &handler)?;
+                            Value::Kosong
+                        }
                         _ => {
                             let hasil = panggil_bawaan(nama, &state.stack[args_start..])?
                                 .ok_or_else(|| format!("Fungsi \"{}\" tidak ditemukan.", nama))?;
@@ -4136,6 +4149,24 @@ fn panggil_bawaan(nama: &str, args: &[Value]) -> Result<Option<Value>, String> {
         // silent-gagal-kompilasi programnya.
         #[cfg(not(feature = "native-http"))]
         "unduh" => Err("unduh() (versi blocking) tidak tersedia di build ini (mis. isoteri-wasm/) -- pakai unduh_async()/unduh_lanjut_async() kalau target-nya web.".to_string()),
+        // Dipakai bareng server_mulai() -- handler yang mau balikin status code SELAIN 200
+        // bungkus nilainya lewat ini. Tanpa ini, handler yang cuma balikin Teks/Peta biasa
+        // otomatis dianggap status 200 (lihat respons_dari_value() di dekat jalankan_http_server()).
+        "respons_status" => {
+            let kode = match args.get(0) {
+                Some(Value::Angka(n)) => *n,
+                Some(lain) => return Err(format!("respons_status(kode, nilai): argumen pertama (kode status) harus Angka, ditemukan {}", lain)),
+                None => return Err("respons_status(kode, nilai) butuh 2 argumen".to_string()),
+            };
+            if !(100..=599).contains(&kode) {
+                return Err(format!("respons_status(): kode status HTTP harus 100-599, ditemukan {}", kode));
+            }
+            let nilai = args.get(1).cloned().ok_or_else(|| "respons_status(kode, nilai) butuh 2 argumen".to_string())?;
+            Ok(Some(Value::Instans(Rc::from("ResponsHttp"), Rc::new(vec![
+                ("status".to_string(), Value::Angka(kode)),
+                ("nilai".to_string(), nilai),
+            ]))))
+        }
         "ke_desimal" => match args.get(0) {
             Some(Value::Angka(n)) => Ok(Some(Value::Desimal(*n as f64))),
             Some(v @ Value::Desimal(_)) => Ok(Some(v.clone())),
@@ -4444,6 +4475,109 @@ fn json_dari_value(v: &Value) -> String {
         Value::Kosong => "null".to_string(),
         Value::Instans(_, entries) => format!("{{{}}}", entries.iter().map(|(k, v)| format!("\"{}\":{}", json_escape(k), json_dari_value(v))).collect::<Vec<_>>().join(",")),
         Value::Fungsi(_) => "null".to_string(), // fungsi gak bisa direpresentasikan di JSON
+    }
+}
+
+/// server_mulai(port, handler) -- HTTP server BLOCKING (sengaja, konsisten dengan model
+/// eksekusi VM yang sinkron -- sama seperti unduh(); TIDAK ada runtime async/tokio). Prioritas
+/// #2 di "Arah strategis" ROADMAP.md: prasyarat mutlak buat pola "satu skema, dua sisi" --
+/// bentuk + fungsi validasi yang sama bisa di-'muat' dari backend (di sini) DAN frontend
+/// (browser, lewat ekspor-web) tanpa duplikasi/drift.
+///
+/// `handler` dipanggil (lewat panggil_callback_1_arg, mekanisme SAMA dipakai petakan/saring/
+/// urutkan) satu kali per request masuk, dengan SATU argumen: Peta berisi field "metode"
+/// (Teks), "path" (Teks, tanpa query string), "query" (Peta), "header" (Peta), "body" (Teks).
+/// Nilai balik handler diinterpretasi lewat respons_dari_value() -- lihat di situ.
+#[cfg(feature = "native-server")]
+fn jalankan_http_server(pustaka: &Pustaka, state: &mut VMState, port: u16, handler: &Value) -> Result<(), String> {
+    let alamat = format!("0.0.0.0:{}", port);
+    let server = tiny_http::Server::http(&alamat)
+        .map_err(|e| format!("server_mulai(): gagal membuka port {}: {}", port, e))?;
+    eprintln!("Server Isoteri jalan di http://localhost:{}/ (Ctrl+C buat berhenti)", port);
+
+    for mut permintaan in server.incoming_requests() {
+        let metode = permintaan.method().to_string();
+        let url = permintaan.url().to_string();
+        let (path, query_str) = match url.split_once('?') {
+            Some((p, q)) => (p.to_string(), Some(q.to_string())),
+            None => (url.clone(), None),
+        };
+        let query_peta: Vec<(String, Value)> = query_str.map(|q| {
+            q.split('&').filter_map(|pasangan| {
+                if pasangan.is_empty() { return None; }
+                let mut it = pasangan.splitn(2, '=');
+                let k = it.next()?.to_string();
+                let v = it.next().unwrap_or("").to_string();
+                Some((k, Value::Teks(v.into())))
+            }).collect()
+        }).unwrap_or_default();
+        let header_peta: Vec<(String, Value)> = permintaan.headers().iter()
+            .map(|h| (h.field.as_str().to_string(), Value::Teks(h.value.as_str().to_string().into())))
+            .collect();
+
+        let mut body = String::new();
+        use std::io::Read;
+        let _ = permintaan.as_reader().read_to_string(&mut body);
+
+        let req_peta = Value::Peta(Rc::new(vec![
+            ("metode".to_string(), Value::Teks(metode.into())),
+            ("path".to_string(), Value::Teks(path.into())),
+            ("query".to_string(), Value::Peta(Rc::new(query_peta))),
+            ("header".to_string(), Value::Peta(Rc::new(header_peta))),
+            ("body".to_string(), Value::Teks(body.into())),
+        ]));
+
+        let hasil = match panggil_callback_1_arg(pustaka, state, "server_mulai", handler, req_peta) {
+            Ok(v) => v,
+            Err(e) => {
+                // Error di handler TIDAK menghentikan server -- satu request gagal jangan
+                // sampai membunuh proses server buat semua request lain. Log ke stderr,
+                // balas 500 ke klien yang bersangkutan.
+                eprintln!("Kesalahan di dalam handler server_mulai(): {}", e);
+                let _ = permintaan.respond(tiny_http::Response::from_string(
+                    format!("{{\"error\":\"{}\"}}", json_escape(&e))
+                ).with_status_code(500).with_header(
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap()
+                ));
+                continue;
+            }
+        };
+
+        let (status_kode, body_teks, content_type) = respons_dari_value(&hasil);
+        let respons = tiny_http::Response::from_string(body_teks)
+            .with_status_code(status_kode)
+            .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()).unwrap());
+        let _ = permintaan.respond(respons);
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "native-server"))]
+fn jalankan_http_server(_pustaka: &Pustaka, _state: &mut VMState, _port: u16, _handler: &Value) -> Result<(), String> {
+    Err("server_mulai() tidak tersedia di build ini (mis. isoteri-wasm/) -- HTTP server native butuh socket asli yang gak ada di browser.".to_string())
+}
+
+/// Terjemahkan nilai balik handler server_mulai() jadi (kode status, body teks, content-type).
+/// - Instans "ResponsHttp" (dibuat lewat respons_status()) -> pakai kode statusnya, lalu
+///   proses field "nilai" secara REKURSIF lewat aturan yang sama di bawah.
+/// - Teks -> 200, text/plain (body = teks itu apa adanya).
+/// - Kosong -> 204 No Content, body kosong.
+/// - Selain itu (Peta/Daftar/Instans/Angka/dst) -> 200, application/json, di-serialize lewat
+///   json_dari_value() -- REUSE mesin JSON yang sama dipakai tulis_berkas(), bukan encoder baru.
+#[cfg(feature = "native-server")]
+fn respons_dari_value(v: &Value) -> (u16, String, &'static str) {
+    match v {
+        Value::Instans(nama, entries) if nama.as_ref() == "ResponsHttp" => {
+            let kode = entries.iter().find(|(k, _)| k == "status")
+                .and_then(|(_, v)| if let Value::Angka(n) = v { Some(*n as u16) } else { None })
+                .unwrap_or(200);
+            let nilai = entries.iter().find(|(k, _)| k == "nilai").map(|(_, v)| v.clone()).unwrap_or(Value::Kosong);
+            let (_, body, ct) = respons_dari_value(&nilai);
+            (kode, body, ct)
+        }
+        Value::Teks(s) => (200, s.to_string(), "text/plain; charset=utf-8"),
+        Value::Kosong => (204, String::new(), "text/plain"),
+        lain => (200, json_dari_value(lain), "application/json"),
     }
 }
 

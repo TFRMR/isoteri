@@ -77,15 +77,38 @@ menyatukannya jadi satu penulisan.
    Isoteri dipanggil sebagai callback asli oleh `setTimeout` milik JS.
    Lihat `runtime/web/README.md` bagian "Interop JS" untuk dokumentasi &
    referensi fungsi lengkap.
-2. **HTTP server dasar** (dengarkan port, terima request masuk, balas
-   respons) -- prasyarat MUTLAK buat cerita "satu skema, dua sisi": saat
-   ini Isoteri cuma bisa `unduh()` (GET keluar), belum bisa jadi sisi
-   backend yang menjalankan logika bersama itu. Ini gap besar, belum ada
-   sama sekali. Status: belum dikerjakan. **Prioritas berikutnya.**
-3. **Contoh nyata + dokumentasi pola "satu skema, dua sisi"** -- setelah
-   server dasar ada, buktikan lewat contoh konkret (bukan cuma teori):
-   `bentuk` + fungsi validasi yang sama dipakai identik di form browser dan
-   endpoint backend.
+2. **HTTP server dasar -- SELESAI & TERVALIDASI.** `server_mulai(port,
+   handler)` dan `respons_status(kode, nilai)` (`src/lib.rs`, dispatch di
+   `Instr::PanggilBawaan` -- punya akses `pustaka`/`state` buat manggil
+   handler berulang kali per request, pola yang sama dipakai
+   `petakan`/`saring`/`urutkan`). Pakai crate `tiny_http` (fitur Cargo baru
+   "native-server", default ON untuk native, otomatis OFF untuk wasm32 --
+   sudah diverifikasi compile bersih tanpa fitur ini juga, jadi
+   `isoteri-wasm/` tidak kebawa dependency yang tidak relevan). BLOCKING
+   secara sengaja (konsisten dengan model eksekusi VM yang sinkron, sama
+   seperti `unduh()`) -- TIDAK ada runtime async/tokio.
+
+   `handler` menerima SATU argumen: Peta berisi `"metode"`, `"path"`,
+   `"query"` (Peta), `"header"` (Peta), `"body"` (Teks). Nilai balik
+   diinterpretasi otomatis: `Teks` -> 200 text/plain, `Peta`/`Daftar`/
+   `Instans`/dst -> 200 application/json (di-serialize lewat mesin JSON
+   yang SAMA dipakai `tulis_berkas()`, bukan encoder baru), `Kosong` -> 204,
+   dibungkus `respons_status(kode, nilai)` -> status custom. Error di dalam
+   handler TIDAK mematikan server -- request itu dibalas 500, server tetap
+   jalan buat request berikutnya.
+
+   Diverifikasi: (1) 17/17 program contoh masih cocok golden output (nol
+   regresi), (2) build tanpa fitur `native-server` tetap compile bersih
+   (simulasi kondisi wasm32), (3) diuji fungsional sungguhan lewat `curl`
+   ke server yang benar-benar jalan: GET Teks -> text/plain benar, GET Peta
+   -> auto JSON dengan Content-Type benar, `respons_status(404, ...)` ->
+   HTTP 404 benar, POST ke path custom -> metode & path di `req` terbaca
+   benar. Lihat `docs/REFERENSI.md` bagian "HTTP Server" untuk dokumentasi
+   & tabel referensi lengkap.
+3. **Contoh nyata + dokumentasi pola "satu skema, dua sisi"** -- prasyarat
+   (interop JS + HTTP server) sekarang SUDAH ADA. Buktikan lewat contoh
+   konkret (bukan cuma teori): `bentuk` + fungsi validasi yang sama dipakai
+   identik di form browser dan endpoint backend. **Prioritas berikutnya.**
 4. **Benchmark backend Isoteri (AOT) vs Node.js/Python** untuk beban kerja
    yang representatif -- supaya klaim "lebih cepat" punya angka publik,
    bukan janji.
