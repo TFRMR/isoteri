@@ -3,137 +3,742 @@
 <head>
 <meta charset="UTF-8">
 <title>Contoh: Satu Skema, Dua Sisi</title>
+
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; background: #0f1115; color: #e6e6e6; }
-  h1 { font-size: 1.4rem; }
-  p.sub { color: #9aa0a6; margin-top: -0.5rem; }
-  .kotak { background: #1a1d24; border: 1px solid #333; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-  label { display: block; margin-top: 10px; font-size: 13px; color: #9aa0a6; }
-  input { width: 100%; padding: 8px; margin-top: 4px; background: #14161b; border: 1px solid #333; border-radius: 6px; color: #e6e6e6; box-sizing: border-box; }
-  button { margin-top: 14px; padding: 10px 20px; background: #4f8cff; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
-  button:disabled { background: #555; }
-  #pesanValidasi { margin-top: 10px; font-size: 13px; min-height: 20px; }
-  #pesanValidasi.error { color: #ff8080; }
-  #pesanValidasi.ok { color: #7ee29b; }
-  #hasilKirim { margin-top: 14px; padding: 10px; border-radius: 6px; font-size: 13px; white-space: pre-wrap; }
-  #hasilKirim.sukses { background: #1f4d2e; color: #7ee29b; }
-  #hasilKirim.gagal { background: #4d1f1f; color: #ff8080; }
-  code { background: #14161b; padding: 2px 6px; border-radius: 4px; }
+  body {
+    font-family: system-ui, sans-serif;
+    max-width: 640px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    background: #0f1115;
+    color: #e6e6e6;
+  }
+
+  h1 {
+    font-size: 1.4rem;
+  }
+
+  p.sub {
+    color: #9aa0a6;
+    margin-top: -0.5rem;
+  }
+
+  .kotak {
+    background: #1a1d24;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+
+  label {
+    display: block;
+    margin-top: 10px;
+    font-size: 13px;
+    color: #9aa0a6;
+  }
+
+  input {
+    width: 100%;
+    padding: 8px;
+    margin-top: 4px;
+    background: #14161b;
+    border: 1px solid #333;
+    border-radius: 6px;
+    color: #e6e6e6;
+    box-sizing: border-box;
+  }
+
+  button {
+    margin-top: 14px;
+    padding: 10px 20px;
+    background: #4f8cff;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  button:disabled {
+    background: #555;
+    cursor: not-allowed;
+  }
+
+  #pesanValidasi {
+    margin-top: 10px;
+    font-size: 13px;
+    min-height: 20px;
+  }
+
+  #pesanValidasi.error {
+    color: #ff8080;
+  }
+
+  #pesanValidasi.ok {
+    color: #7ee29b;
+  }
+
+  #pesanValidasi.info {
+    color: #9aa0a6;
+  }
+
+  #hasilKirim {
+    margin-top: 14px;
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    white-space: pre-wrap;
+  }
+
+  #hasilKirim.sukses {
+    background: #1f4d2e;
+    color: #7ee29b;
+  }
+
+  #hasilKirim.gagal {
+    background: #4d1f1f;
+    color: #ff8080;
+  }
+
+  code {
+    background: #14161b;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
 </style>
 </head>
+
 <body>
 
 <h1>Contoh: "Satu Skema, Dua Sisi"</h1>
+
 <p class="sub">
-  Fungsi <code>validasi_petani()</code> di form ini adalah kode Isoteri yang SAMA PERSIS
-  dengan yang dipakai server backend (<code>contoh_satu_skema/server.iso</code>) --
-  di-compile dari <code>skema_petani.iso</code> yang sama, tanpa disalin/ditulis ulang.
-  Validasi di bawah terjadi INSTAN di browser (sebelum data dikirim), lalu server
-  MEVALIDASI ULANG data yang sama persis sebelum menyimpan -- dijamin selalu sinkron.
+  Fungsi <code>validasi_petani()</code> di form ini adalah kode Isoteri
+  yang SAMA PERSIS dengan yang dipakai server backend
+  (<code>contoh_satu_skema/server.iso</code>).
+  Keduanya berasal dari <code>skema_petani.iso</code> yang sama,
+  tanpa menyalin atau menulis ulang aturan validasi.
 </p>
 
 <div class="kotak">
+
   <label>Nama Petani</label>
-  <input id="nama" type="text" placeholder="mis. Budi">
+  <input
+    id="nama"
+    type="text"
+    placeholder="mis. Budi"
+  >
 
   <label>Luas Lahan (hektar)</label>
-  <input id="lahan" type="number" placeholder="mis. 2">
+  <input
+    id="lahan"
+    type="number"
+    placeholder="mis. 2"
+  >
 
   <label>Hasil Panen (ton)</label>
-  <input id="hasil_panen" type="number" step="0.1" placeholder="mis. 15.5">
+  <input
+    id="hasil_panen"
+    type="number"
+    step="0.1"
+    placeholder="mis. 15.5"
+  >
 
-  <div id="pesanValidasi"></div>
+  <div id="pesanValidasi" class="info">
+    Memuat skema Isoteri...
+  </div>
 
-  <button id="tombolKirim">Validasi &amp; Kirim ke Server</button>
-  <div id="hasilKirim" style="display:none"></div>
+  <button id="tombolKirim" disabled>
+    Validasi &amp; Kirim ke Server
+  </button>
+
+  <div
+    id="hasilKirim"
+    style="display:none"
+  ></div>
+
 </div>
 
 <p class="sub">
-  Server backend harus jalan di <code>http://localhost:8899</code> --
-  lihat <code>contoh_satu_skema/README.md</code> buat cara menjalankannya.
+  Server backend harus berjalan di
+  <code>http://localhost:8899</code>.
 </p>
 
-<script src="../runtime/web/isoteri-vm.js"></script>
-<script>
-  const teks = (s) => ({ t: "Teks", v: s });
-  const angka = (n) => ({ t: "Angka", v: n });
-  const desimal = (n) => ({ t: "Desimal", v: n });
-  const petaVal = (entries) => ({ t: "Peta", v: entries });
 
-  let vm, idxValidasi;
+<!--
+  Runtime JavaScript Isoteri.
+
+  Karena demo_satu_skema.html berada di:
+
+      contoh_satu_skema/
+
+  sedangkan runtime berada di:
+
+      runtime/web/isoteri-vm.js
+
+  maka path-nya adalah ../runtime/web/...
+-->
+<script src="../runtime/web/isoteri-vm.js"></script>
+
+
+<script>
+
+  /*
+   * ============================================================
+   * HELPER VALUE ISOTERI
+   * ============================================================
+   *
+   * Jangan menggunakan nama:
+   *
+   *   teks
+   *   angka
+   *   desimal
+   *   petaVal
+   *
+   * secara langsung karena runtime Isoteri dapat memiliki
+   * deklarasi dengan nama tersebut.
+   *
+   * Kita gunakan nama lokal yang unik.
+   */
+
+  function buatTeksIsoteri(nilai) {
+    return {
+      t: "Teks",
+      v: nilai
+    };
+  }
+
+  function buatAngkaIsoteri(nilai) {
+    return {
+      t: "Angka",
+      v: nilai
+    };
+  }
+
+  function buatDesimalIsoteri(nilai) {
+    return {
+      t: "Desimal",
+      v: nilai
+    };
+  }
+
+  function buatPetaIsoteri(entries) {
+    return {
+      t: "Peta",
+      v: entries
+    };
+  }
+
+
+  /*
+   * ============================================================
+   * STATE
+   * ============================================================
+   */
+
+  let vm = null;
+  let idxValidasi = null;
+
+
+  /*
+   * ============================================================
+   * MUAT SKEMA
+   * ============================================================
+   *
+   * Memuat:
+   *
+   *   skema_petani.isoweb.json
+   *
+   * yang berasal dari:
+   *
+   *   skema_petani.iso
+   *
+   * Ini adalah skema yang juga digunakan oleh server.
+   */
 
   async function muatSkema() {
-    const resp = await fetch("skema_petani.isoweb.json");
-    const bundle = await resp.json();
-    vm = new IsoteriVM(bundle, { tampilkan: () => {} });
-    vm.jalankan(); // daftarkan bentuk/fungsi top-level
-    idxValidasi = vm.namaKeIndeks["validasi_petani"];
+
+    const pesanEl =
+      document.getElementById("pesanValidasi");
+
+    const tombol =
+      document.getElementById("tombolKirim");
+
+
+    try {
+
+      const resp =
+        await fetch("skema_petani.isoweb.json");
+
+
+      if (!resp.ok) {
+
+        throw new Error(
+          "Gagal memuat skema: HTTP "
+          + resp.status
+        );
+
+      }
+
+
+      const bundle =
+        await resp.json();
+
+
+      /*
+       * Buat VM Isoteri dari bundle web.
+       */
+
+      vm =
+        new IsoteriVM(
+          bundle,
+          {
+            tampilkan: () => {}
+          }
+        );
+
+
+      /*
+       * Jalankan program top-level.
+       *
+       * Ini mendaftarkan bentuk dan fungsi
+       * yang ada di skema.
+       */
+
+      vm.jalankan();
+
+
+      /*
+       * Cari fungsi validasi_petani.
+       */
+
+      idxValidasi =
+        vm.namaKeIndeks["validasi_petani"];
+
+
+      if (idxValidasi === undefined) {
+
+        throw new Error(
+          "Fungsi validasi_petani tidak ditemukan."
+        );
+
+      }
+
+
+      /*
+       * Skema berhasil dimuat.
+       */
+
+      pesanEl.textContent =
+        "Skema Isoteri berhasil dimuat. Silakan isi data.";
+
+      pesanEl.className = "info";
+
+      tombol.disabled = false;
+
+
+      console.log(
+        "Isoteri: skema berhasil dimuat."
+      );
+
+      console.log(
+        "Isoteri: index validasi_petani =",
+        idxValidasi
+      );
+
+
+    } catch (error) {
+
+      console.error(
+        "Gagal memuat skema Isoteri:",
+        error
+      );
+
+
+      pesanEl.textContent =
+        "Gagal memuat skema Isoteri: "
+        + error.message;
+
+      pesanEl.className = "error";
+
+      tombol.disabled = true;
+
+    }
+
   }
+
+
+  /*
+   * ============================================================
+   * BACA FORM
+   * ============================================================
+   *
+   * Data HTML biasa kita ubah menjadi Value
+   * yang dimengerti oleh VM Isoteri.
+   */
 
   function bacaForm() {
-    return petaVal([
-      ["nama", teks(document.getElementById("nama").value)],
-      ["lahan", angka(Number(document.getElementById("lahan").value) || 0)],
-      ["hasil_panen", desimal(Number(document.getElementById("hasil_panen").value) || 0)],
+
+    const nama =
+      document.getElementById("nama").value;
+
+
+    const lahan =
+      Number(
+        document.getElementById("lahan").value
+      ) || 0;
+
+
+    const hasilPanen =
+      Number(
+        document.getElementById("hasil_panen").value
+      ) || 0;
+
+
+    return buatPetaIsoteri([
+
+      [
+        "nama",
+        buatTeksIsoteri(nama)
+      ],
+
+      [
+        "lahan",
+        buatAngkaIsoteri(lahan)
+      ],
+
+      [
+        "hasil_panen",
+        buatDesimalIsoteri(hasilPanen)
+      ]
+
     ]);
+
   }
+
+
+  /*
+   * ============================================================
+   * VALIDASI LANGSUNG
+   * ============================================================
+   *
+   * PENTING:
+   *
+   * Kita TIDAK menulis ulang aturan:
+   *
+   *   nama tidak boleh kosong
+   *   lahan tidak boleh negatif
+   *   dst.
+   *
+   * Kita benar-benar memanggil:
+   *
+   *   validasi_petani()
+   *
+   * dari program Isoteri.
+   */
 
   function validasiLangsung() {
-    const data = bacaForm();
-    const hasil = vm.panggilFungsi1Arg(idxValidasi, data); // <-- fungsi Isoteri ASLI, sama dgn server
-    const pesanEl = document.getElementById("pesanValidasi");
-    if (hasil.v === "") {
-      pesanEl.textContent = "Valid -- siap dikirim.";
-      pesanEl.className = "ok";
-      return null;
-    } else {
-      pesanEl.textContent = hasil.v;
+
+    const pesanEl =
+      document.getElementById("pesanValidasi");
+
+
+    /*
+     * Pastikan VM sudah siap.
+     */
+
+    if (!vm) {
+
+      pesanEl.textContent =
+        "VM Isoteri belum siap.";
+
       pesanEl.className = "error";
-      return hasil.v;
+
+      return "VM Isoteri belum siap.";
+
     }
+
+
+    if (idxValidasi === null) {
+
+      pesanEl.textContent =
+        "Fungsi validasi_petani belum ditemukan.";
+
+      pesanEl.className = "error";
+
+      return "Fungsi validasi_petani belum ditemukan.";
+
+    }
+
+
+    /*
+     * Ambil data dari form.
+     */
+
+    const data =
+      bacaForm();
+
+
+    /*
+     * Panggil fungsi Isoteri ASLI.
+     */
+
+    const hasil =
+      vm.panggilFungsi1Arg(
+        idxValidasi,
+        data
+      );
+
+
+    /*
+     * Fungsi validasi_petani()
+     * mengembalikan teks kosong jika valid.
+     */
+
+    if (hasil.v === "") {
+
+      pesanEl.textContent =
+        "Valid — siap dikirim.";
+
+      pesanEl.className = "ok";
+
+      return null;
+
+    }
+
+
+    /*
+     * Kalau ada pesan berarti tidak valid.
+     */
+
+    pesanEl.textContent =
+      hasil.v;
+
+    pesanEl.className =
+      "error";
+
+    return hasil.v;
+
   }
+
+
+  /*
+   * ============================================================
+   * KIRIM KE SERVER
+   * ============================================================
+   */
 
   async function kirimKeServer() {
-    const pesanError = validasiLangsung();
-    const hasilEl = document.getElementById("hasilKirim");
-    hasilEl.style.display = "block";
+
+    const hasilEl =
+      document.getElementById("hasilKirim");
+
+
+    /*
+     * Validasi di browser dahulu.
+     */
+
+    const pesanError =
+      validasiLangsung();
+
+
+    hasilEl.style.display =
+      "block";
+
+
+    /*
+     * Kalau browser menolak,
+     * jangan kirim ke server.
+     */
+
     if (pesanError) {
-      hasilEl.className = "gagal";
-      hasilEl.textContent = "Tidak dikirim -- validasi browser menolak: " + pesanError;
+
+      hasilEl.className =
+        "gagal";
+
+      hasilEl.textContent =
+        "Tidak dikirim — validasi browser menolak:\n"
+        + pesanError;
+
       return;
+
     }
-    const data = bacaForm();
-    const bodyJson = JSON.stringify({
-      nama: data.v[0][1].v,
-      lahan: data.v[1][1].v,
-      hasil_panen: data.v[2][1].v,
-    });
-    try {
-      const resp = await fetch("http://localhost:8899/api/petani", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: bodyJson,
+
+
+    /*
+     * Ambil data yang sudah valid.
+     */
+
+    const data =
+      bacaForm();
+
+
+    /*
+     * Ubah Value Isoteri menjadi JSON.
+     */
+
+    const bodyJson =
+      JSON.stringify({
+
+        nama:
+          data.v[0][1].v,
+
+        lahan:
+          data.v[1][1].v,
+
+        hasil_panen:
+          data.v[2][1].v
+
       });
-      const json = await resp.json();
+
+
+    console.log(
+      "Mengirim ke server:",
+      bodyJson
+    );
+
+
+    try {
+
+      const resp =
+        await fetch(
+          "http://localhost:8899/api/petani",
+          {
+
+            method: "POST",
+
+            headers: {
+              "Content-Type":
+                "application/json"
+            },
+
+            body: bodyJson
+
+          }
+        );
+
+
+      const json =
+        await resp.json();
+
+
+      /*
+       * Server menerima.
+       */
+
       if (resp.ok) {
-        hasilEl.className = "sukses";
-        hasilEl.textContent = `Server (status ${resp.status}): ${JSON.stringify(json)}\n\n(Server MEVALIDASI ULANG pakai validasi_petani() yang SAMA -- ini bukan cuma dipercaya dari browser.)`;
+
+        hasilEl.className =
+          "sukses";
+
+        hasilEl.textContent =
+          "Server (status "
+          + resp.status
+          + "): "
+          + JSON.stringify(json)
+          + "\n\n"
+          + "Server juga melakukan VALIDASI ULANG "
+          + "menggunakan validasi_petani() "
+          + "yang sama.";
+
+
       } else {
-        hasilEl.className = "gagal";
-        hasilEl.textContent = `Server MENOLAK (status ${resp.status}): ${JSON.stringify(json)}`;
+
+        /*
+         * Server menolak.
+         */
+
+        hasilEl.className =
+          "gagal";
+
+        hasilEl.textContent =
+          "Server MENOLAK (status "
+          + resp.status
+          + "): "
+          + JSON.stringify(json);
+
       }
-    } catch (e) {
-      hasilEl.className = "gagal";
-      hasilEl.textContent = "Gagal hubungi server: " + e.message + "\n\nPastikan server.iso sedang jalan di port 8899.";
+
+
+    } catch (error) {
+
+      console.error(
+        "Gagal menghubungi server:",
+        error
+      );
+
+
+      hasilEl.className =
+        "gagal";
+
+      hasilEl.textContent =
+        "Gagal menghubungi server: "
+        + error.message
+        + "\n\n"
+        + "Pastikan server.iso sedang berjalan "
+        + "di port 8899.";
+
     }
+
   }
 
-  document.getElementById("tombolKirim").addEventListener("click", kirimKeServer);
-  ["nama", "lahan", "hasil_panen"].forEach((id) => {
-    document.getElementById(id).addEventListener("input", () => { if (vm) validasiLangsung(); });
-  });
+
+  /*
+   * ============================================================
+   * EVENT TOMBOL
+   * ============================================================
+   */
+
+  document
+    .getElementById("tombolKirim")
+    .addEventListener(
+      "click",
+      kirimKeServer
+    );
+
+
+  /*
+   * ============================================================
+   * VALIDASI SAAT MENGETIK
+   * ============================================================
+   */
+
+  [
+    "nama",
+    "lahan",
+    "hasil_panen"
+
+  ].forEach(
+    function(id) {
+
+      document
+        .getElementById(id)
+        .addEventListener(
+          "input",
+          function() {
+
+            if (vm) {
+
+              validasiLangsung();
+
+            }
+
+          }
+        );
+
+    }
+  );
+
+
+  /*
+   * ============================================================
+   * START
+   * ============================================================
+   */
 
   muatSkema();
+
 </script>
 
 </body>
