@@ -7,31 +7,31 @@ Wall-clock end-to-end per proses (termasuk startup interpreter/runtime), median 
 
 | Bahasa | Median | Min | Max | Stdev |
 |---|---:|---:|---:|---:|
-| Isoteri (AOT) | 1222.35ms | 1205.94ms | 1247.63ms | 15.88ms |
-| Node.js | 40.08ms | 37.50ms | 47.69ms | 3.33ms |
-| Python | 192.40ms | 188.35ms | 196.51ms | 3.25ms |
+| Isoteri (AOT) | 1210.99ms | 1194.92ms | 1236.10ms | 13.28ms |
+| Node.js | 38.57ms | 35.88ms | 43.59ms | 2.47ms |
+| Python | 188.16ms | 185.40ms | 196.92ms | 3.42ms |
 
-- Node.js 30.5x lebih cepat dari Isoteri
+- Node.js 31.4x lebih cepat dari Isoteri
 - Python 6.4x lebih cepat dari Isoteri
 
 ## fib_rekursif
 
 | Bahasa | Median | Min | Max | Stdev |
 |---|---:|---:|---:|---:|
-| Isoteri (AOT) | 20.94ms | 20.86ms | 21.24ms | 0.16ms |
-| Node.js | 53.97ms | 50.83ms | 61.94ms | 3.74ms |
-| Python | 251.96ms | 243.52ms | 271.77ms | 9.47ms |
+| Isoteri (AOT) | 20.66ms | 20.55ms | 22.03ms | 0.45ms |
+| Node.js | 49.75ms | 47.94ms | 54.86ms | 2.07ms |
+| Python | 244.08ms | 239.83ms | 247.65ms | 2.85ms |
 
-- Isoteri 2.6x lebih cepat dari Node.js
-- Isoteri 12.0x lebih cepat dari Python
+- Isoteri 2.4x lebih cepat dari Node.js
+- Isoteri 11.8x lebih cepat dari Python
 
 ## daftar_operasi
 
 | Bahasa | Median | Min | Max | Stdev |
 |---|---:|---:|---:|---:|
-| Isoteri (AOT) | 4196.78ms | 4043.88ms | 4319.55ms | 112.67ms |
-| Node.js | 32.21ms | 30.15ms | 33.14ms | 0.99ms |
-| Python | 16.12ms | 15.92ms | 18.07ms | 0.86ms |
+| Isoteri (AOT) | 20.00ms | 19.65ms | 20.54ms | 0.27ms |
+| Node.js | 31.15ms | 28.44ms | 33.31ms | 1.78ms |
+| Python | 17.05ms | 15.75ms | 18.48ms | 0.88ms |
 
-- Node.js 130.3x lebih cepat dari Isoteri
-- Python 260.3x lebih cepat dari Isoteri
+- Isoteri 1.6x lebih cepat dari Node.js
+- Python 1.2x lebih cepat dari Isoteri

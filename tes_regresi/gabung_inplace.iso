@@ -1,0 +1,47 @@
+catatan: Kunci perilaku optimasi 'x = gabung(x, item)' (Instr::TambahkanLokal/Global,
+catatan: lihat tambahkan_elemen_inplace() & ekstrak_item_gabung_diri() di src/lib.rs) --
+catatan: dipicu oleh temuan O(n^2) di benchmarks/head_to_head/README.md.
+
+catatan: Kasus 1: pola dasar di top-level (Global) -- build daftar lewat loop
+ingat a = []
+ingat i = 0
+ulang (i < 10) {
+    a = gabung(a, i)
+    i = i + 1
+}
+tampilkan a
+
+catatan: Kasus 2: pola dasar di dalam fungsi (Local)
+fungsi bangun_lokal(n) {
+    ingat hasil = []
+    ingat i = 0
+    ulang (i < n) {
+        hasil = gabung(hasil, i * i)
+        i = i + 1
+    }
+    kembalikan hasil
+}
+tampilkan bangun_lokal(6)
+
+catatan: Kasus 3 -- PALING PENTING: aliasing HARUS tetap immutable. 'salinan' dibuat
+catatan: SEBELUM 'a' diubah lagi lewat gabung() -- 'salinan' TIDAK BOLEH ikut berubah,
+catatan: walau di bawah tenda Rc::make_mut mungkin melihat refcount==1 pada titik
+catatan: tertentu. Ini test yang membuktikan optimasi TIDAK mengorbankan correctness.
+ingat b = gabung(gabung([], 1), 2)
+ingat salinan = b
+b = gabung(b, 3)
+tampilkan salinan
+tampilkan b
+
+catatan: Kasus 4 -- campuran tipe: daftar Angka murni (flat) lalu ditambah Teks harus
+catatan: demosi ke Daftar umum dengan benar (bukan cuma cepat, tapi tetap benar).
+ingat c = [1, 2, 3]
+c = gabung(c, "empat")
+tampilkan c
+
+catatan: Kasus 5 -- gabung() dipakai TANPA pola self-assign (hasil ke variabel BEDA) --
+catatan: harus tetap jalur lama, dan variabel asal TIDAK BOLEH berubah.
+ingat d = [1, 2]
+ingat e = gabung(d, 3)
+tampilkan d
+tampilkan e

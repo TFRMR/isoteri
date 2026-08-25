@@ -2204,6 +2204,19 @@ enum Instr {
     AmbilField(String),
     BuatInstans(String, Vec<String>),
     SetField(String),
+    /// Tambahkan SATU elemen ke Daftar yang disimpan di slot lokal/global, SECARA IN-PLACE
+    /// lewat Rc::make_mut kalau memungkinkan -- O(1) amortized, BUKAN clone seluruh isi list
+    /// tiap panggilan seperti gabung() generik. Kompiler (compile_stmt & IrLower::lower_stmt,
+    /// lihat ekstrak_item_gabung_diri()) memunculkan instruksi ini SEBAGAI GANTI PanggilBawaan
+    /// ("gabung",..)+StoreLocal/Global biasa, HANYA saat mengenali persis bentuk assignment
+    /// 'x = gabung(x, item)' -- pola SANGAT UMUM buat build list di dalam loop yang sebelumnya
+    /// O(n) per panggilan/O(n^2) total (lihat analisis panjang di benchmarks/head_to_head/
+    /// README.md -- temuan ini yang memicu optimasi ini). Makna/hasil akhirnya identik dengan
+    /// gabung() biasa (termasuk pesan error kalau slotnya bukan Daftar) -- lihat
+    /// tambahkan_elemen_inplace(). Stack sebelum: [..., item]. Stack sesudah: kosong (hasil
+    /// ditulis langsung ke slot, bukan didorong balik ke stack seperti PanggilBawaan biasa).
+    TambahkanLokal(usize),
+    TambahkanGlobal(usize),
     /// Duplikasi nilai di puncak stack tanpa mengubahnya -- dipakai buat navigasi rantai
     /// field bersarang (baca "sambil menyimpan" struct perantara supaya bisa di-set balik).
     Dup,
@@ -2450,8 +2463,28 @@ impl Compiler {
 
     fn compile_stmt(&mut self, s: &CStmt, out: &mut Vec<Instr>) {
         match s {
-            CStmt::IngatGlobal(slot, e) | CStmt::UbahGlobal(slot, e) => { self.compile_expr(e, out); out.push(Instr::StoreGlobal(*slot)); }
-            CStmt::IngatLocal(slot, e) | CStmt::UbahLocal(slot, e) => { self.compile_expr(e, out); out.push(Instr::StoreLocal(*slot)); }
+            CStmt::IngatGlobal(slot, e) => { self.compile_expr(e, out); out.push(Instr::StoreGlobal(*slot)); }
+            CStmt::UbahGlobal(slot, e) => {
+                // Peephole: 'x = gabung(x, item)' -> append in-place O(1) amortized, lihat
+                // catatan panjang di ekstrak_item_gabung_diri()/tambahkan_elemen_inplace().
+                if let Some(item) = ekstrak_item_gabung_diri(e, SlotSasaran::Global(*slot)) {
+                    self.compile_expr(item, out);
+                    out.push(Instr::TambahkanGlobal(*slot));
+                } else {
+                    self.compile_expr(e, out);
+                    out.push(Instr::StoreGlobal(*slot));
+                }
+            }
+            CStmt::IngatLocal(slot, e) => { self.compile_expr(e, out); out.push(Instr::StoreLocal(*slot)); }
+            CStmt::UbahLocal(slot, e) => {
+                if let Some(item) = ekstrak_item_gabung_diri(e, SlotSasaran::Lokal(*slot)) {
+                    self.compile_expr(item, out);
+                    out.push(Instr::TambahkanLokal(*slot));
+                } else {
+                    self.compile_expr(e, out);
+                    out.push(Instr::StoreLocal(*slot));
+                }
+            }
             CStmt::UbahFieldGlobal(slot, path, e) => {
                 out.push(Instr::LoadGlobal(*slot));
                 self.compile_ubah_field_path(path, e, out);
@@ -3706,6 +3739,18 @@ fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_
                 Instr::StoreGlobal(s) => { let v = state.stack.pop().unwrap(); state.globals[*s] = v; *pc += 1; }
                 Instr::LoadLocal(s) => { state.stack.push(state.locals_stack[locals_base + *s].clone()); *pc += 1; }
                 Instr::StoreLocal(s) => { let v = state.stack.pop().unwrap(); state.locals_stack[locals_base + *s] = v; *pc += 1; }
+                Instr::TambahkanLokal(s) => {
+                    let item = state.stack.pop().unwrap();
+                    let lama = std::mem::replace(&mut state.locals_stack[locals_base + *s], Value::Kosong);
+                    state.locals_stack[locals_base + *s] = tambahkan_elemen_inplace(lama, item)?;
+                    *pc += 1;
+                }
+                Instr::TambahkanGlobal(s) => {
+                    let item = state.stack.pop().unwrap();
+                    let lama = std::mem::replace(&mut state.globals[*s], Value::Kosong);
+                    state.globals[*s] = tambahkan_elemen_inplace(lama, item)?;
+                    *pc += 1;
+                }
                 Instr::BinOp(op) => {
                     let r = state.stack.pop().unwrap();
                     let l = state.stack.pop().unwrap();
@@ -4000,6 +4045,64 @@ fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_
                 }
             }
     Ok(None)
+}
+
+/// Tambahkan `item` ke `val` (harus salah satu varian Daftar) SECARA IN-PLACE lewat
+/// Rc::make_mut kalau memungkinkan (refcount Rc == 1 -- SATU-SATUNYA pemilik saat ini, yaitu
+/// `val` sendiri yang baru diambil-alih dari slot lewat mem::replace, lihat Instr::TambahkanLokal/
+/// Global di eksekusi_satu). Kalau Rc SEDANG dibagi ke pemilik lain (mis. ada 'ingat y = x' di
+/// baris sebelumnya, y masih pegang versi lama) -- Rc::make_mut otomatis clone dulu SEBELUM
+/// mutasi, correctness immutability tetap terjamin, cuma jalur lambatnya sama seperti gabung()
+/// lama. Inilah yang membuat pola SANGAT UMUM 'x = gabung(x, item)' di dalam loop jadi O(1)
+/// amortized (bukan O(n) per panggilan/O(n^2) total) TANPA mengorbankan semantik immutable
+/// Isoteri di kasus lain (mis. 'y = x' lalu 'x = gabung(x, item)' -- y tetap versi lama, tetap
+/// benar) -- lihat analisis lengkap & angka before/after di benchmarks/head_to_head/README.md.
+fn tambahkan_elemen_inplace(val: Value, item: Value) -> Result<Value, String> {
+    match val {
+        Value::Daftar(mut d) => { Rc::make_mut(&mut d).push(item); Ok(Value::Daftar(d)) }
+        Value::DaftarAngka(mut d) => match item {
+            Value::Angka(n) => { Rc::make_mut(&mut d).push(n); Ok(Value::DaftarAngka(d)) }
+            lain => {
+                // Item bukan Angka -- demosi ke Daftar umum (jalur langka, sama-sama lebih
+                // lambat seperti gabung() lama untuk kasus campuran tipe, correctness tetap
+                // terjaga -- cuma jalur cepatnya yang tidak berlaku di sini).
+                let mut baru: Vec<Value> = d.iter().map(|n| Value::Angka(*n)).collect();
+                baru.push(lain);
+                Ok(Value::Daftar(Rc::new(baru)))
+            }
+        },
+        Value::DaftarDesimal(mut d) => match item {
+            Value::Desimal(x) => { Rc::make_mut(&mut d).push(x); Ok(Value::DaftarDesimal(d)) }
+            lain => {
+                let mut baru: Vec<Value> = d.iter().map(|x| Value::Desimal(*x)).collect();
+                baru.push(lain);
+                Ok(Value::Daftar(Rc::new(baru)))
+            }
+        },
+        // Pesan error SENGAJA sama persis kata-katanya dengan gabung() biasa (lihat
+        // panggil_bawaan match "gabung") -- dari sudut pandang pengguna Isoteri, ini efeknya
+        // harus 100% tak terbedakan dari 'x = gabung(x, item)' biasa, cuma lebih cepat.
+        lain => Err(format!("gabung() argumen pertama harus Daftar, ditemukan {}", lain)),
+    }
+}
+
+/// Kalau `e` persis berbentuk 'gabung(<slot yang sama dengan target>, item)' -- pola SANGAT
+/// UMUM 'x = gabung(x, item)' di dalam loop -- kembalikan referensi ke ekspresi `item`-nya
+/// supaya caller (Compiler::compile_stmt & IrLower::lower_stmt) bisa mengganti jalur
+/// StoreLocal/Global generik dengan Instr::TambahkanLokal/Global yang O(1) amortized (lihat
+/// tambahkan_elemen_inplace()). None kalau bentuknya bukan pola ini PERSIS -- caller tetap
+/// pakai jalur gabung() generik lama, correctness tidak pernah dikorbankan demi kecepatan
+/// (mis. 'x = gabung(y, item)' atau 'x = gabung(x, item) + 1' TIDAK cocok, sengaja jatuh ke
+/// jalur lambat lama -- optimasi ini SEMPIT & konservatif, bukan analisis alias umum).
+fn ekstrak_item_gabung_diri(e: &CExpr, target: SlotSasaran) -> Option<&CExpr> {
+    let CExpr::Panggil(nama, args) = e else { return None };
+    if nama != "gabung" || args.len() != 2 { return None; }
+    let cocok = match (&args[0], target) {
+        (CExpr::Local(s), SlotSasaran::Lokal(t)) => *s == t,
+        (CExpr::Global(s), SlotSasaran::Global(t)) => *s == t,
+        _ => false,
+    };
+    if cocok { Some(&args[1]) } else { None }
 }
 
 /// Standard Library dasar: daftar, peta/JSON, berkas, jaringan.
@@ -5794,12 +5897,33 @@ impl<'a> IrLower<'a> {
 
     fn lower_stmt(&mut self, s: &CStmt, out: &mut Vec<IrInstr>) {
         match s {
-            CStmt::IngatGlobal(slot, e) | CStmt::UbahGlobal(slot, e) => {
+            CStmt::IngatGlobal(slot, e) => {
                 let (r, _) = self.lower_expr(e, out);
                 out.push(IrInstr::StoreGlobal(*slot, r));
             }
-            CStmt::IngatLocal(slot, e) | CStmt::UbahLocal(slot, e) => {
+            CStmt::UbahGlobal(slot, e) => {
+                // Peephole SAMA seperti Compiler::compile_stmt (lihat catatan panjang di
+                // ekstrak_item_gabung_diri()/tambahkan_elemen_inplace()) -- dibungkus lewat
+                // escape hatch IrInstr::Legacy karena Instr::TambahkanGlobal langsung menulis
+                // ke slot (tidak butuh register tujuan/StoreGlobal terpisah seperti jalur umum).
+                if let Some(item) = ekstrak_item_gabung_diri(e, SlotSasaran::Global(*slot)) {
+                    let (r, _) = self.lower_expr(item, out);
+                    out.push(IrInstr::Legacy(vec![Instr::LoadLocal(r as usize), Instr::TambahkanGlobal(*slot)], None));
+                } else {
+                    let (r, _) = self.lower_expr(e, out);
+                    out.push(IrInstr::StoreGlobal(*slot, r));
+                }
+            }
+            CStmt::IngatLocal(slot, e) => {
                 self.lower_expr_ke(e, out, Some(*slot as u32));
+            }
+            CStmt::UbahLocal(slot, e) => {
+                if let Some(item) = ekstrak_item_gabung_diri(e, SlotSasaran::Lokal(*slot)) {
+                    let (r, _) = self.lower_expr(item, out);
+                    out.push(IrInstr::Legacy(vec![Instr::LoadLocal(r as usize), Instr::TambahkanLokal(*slot)], None));
+                } else {
+                    self.lower_expr_ke(e, out, Some(*slot as u32));
+                }
             }
             CStmt::UbahFieldGlobal(_, _, _) | CStmt::UbahFieldLocal(_, _, _)
             | CStmt::UbahJalurGlobal(_, _, _) | CStmt::UbahJalurLocal(_, _, _) => {
@@ -6389,6 +6513,8 @@ fn instr_ke_json(instr: &Instr) -> Result<serde_json::Value, String> {
         Instr::AmbilField(f) => json!(["AmbilField", f]),
         Instr::BuatInstans(nama, fields) => json!(["BuatInstans", nama, fields]),
         Instr::SetField(f) => json!(["SetField", f]),
+        Instr::TambahkanLokal(s) => json!(["TambahkanLokal", s]),
+        Instr::TambahkanGlobal(s) => json!(["TambahkanGlobal", s]),
         Instr::Dup => json!(["Dup"]),
         Instr::Tampilkan => json!(["Tampilkan"]),
         Instr::Pop => json!(["Pop"]),

@@ -70,11 +70,11 @@ Hasil tersimpan di `hasil/HASIL.md` (ringkasan) dan `hasil/hasil_mentah.json`
 
 ## Hasil (ringkasan -- lihat `hasil/HASIL.md` untuk angka lengkap)
 
-| Workload | Pemenang | Margin |
-|---|---|---|
-| `fib_rekursif` | **Isoteri (AOT)** | 2.6x lebih cepat dari Node.js, 12x dari Python |
-| `validasi_petani` | Node.js | Isoteri 30x LEBIH LAMBAT dari Node.js, 6x lebih lambat dari Python |
-| `daftar_operasi` | Python | Isoteri 260x LEBIH LAMBAT dari Python, 130x dari Node.js |
+| Workload | Pemenang | Margin | Status |
+|---|---|---|---|
+| `fib_rekursif` | **Isoteri (AOT)** | 2.4x lebih cepat dari Node.js, 12x dari Python | Sudah cepat sejak awal |
+| `validasi_petani` | Node.js | Isoteri 31x LEBIH LAMBAT dari Node.js, 6x lebih lambat dari Python | **MASIH BOTTLENECK** -- lihat bagian analisis |
+| `daftar_operasi` | **Isoteri (AOT)** vs Node.js | Isoteri 1.6x lebih cepat dari Node, Python 1.2x lebih cepat dari Isoteri | **DIPERBAIKI** -- dulu kalah 130-260x, lihat catatan di bawah |
 
 **Ini bukan salah ketik.** Isoteri AOT menang telak di komputasi murni
 (`fib_rekursif`), tapi kalah jauh di dua workload lain. Ini temuan yang
@@ -84,41 +84,67 @@ ROADMAP.md -- bukan cherry-picking hasil yang bagus saja.
 ## Analisis: kenapa hasilnya timpang begini?
 
 Investigasi cepat (lihat riwayat kerja) mengisolasi penyebabnya jadi dua
-karakteristik nyata Isoteri saat ini, BUKAN bug di benchmark:
+karakteristik nyata Isoteri saat ini, BUKAN bug di benchmark. Yang pertama
+(`gabung()`) SUDAH DIPERBAIKI setelah benchmark ini pertama kali
+dijalankan -- lihat status di tiap bagian di bawah.
 
-### 1. `gabung()` (list append) bersifat immutable -- O(n) per panggilan
+### 1. `gabung()` (list append) bersifat immutable -- SUDAH DIPERBAIKI ✅
 
-Didokumentasikan di `docs/REFERENSI.md`: `gabung(daftar, item)`
-"kembalikan Daftar BARU dengan item ditambahkan di akhir" -- artinya
+**Temuan awal**: Didokumentasikan di `docs/REFERENSI.md`, `gabung(daftar,
+item)` "kembalikan Daftar BARU dengan item ditambahkan di akhir" -- artinya
 tiap panggilan meng-copy seluruh isi list sejauh ini. Build list N elemen
 lewat `gabung()` di dalam loop itu O(n) per panggilan / **O(n^2) total**.
-Node.js `.push()` dan Python `.append()` itu O(1) amortized (standar
-industri). Ini penyebab utama `daftar_operasi` kalah 130-260x meski N-nya
-cuma 20.000 (dipilih kecil justru supaya tidak timeout -- dengan N=1 juta
-seperti draft awal, Isoteri AOT tidak selesai dalam waktu wajar sama
-sekali).
+Ini penyebab utama `daftar_operasi` awalnya kalah 130-260x dari Node.js/
+Python.
 
-**Implikasi buat roadmap**: `gabung()` versi amortized O(1) (append
-sungguhan ke buffer yang sama, bukan copy penuh) adalah kandidat optimasi
-BERDAMPAK TINGGI -- lebih penting daripada backend WASM asli (item #5),
-karena ini membatasi HAMPIR SEMUA program Isoteri yang memproses data
-dalam list, bukan cuma kasus ekstrem.
+**Perbaikan**: Ditambahkan optimasi compiler (lihat
+`ekstrak_item_gabung_diri()` & `tambahkan_elemen_inplace()` di
+`src/lib.rs`, dan `Instr::TambahkanLokal`/`TambahkanGlobal`) yang
+mendeteksi pola bytecode PERSIS `x = gabung(x, item)` -- pola paling umum
+buat build list di dalam loop -- lalu menggantinya dengan append in-place
+lewat `Rc::make_mut` (O(1) amortized kalau list itu tidak sedang di-alias
+variabel lain; kalau di-alias, tetap clone seperti biasa -- correctness
+immutability TIDAK PERNAH dikorbankan demi kecepatan). Diimplementasikan
+di KEDUA jalur compiler (bytecode lama `compile_stmt` DAN jalur IR yang
+dipakai `isoteri bangun`/AOT `lower_stmt` -- sempat ketahuan keduanya
+terpisah, jadi harus difix dua-duanya supaya AOT benar-benar kebagian
+manfaatnya).
 
-### 2. Konstruksi `Peta` literal + `coba/tangkap` (try/catch) berat per panggilan
+**Hasil sesudah perbaikan** (workload `daftar_operasi`, N=20.000 sama
+persis, TIDAK diubah supaya perbandingan before/after adil):
+
+| | Sebelum | Sesudah |
+|---|---:|---:|
+| Isoteri (AOT) | ~4.070ms | **~20ms** |
+| vs Node.js | 130x lebih lambat | **1.6x lebih cepat** |
+| vs Python | 260x lebih lambat | 1.2x lebih lambat |
+
+**Verifikasi correctness**: 13/13 test regresi lulus (`scripts/regresi.sh`,
+termasuk `tes_regresi/gabung_inplace.iso` yang baru ditulis khusus buat
+mengunci perilaku ini -- termasuk kasus ALIASING eksplisit: `salinan = b`
+lalu `b = gabung(b, item)` -- `salinan` HARUS tetap versi lama, dan
+memang terverifikasi tetap benar lewat 3 jalur eksekusi sekaligus, bukan
+cuma AOT).
+
+### 2. Konstruksi `Peta` literal + `coba/tangkap` (try/catch) berat per panggilan -- BELUM DIPERBAIKI
 
 Isolasi manual (lihat riwayat kerja sesi ini) menunjukkan: bikin `Peta`
 literal 500.000 kali makan ~0.5 detik sendirian; menambah `coba/tangkap` +
 3 kali akses indeks Peta menambah ~0.3 detik lagi. V8 (Node.js) dan
 CPython punya implementasi dict/exception yang sudah dioptimasi puluhan
 tahun (hidden classes/inline caching di V8, dict yang diimplementasi C
-native di CPython) -- Isoteri belum kompetitif di sini.
+native di CPython) -- Isoteri belum kompetitif di sini. Workload
+`validasi_petani` MASIH 31x lebih lambat dari Node.js setelah perbaikan
+`gabung()` di atas -- karena penyebabnya memang beda, belum tersentuh.
 
 **Implikasi buat roadmap**: ini area optimasi terpisah dari `gabung()` --
 kemungkinan representasi `Peta` (saat ini kemungkinan besar masih
 `HashMap`/`Vec` generik per instans) dan/atau overhead setup frame
-`coba/tangkap` di VM. Worth diteliti lebih lanjut sebagai item roadmap
-baru, TAPI di luar scope item #4 (benchmark) ini -- item ini cuma
-melaporkan angka, bukan memperbaikinya.
+`coba/tangkap` di VM. Ini SEKARANG jadi kandidat optimasi prioritas
+tertinggi berikutnya (menyusul `gabung()` yang sudah selesai) -- lebih
+penting daripada backend WASM asli (item #5 roadmap), karena membatasi
+program apa pun yang validasi/proses banyak record berstruktur, bukan
+cuma kasus ekstrem.
 
 ### Kenapa `fib_rekursif` menang telak
 
@@ -130,19 +156,26 @@ bytecode murni, tanpa JIT sama sekali secara default).
 
 ## Kesimpulan jujur
 
-Klaim "Isoteri lebih cepat di backend" **BENAR TAPI BERSYARAT**: cuma
-valid untuk kode yang CPU-bound / komputasi-berat tanpa banyak alokasi
-list/map. Untuk kode yang berat di alokasi struktur data (kasus umum di
-banyak aplikasi web nyata, termasuk `validasi_petani` yang notabene contoh
-utama use-case Isoteri sendiri!), Isoteri AOT saat ini KALAH JAUH dari
-Node.js maupun Python.
+Klaim "Isoteri lebih cepat di backend" **BENAR UNTUK 2 DARI 3 WORKLOAD**
+setelah perbaikan `gabung()`: `fib_rekursif` (CPU murni) dan
+`daftar_operasi` (build+map+filter list) sekarang sama cepat atau lebih
+cepat dari Node.js. Yang MASIH bersyarat: kode yang berat di alokasi
+`Peta`/`coba-tangkap` (`validasi_petani`, notabene contoh utama use-case
+Isoteri sendiri!) -- Isoteri AOT di sana masih 31x lebih lambat dari
+Node.js. Ini bukan lagi kandidat optimasi yang "mungkin penting" --
+angkanya sudah membuktikan ini BLOCKER NYATA buat klaim "lebih cepat di
+backend" secara umum, bukan cuma di kasus tertentu.
 
 Ini bukan alasan untuk berhenti -- ini justru PETA JALAN OPTIMASI yang
-jelas dan terukur: perbaiki `gabung()` jadi amortized O(1), dan
-selidiki/optimasi biaya konstruksi `Peta` + `coba/tangkap`. Setelah itu,
-jalankan ulang benchmark yang SAMA PERSIS di folder ini untuk lihat
-progress -- itulah gunanya benchmark ini ada sebagai aset permanen di
-repo, bukan cuma laporan sekali pakai.
+
+jelas dan terukur: `gabung()` SUDAH diperbaiki jadi amortized O(1)
+(lihat hasil before/after di atas -- ini yang membuktikan pendekatan
+"benchmark jujur -> temuan konkret -> perbaikan terukur" ini bekerja).
+Berikutnya: selidiki/optimasi biaya konstruksi `Peta` + `coba/tangkap`,
+yang sekarang jadi bottleneck TERBESAR yang tersisa. Jalankan ulang
+benchmark yang SAMA PERSIS di folder ini untuk lihat progress ke depannya
+-- itulah gunanya benchmark ini ada sebagai aset permanen di repo, bukan
+cuma laporan sekali pakai.
 
 ## Keterbatasan benchmark ini
 
