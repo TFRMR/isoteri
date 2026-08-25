@@ -1,0 +1,45 @@
+catatan: Kunci perilaku Peta/Instans setelah kunci-nya diubah dari String jadi
+catatan: Rc<str> (lihat catatan panjang di enum Value::Peta di src/lib.rs) --
+catatan: dipicu oleh temuan 31x lebih lambat di benchmarks/head_to_head/README.md
+catatan: (workload validasi_petani, bottleneck #2).
+
+catatan: Kasus 1: Peta literal dibuat BERULANG di dalam loop -- ini pola yang
+catatan: tadinya lambat (clone String kunci tiap kali). Pastikan isinya tetap
+catatan: benar tiap iterasi, bukan cuma cepat.
+ingat i = 0
+ingat total = 0
+ulang (i < 5) {
+    ingat p = {"a": i, "b": i * 2}
+    total = total + p["a"] + p["b"]
+    i = i + 1
+}
+tampilkan total
+
+catatan: Kasus 2: SetIndeks (ubah nilai kunci yang sudah ada) dan tambah kunci
+catatan: baru yang belum ada -- dua jalur kode berbeda di set_indeks_value.
+ingat q = {"x": 1}
+q["x"] = 99
+q["y"] = 2
+tampilkan q
+
+catatan: Kasus 3: bentuk/struct dibuat berulang di dalam loop + akses & ubah field.
+bentuk Titik { x, y }
+ingat j = 0
+ingat jumlah_x = 0
+ulang (j < 4) {
+    ingat t = Titik { x: j, y: j + 100 }
+    t.x = t.x + 1
+    jumlah_x = jumlah_x + t.x
+    j = j + 1
+}
+tampilkan jumlah_x
+
+catatan: Kasus 4: dua Peta/Instans dengan kunci SAMA (mis. sama-sama field "nama")
+catatan: harus tetap dianggap entitas independen -- ubah satu tidak boleh
+catatan: mempengaruhi yang lain, walau kunci string-nya sekarang Rc (shared
+catatan: allocation di bawah tenda tidak boleh bocor jadi shared MUTATION).
+ingat r1 = {"nama": "satu"}
+ingat r2 = {"nama": "dua"}
+r1["nama"] = "satu-diubah"
+tampilkan r1
+tampilkan r2

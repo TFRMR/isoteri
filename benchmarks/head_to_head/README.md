@@ -73,7 +73,7 @@ Hasil tersimpan di `hasil/HASIL.md` (ringkasan) dan `hasil/hasil_mentah.json`
 | Workload | Pemenang | Margin | Status |
 |---|---|---|---|
 | `fib_rekursif` | **Isoteri (AOT)** | 2.4x lebih cepat dari Node.js, 12x dari Python | Sudah cepat sejak awal |
-| `validasi_petani` | Node.js | Isoteri 31x LEBIH LAMBAT dari Node.js, 6x lebih lambat dari Python | **MASIH BOTTLENECK** -- lihat bagian analisis |
+| `validasi_petani` | Node.js | Isoteri 29x LEBIH LAMBAT dari Node.js, 6x lebih lambat dari Python | **SEBAGIAN diperbaiki** (~16%), MASIH bottleneck terbesar -- lihat bagian analisis |
 | `daftar_operasi` | **Isoteri (AOT)** vs Node.js | Isoteri 1.6x lebih cepat dari Node, Python 1.2x lebih cepat dari Isoteri | **DIPERBAIKI** -- dulu kalah 130-260x, lihat catatan di bawah |
 
 **Ini bukan salah ketik.** Isoteri AOT menang telak di komputasi murni
@@ -126,25 +126,61 @@ lalu `b = gabung(b, item)` -- `salinan` HARUS tetap versi lama, dan
 memang terverifikasi tetap benar lewat 3 jalur eksekusi sekaligus, bukan
 cuma AOT).
 
-### 2. Konstruksi `Peta` literal + `coba/tangkap` (try/catch) berat per panggilan -- BELUM DIPERBAIKI
+### 2. Konstruksi `Peta` literal + `coba/tangkap` (try/catch) berat per panggilan -- SEBAGIAN diperbaiki (~16%)
 
-Isolasi manual (lihat riwayat kerja sesi ini) menunjukkan: bikin `Peta`
-literal 500.000 kali makan ~0.5 detik sendirian; menambah `coba/tangkap` +
-3 kali akses indeks Peta menambah ~0.3 detik lagi. V8 (Node.js) dan
-CPython punya implementasi dict/exception yang sudah dioptimasi puluhan
-tahun (hidden classes/inline caching di V8, dict yang diimplementasi C
-native di CPython) -- Isoteri belum kompetitif di sini. Workload
-`validasi_petani` MASIH 31x lebih lambat dari Node.js setelah perbaikan
-`gabung()` di atas -- karena penyebabnya memang beda, belum tersentuh.
+**Temuan awal**: Isolasi manual menunjukkan bikin `Peta` literal 500.000
+kali makan ~0.5 detik sendirian; menambah `coba/tangkap` + 3 kali akses
+indeks Peta menambah ~0.3 detik lagi.
 
-**Implikasi buat roadmap**: ini area optimasi terpisah dari `gabung()` --
-kemungkinan representasi `Peta` (saat ini kemungkinan besar masih
-`HashMap`/`Vec` generik per instans) dan/atau overhead setup frame
-`coba/tangkap` di VM. Ini SEKARANG jadi kandidat optimasi prioritas
-tertinggi berikutnya (menyusul `gabung()` yang sudah selesai) -- lebih
-penting daripada backend WASM asli (item #5 roadmap), karena membatasi
-program apa pun yang validasi/proses banyak record berstruktur, bukan
-cuma kasus ekstrem.
+**Investigasi lanjutan**: `Peta` (dan `Instans`/struct) di Isoteri itu
+`Rc<Vec<(String, Value)>>` -- bukan `HashMap`. Nama field-nya (`"nama"`,
+`"lahan"`, dst) tersimpan sebagai `String` biasa di dalam instruksi
+bytecode `MakePeta`/`BuatInstans`, dan di-clone ulang (heap allocation)
+SETIAP KALI literal itu dieksekusi -- padahal nama field itu konstan,
+sama persis tiap kali. Pola sama seperti `gabung()` sebelumnya, cuma di
+tempat berbeda.
+
+**Perbaikan yang diterapkan**: kunci `Peta`/`Instans` diubah dari
+`String` jadi `Rc<str>` di seluruh codebase (`enum Value`, `enum Instr`,
+`enum IrInstr`, dan semua titik pemakaiannya -- lihat commit terkait).
+Konversi `String -> Rc<str>` sekarang cuma terjadi SEKALI saat kompilasi
+(bukan tiap eksekusi); saat runtime, clone kunci jadi `Rc::clone`
+(refcount++, bukan heap-alloc+memcpy).
+
+**Hasil**: `validasi_petani` AOT membaik dari **~1226ms ke ~1031ms**
+(~16% lebih cepat) -- REAL, tapi jauh dari cukup untuk menutup jarak ke
+Node.js (35.7ms). **Ini bukan optimasi yang salah, cuma bukan penyebab
+UTAMA yang tersisa.**
+
+**Kenapa perbaikannya kecil**: setelah kunci jadi murah untuk di-clone,
+sisa biaya per pemanggilan `buat_data()` (dipanggil 500.000 kali) adalah
+DUA alokasi heap yang TIDAK tersentuh oleh perbaikan ini:
+1. Buffer `Vec<(Rc<str>, Value)>` baru buat isi Peta -- dialokasikan
+   ulang tiap panggilan (menyimpan value-nya, bukan cuma kunci).
+2. Box `Rc::new(...)` pembungkus `Value::Peta` itu sendiri.
+
+Ditambah overhead dispatch instruksi VM (setiap satu operasi bahasa,
+termasuk `coba/tangkap`, adalah beberapa langkah `match` di dalam loop
+VM) yang skalanya proporsional dengan jumlah instruksi total (500.000
+iterasi x puluhan instruksi/iterasi = puluhan juta siklus dispatch).
+
+**(Koreksi)**: Sempat salah menduga `Value::Teks` (tipe nilai teks)
+JUGA masih pakai `String` biasa dengan masalah sama -- ternyata SUDAH
+`Rc<str>` sejak awal (salah baca hasil `grep`, ketemu `Token` di lexer
+yang kebetulan sama-sama bernama field `Teks(String)`, bukan `Value`).
+Dicatat di sini demi transparansi -- bukan penyebab, sudah dikonfirmasi
+lewat pembacaan ulang kode sumber.
+
+**Implikasi buat roadmap**: sisa bottleneck ini levelnya lebih dalam
+dari "ganti tipe kunci" -- perlu salah satu dari: (a) arena/bump
+allocator khusus buat `Peta`/`Instans` kecil supaya alokasi jadi jauh
+lebih murah dari `malloc` umum, (b) representasi "small map inline"
+(mirip `SmallVec`) buat Peta dengan sedikit field supaya tidak perlu
+heap allocation sama sekali untuk kasus umum, atau (c) optimasi dispatch
+VM secara umum (bukan spesifik ke Peta). Ini PEKERJAAN JAUH LEBIH BESAR
+dari 2 perbaikan sebelumnya (`gabung()` dan kunci `Peta`) -- di luar
+scope "quick fix" satu sesi, perlu direncanakan sebagai item roadmap
+tersendiri dengan desain matang, bukan tempelan lagi.
 
 ### Kenapa `fib_rekursif` menang telak
 
@@ -160,22 +196,28 @@ Klaim "Isoteri lebih cepat di backend" **BENAR UNTUK 2 DARI 3 WORKLOAD**
 setelah perbaikan `gabung()`: `fib_rekursif` (CPU murni) dan
 `daftar_operasi` (build+map+filter list) sekarang sama cepat atau lebih
 cepat dari Node.js. Yang MASIH bersyarat: kode yang berat di alokasi
-`Peta`/`coba-tangkap` (`validasi_petani`, notabene contoh utama use-case
-Isoteri sendiri!) -- Isoteri AOT di sana masih 31x lebih lambat dari
-Node.js. Ini bukan lagi kandidat optimasi yang "mungkin penting" --
-angkanya sudah membuktikan ini BLOCKER NYATA buat klaim "lebih cepat di
-backend" secara umum, bukan cuma di kasus tertentu.
+`Peta`/struct + `coba-tangkap` (`validasi_petani`, notabene contoh utama
+use-case Isoteri sendiri!) -- Isoteri AOT di sana masih **29x lebih
+lambat** dari Node.js SETELAH perbaikan kunci `Peta` (yang cuma
+menyumbang ~16% perbaikan, jauh dari cukup). Ini BLOCKER NYATA buat
+klaim "lebih cepat di backend" secara umum, bukan cuma di kasus tertentu
+-- dan sisa perbaikannya butuh pekerjaan desain yang JAUH lebih besar
+(arena allocator / small-map inline representation / optimasi dispatch
+VM secara umum), bukan lagi tempelan cepat seperti 2 perbaikan
+sebelumnya.
 
 Ini bukan alasan untuk berhenti -- ini justru PETA JALAN OPTIMASI yang
+makin jelas & terukur seiring tiap iterasi:
 
-jelas dan terukur: `gabung()` SUDAH diperbaiki jadi amortized O(1)
-(lihat hasil before/after di atas -- ini yang membuktikan pendekatan
-"benchmark jujur -> temuan konkret -> perbaikan terukur" ini bekerja).
-Berikutnya: selidiki/optimasi biaya konstruksi `Peta` + `coba/tangkap`,
-yang sekarang jadi bottleneck TERBESAR yang tersisa. Jalankan ulang
-benchmark yang SAMA PERSIS di folder ini untuk lihat progress ke depannya
--- itulah gunanya benchmark ini ada sebagai aset permanen di repo, bukan
-cuma laporan sekali pakai.
+1. `gabung()` -- SELESAI, amortized O(1) (200x speedup di daftar_operasi)
+2. Kunci `Peta`/`Instans` -- SELESAI, `String`->`Rc<str>` (~16% speedup
+   di validasi_petani -- REAL tapi kecil, bukan penyebab utama)
+3. Alokasi `Peta`/`Instans`/dispatch VM -- BELUM, penyebab UTAMA yang
+   tersisa, butuh desain terpisah (lihat bagian analisis #2 di atas)
+
+Jalankan ulang benchmark yang SAMA PERSIS di folder ini untuk lihat
+progress ke depannya -- itulah gunanya benchmark ini ada sebagai aset
+permanen di repo, bukan cuma laporan sekali pakai.
 
 ## Keterbatasan benchmark ini
 

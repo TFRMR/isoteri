@@ -1725,11 +1725,19 @@ pub enum Value {
     /// presisi IEEE-754), jadi speedup di sini lebih kecil (~1.5-2x) dibanding DaftarAngka
     /// (~9-10x) -- tapi penghematan memori (4x) tetap berlaku sama.
     DaftarDesimal(Rc<Vec<f64>>),
-    Peta(Rc<Vec<(String, Value)>>), Kosong,
+    // Kunci Peta/Instans pakai Rc<str> (BUKAN String) SENGAJA -- nama field itu KONSTAN dari
+    // sumber program (mis. {"nama": ..., "lahan": ...} atau bentuk Petani{nama:..}), jadi
+    // cuma perlu di-alokasi SEKALI saat kompilasi (lihat Instr::MakePeta/BuatInstans -- disimpan
+    // sebagai Vec<Rc<str>> di bytecode-nya sendiri). Tiap kali literal ini dieksekusi (mis. di
+    // dalam loop 500rb kali, lihat benchmarks/head_to_head/README.md), clone kuncinya jadi
+    // Rc::clone (cuma refcount++, bukan heap-alloc+memcpy String baru tiap kali). Ini penyebab
+    // #2 dari benchmark yang tercatat di README tsb -- validasi_petani 31x lebih lambat dari
+    // Node.js sebelum perbaikan ini.
+    Peta(Rc<Vec<(Rc<str>, Value)>>), Kosong,
     /// Instans dari sebuah 'bentuk': nama bentuk + pasangan (field, nilai) sesuai urutan skema.
     /// Representasinya mirip Peta (immutable, clone-on-write) supaya konsisten dengan sisa
     /// bahasa -- tapi field-nya sudah tervalidasi lengkap sejak konstruksi (lihat resolver).
-    Instans(Rc<str>, Rc<Vec<(String, Value)>>),
+    Instans(Rc<str>, Rc<Vec<(Rc<str>, Value)>>),
     /// Nilai fungsi (dihasilkan literal 'fungsi(...) {...}') -- bisa disimpan di variabel,
     /// dilewatkan sebagai argumen, dst. `idx` menunjuk ke VMFungsi terkompilasi di Pustaka::fungsi,
     /// `tangkapan` adalah snapshot NILAI (bukan referensi hidup) variabel yang ditangkap dari
@@ -1938,7 +1946,7 @@ fn indeks_value(t: Value, i: Value) -> Result<Value, String> {
             d.get(n as usize).map(|x| Value::Desimal(*x)).ok_or_else(|| format!("Indeks {} di luar jangkauan (panjang daftar: {})", n, d.len()))
         }
         (Value::Peta(entries), Value::Teks(k)) => {
-            entries.iter().find(|(kk, _)| kk.as_str() == k.as_ref()).map(|(_, v)| v.clone()).ok_or_else(|| format!("Kunci \"{}\" tidak ditemukan di Peta.", k))
+            entries.iter().find(|(kk, _)| kk.as_ref() == k.as_ref()).map(|(_, v)| v.clone()).ok_or_else(|| format!("Kunci \"{}\" tidak ditemukan di Peta.", k))
         }
         (t, i) => Err(format!("Tidak bisa mengindeks {} dengan {}", t, i)),
     }
@@ -1995,9 +2003,9 @@ fn set_indeks_value(t: Value, i: Value, nilai: Value) -> Result<Value, String> {
         }
         (Value::Peta(entries), Value::Teks(k)) => {
             let mut baru = (*entries).clone();
-            match baru.iter_mut().find(|(kk, _)| kk.as_str() == k.as_ref()) {
+            match baru.iter_mut().find(|(kk, _)| kk.as_ref() == k.as_ref()) {
                 Some(slot) => slot.1 = nilai,
-                None => baru.push((k.to_string(), nilai)), // kunci baru -> insert (bukan error), konsisten dgn ekspektasi peta dinamis
+                None => baru.push((Rc::from(k.as_ref()), nilai)), // kunci baru -> insert (bukan error), konsisten dgn ekspektasi peta dinamis
             }
             Ok(Value::Peta(Rc::new(baru)))
         }
@@ -2186,7 +2194,7 @@ enum Instr {
     /// 'kalau'/'dan'/'atau'), push Bool kebalikannya.
     Tidak,
     MakeDaftar(usize),
-    MakePeta(Vec<String>),
+    MakePeta(Vec<Rc<str>>),
     Indeks,
     /// Sama seperti Indeks (baca container[idx]), TAPI nilai idx-nya TIDAK dibuang -- ditaruh
     /// balik ke stack di bawah hasil baca. Stack sebelum: [..., container, idx]. Stack
@@ -2202,7 +2210,7 @@ enum Instr {
     /// TIDAK auto-extend -- pakai fungsi bawaan 'tambah()' buat menambah elemen baru).
     SetIndeks,
     AmbilField(String),
-    BuatInstans(String, Vec<String>),
+    BuatInstans(Rc<str>, Vec<Rc<str>>),
     SetField(String),
     /// Tambahkan SATU elemen ke Daftar yang disimpan di slot lokal/global, SECARA IN-PLACE
     /// lewat Rc::make_mut kalau memungkinkan -- O(1) amortized, BUKAN clone seluruh isi list
@@ -2427,16 +2435,18 @@ impl Compiler {
                 out.push(Instr::MakeDaftar(items.len()));
             }
             CExpr::Peta(entries) => {
-                let kunci: Vec<String> = entries.iter().map(|(k, _)| k.clone()).collect();
+                // Konversi String -> Rc<str> SEKALI di sini (saat kompilasi, bukan tiap
+                // eksekusi) -- lihat catatan panjang di enum Value::Peta soal kenapa ini penting.
+                let kunci: Vec<Rc<str>> = entries.iter().map(|(k, _)| Rc::from(k.as_str())).collect();
                 for (_, v) in entries { self.compile_expr(v, out); }
                 out.push(Instr::MakePeta(kunci));
             }
             CExpr::Indeks(t, i) => { self.compile_expr(t, out); self.compile_expr(i, out); out.push(Instr::Indeks); }
             CExpr::Field(t, f) => { self.compile_expr(t, out); out.push(Instr::AmbilField(f.clone())); }
             CExpr::BentukLiteral(nama, entries) => {
-                let field_nama: Vec<String> = entries.iter().map(|(k, _)| k.clone()).collect();
+                let field_nama: Vec<Rc<str>> = entries.iter().map(|(k, _)| Rc::from(k.as_str())).collect();
                 for (_, v) in entries { self.compile_expr(v, out); }
-                out.push(Instr::BuatInstans(nama.clone(), field_nama));
+                out.push(Instr::BuatInstans(Rc::from(nama.as_str()), field_nama));
             }
             CExpr::FungsiLiteral(nama_sintetis, tangkapan_exprs) => {
                 for e in tangkapan_exprs { self.compile_expr(e, out); }
@@ -3563,7 +3573,7 @@ fn panggil_fungsi_1_arg(pustaka: &Pustaka, state: &mut VMState, idx: usize, arg:
             };
             let mut v = Vec::with_capacity(field_urut.len());
             for fnama in field_urut {
-                let val = entries.iter().find(|(k, _)| k == fnama).map(|(_, val)| val.clone())
+                let val = entries.iter().find(|(k, _)| k.as_ref() == fnama.as_str()).map(|(_, val)| val.clone())
                     .ok_or_else(|| format!("Instans tidak punya field \"{}\" yang dibutuhkan fungsi callback.", fnama))?;
                 v.push(val);
             }
@@ -3605,7 +3615,7 @@ fn panggil_callback_1_arg(pustaka: &Pustaka, state: &mut VMState, nama_builtin: 
                     };
                     let mut v = Vec::with_capacity(field_urut.len());
                     for fnama in field_urut {
-                        let val = entries.iter().find(|(k, _)| k == fnama).map(|(_, val)| val.clone())
+                        let val = entries.iter().find(|(k, _)| k.as_ref() == fnama.as_str()).map(|(_, val)| val.clone())
                             .ok_or_else(|| format!("Instans tidak punya field \"{}\" yang dibutuhkan closure callback.", fnama))?;
                         v.push(val);
                     }
@@ -3778,7 +3788,7 @@ fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_
                     let mut nilai = Vec::with_capacity(kunci.len());
                     for _ in 0..kunci.len() { nilai.push(state.stack.pop().unwrap()); }
                     nilai.reverse();
-                    let entries: Vec<(String, Value)> = kunci.iter().cloned().zip(nilai.into_iter()).collect();
+                    let entries: Vec<(Rc<str>, Value)> = kunci.iter().cloned().zip(nilai.into_iter()).collect();
                     state.stack.push(Value::Peta(entries.into()));
                     *pc += 1;
                 }
@@ -3807,7 +3817,7 @@ fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_
                     let t = state.stack.pop().unwrap();
                     match &t {
                         Value::Instans(nama, entries) => {
-                            let v = entries.iter().find(|(k, _)| k == field).map(|(_, v)| v.clone())
+                            let v = entries.iter().find(|(k, _)| k.as_ref() == field.as_str()).map(|(_, v)| v.clone())
                                 .ok_or_else(|| format!("Bentuk \"{}\" tidak punya field \"{}\".", nama, field))?;
                             state.stack.push(v);
                         }
@@ -3819,8 +3829,8 @@ fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_
                     let mut nilai = Vec::with_capacity(field_nama.len());
                     for _ in 0..field_nama.len() { nilai.push(state.stack.pop().unwrap()); }
                     nilai.reverse();
-                    let entries: Vec<(String, Value)> = field_nama.iter().cloned().zip(nilai.into_iter()).collect();
-                    state.stack.push(Value::Instans(nama.as_str().into(), Rc::new(entries)));
+                    let entries: Vec<(Rc<str>, Value)> = field_nama.iter().cloned().zip(nilai.into_iter()).collect();
+                    state.stack.push(Value::Instans(nama.clone(), Rc::new(entries)));
                     *pc += 1;
                 }
                 Instr::SetField(field) => {
@@ -3828,11 +3838,11 @@ fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_
                     let t = state.stack.pop().unwrap();
                     match t {
                         Value::Instans(nama, entries) => {
-                            if !entries.iter().any(|(k, _)| k == field) {
+                            if !entries.iter().any(|(k, _)| k.as_ref() == field.as_str()) {
                                 return Err(format!("Bentuk \"{}\" tidak punya field \"{}\".", nama, field));
                             }
                             let mut baru_entries = (*entries).clone();
-                            for (k, v) in baru_entries.iter_mut() { if k == field { *v = baru; break; } }
+                            for (k, v) in baru_entries.iter_mut() { if k.as_ref() == field.as_str() { *v = baru; break; } }
                             state.stack.push(Value::Instans(nama, Rc::new(baru_entries)));
                         }
                         lain => return Err(format!("Tidak bisa mengubah field \".{}\" pada nilai {} (bukan instans 'bentuk').", field, lain)),
@@ -4142,7 +4152,7 @@ fn panggil_bawaan(nama: &str, args: &[Value]) -> Result<Option<Value>, String> {
                     d.get(*i as usize).map(|x| Value::Desimal(*x)).map(Some).ok_or_else(|| format!("Indeks {} di luar jangkauan (panjang daftar: {})", i, d.len()))
                 }
                 (Value::Peta(entries), Value::Teks(k)) => {
-                    entries.iter().find(|(kk, _)| kk.as_str() == k.as_ref()).map(|(_, v)| v.clone()).map(Some)
+                    entries.iter().find(|(kk, _)| kk.as_ref() == k.as_ref()).map(|(_, v)| v.clone()).map(Some)
                         .ok_or_else(|| format!("Kunci \"{}\" tidak ditemukan di Peta.", k))
                 }
                 (s, k) => Err(format!("ambil() butuh (Daftar, Angka) atau (Peta, Teks), ditemukan {} dan {}", s, k)),
@@ -4266,8 +4276,8 @@ fn panggil_bawaan(nama: &str, args: &[Value]) -> Result<Option<Value>, String> {
             }
             let nilai = args.get(1).cloned().ok_or_else(|| "respons_status(kode, nilai) butuh 2 argumen".to_string())?;
             Ok(Some(Value::Instans(Rc::from("ResponsHttp"), Rc::new(vec![
-                ("status".to_string(), Value::Angka(kode)),
-                ("nilai".to_string(), nilai),
+                ("status".into(), Value::Angka(kode)),
+                ("nilai".into(), nilai),
             ]))))
         }
         "ke_desimal" => match args.get(0) {
@@ -4544,7 +4554,7 @@ fn json_objek(c: &[char], pos: &mut usize) -> Result<Value, String> {
         if *pos >= c.len() || c[*pos] != ':' { return Err("JSON objek: diharapkan ':' setelah kunci.".to_string()); }
         *pos += 1;
         let nilai = json_nilai(c, pos)?;
-        entries.push((kunci, nilai));
+        entries.push((kunci.into(), nilai));
         json_skip_ws(c, pos);
         if *pos < c.len() && c[*pos] == ',' { *pos += 1; continue; }
         break;
@@ -4605,17 +4615,17 @@ fn jalankan_http_server(pustaka: &Pustaka, state: &mut VMState, port: u16, handl
             Some((p, q)) => (p.to_string(), Some(q.to_string())),
             None => (url.clone(), None),
         };
-        let query_peta: Vec<(String, Value)> = query_str.map(|q| {
+        let query_peta: Vec<(Rc<str>, Value)> = query_str.map(|q| {
             q.split('&').filter_map(|pasangan| {
                 if pasangan.is_empty() { return None; }
                 let mut it = pasangan.splitn(2, '=');
-                let k = it.next()?.to_string();
+                let k: Rc<str> = it.next()?.into();
                 let v = it.next().unwrap_or("").to_string();
                 Some((k, Value::Teks(v.into())))
             }).collect()
         }).unwrap_or_default();
-        let header_peta: Vec<(String, Value)> = permintaan.headers().iter()
-            .map(|h| (h.field.as_str().to_string(), Value::Teks(h.value.as_str().to_string().into())))
+        let header_peta: Vec<(Rc<str>, Value)> = permintaan.headers().iter()
+            .map(|h| (Rc::from(h.field.as_str().as_str()), Value::Teks(h.value.as_str().to_string().into())))
             .collect();
 
         let mut body = String::new();
@@ -4623,11 +4633,11 @@ fn jalankan_http_server(pustaka: &Pustaka, state: &mut VMState, port: u16, handl
         let _ = permintaan.as_reader().read_to_string(&mut body);
 
         let req_peta = Value::Peta(Rc::new(vec![
-            ("metode".to_string(), Value::Teks(metode.into())),
-            ("path".to_string(), Value::Teks(path.into())),
-            ("query".to_string(), Value::Peta(Rc::new(query_peta))),
-            ("header".to_string(), Value::Peta(Rc::new(header_peta))),
-            ("body".to_string(), Value::Teks(body.into())),
+            ("metode".into(), Value::Teks(metode.into())),
+            ("path".into(), Value::Teks(path.into())),
+            ("query".into(), Value::Peta(Rc::new(query_peta))),
+            ("header".into(), Value::Peta(Rc::new(header_peta))),
+            ("body".into(), Value::Teks(body.into())),
         ]));
 
         let hasil = match panggil_callback_1_arg(pustaka, state, "server_mulai", handler, req_peta) {
@@ -4674,10 +4684,10 @@ fn jalankan_http_server(_pustaka: &Pustaka, _state: &mut VMState, _port: u16, _h
 fn respons_dari_value(v: &Value) -> (u16, String, &'static str) {
     match v {
         Value::Instans(nama, entries) if nama.as_ref() == "ResponsHttp" => {
-            let kode = entries.iter().find(|(k, _)| k == "status")
+            let kode = entries.iter().find(|(k, _)| k.as_ref() == "status")
                 .and_then(|(_, v)| if let Value::Angka(n) = v { Some(*n as u16) } else { None })
                 .unwrap_or(200);
-            let nilai = entries.iter().find(|(k, _)| k == "nilai").map(|(_, v)| v.clone()).unwrap_or(Value::Kosong);
+            let nilai = entries.iter().find(|(k, _)| k.as_ref() == "nilai").map(|(_, v)| v.clone()).unwrap_or(Value::Kosong);
             let (_, body, ct) = respons_dari_value(&nilai);
             (kode, body, ct)
         }
@@ -5701,10 +5711,10 @@ enum IrInstr {
     BinOp(Reg, BinOp, Reg, Reg),
     Tidak(Reg, Reg),
     MakeDaftar(Reg, Vec<Reg>),
-    MakePeta(Reg, Vec<String>, Vec<Reg>),
+    MakePeta(Reg, Vec<Rc<str>>, Vec<Reg>),
     Indeks(Reg, Reg, Reg),
     AmbilField(Reg, Reg, String),
-    BuatInstans(Reg, String, Vec<String>, Vec<Reg>),
+    BuatInstans(Reg, Rc<str>, Vec<Rc<str>>, Vec<Reg>),
     BuatFungsi(Reg, usize, Vec<Reg>),
     PanggilFungsi(Reg, usize, Vec<Reg>),
     PanggilBawaan(Reg, String, Vec<Reg>),
@@ -5834,7 +5844,7 @@ impl<'a> IrLower<'a> {
                 (dst, IrType::Dinamis)
             }
             CExpr::Peta(entries) => {
-                let kunci: Vec<String> = entries.iter().map(|(k, _)| k.clone()).collect();
+                let kunci: Vec<Rc<str>> = entries.iter().map(|(k, _)| Rc::from(k.as_str())).collect();
                 let regs: Vec<Reg> = entries.iter().map(|(_, v)| self.lower_expr(v, out).0).collect();
                 let dst = self.reg_tujuan(dest, IrType::Dinamis);
                 out.push(IrInstr::MakePeta(dst, kunci, regs));
@@ -5854,10 +5864,10 @@ impl<'a> IrLower<'a> {
                 (dst, IrType::Dinamis)
             }
             CExpr::BentukLiteral(nama, entries) => {
-                let field_nama: Vec<String> = entries.iter().map(|(k, _)| k.clone()).collect();
+                let field_nama: Vec<Rc<str>> = entries.iter().map(|(k, _)| Rc::from(k.as_str())).collect();
                 let regs: Vec<Reg> = entries.iter().map(|(_, v)| self.lower_expr(v, out).0).collect();
                 let dst = self.reg_tujuan(dest, IrType::Dinamis);
-                out.push(IrInstr::BuatInstans(dst, nama.clone(), field_nama, regs));
+                out.push(IrInstr::BuatInstans(dst, Rc::from(nama.as_str()), field_nama, regs));
                 (dst, IrType::Dinamis)
             }
             CExpr::FungsiLiteral(nama_sintetis, tangkapan) => {
@@ -6459,13 +6469,13 @@ fn value_ke_json(v: &Value) -> serde_json::Value {
         Value::DaftarDesimal(items) => json!({"t": "Daftar", "v": items.iter().map(|x| json!({"t": "Desimal", "v": x})).collect::<Vec<_>>()}),
         Value::Peta(entries) => json!({
             "t": "Peta",
-            "v": entries.iter().map(|(k, v)| json!([k, value_ke_json(v)])).collect::<Vec<_>>()
+            "v": entries.iter().map(|(k, v)| json!([k.as_ref(), value_ke_json(v)])).collect::<Vec<_>>()
         }),
         Value::Kosong => json!({"t": "Kosong"}),
         Value::Instans(nama, entries) => json!({
             "t": "Instans",
             "nama": nama.as_ref(),
-            "v": entries.iter().map(|(k, v)| json!([k, value_ke_json(v)])).collect::<Vec<_>>()
+            "v": entries.iter().map(|(k, v)| json!([k.as_ref(), value_ke_json(v)])).collect::<Vec<_>>()
         }),
         Value::Fungsi(nf) => json!({
             "t": "Fungsi",
@@ -6506,12 +6516,12 @@ fn instr_ke_json(instr: &Instr) -> Result<serde_json::Value, String> {
         Instr::LompatJikaSalah(t) => json!(["LompatJikaSalah", t]),
         Instr::Tidak => json!(["Tidak"]),
         Instr::MakeDaftar(n) => json!(["MakeDaftar", n]),
-        Instr::MakePeta(kunci) => json!(["MakePeta", kunci]),
+        Instr::MakePeta(kunci) => json!(["MakePeta", kunci.iter().map(|k| k.as_ref()).collect::<Vec<&str>>()]),
         Instr::Indeks => json!(["Indeks"]),
         Instr::IndeksTahanIdx => json!(["IndeksTahanIdx"]),
         Instr::SetIndeks => json!(["SetIndeks"]),
         Instr::AmbilField(f) => json!(["AmbilField", f]),
-        Instr::BuatInstans(nama, fields) => json!(["BuatInstans", nama, fields]),
+        Instr::BuatInstans(nama, fields) => json!(["BuatInstans", nama.as_ref(), fields.iter().map(|k| k.as_ref()).collect::<Vec<&str>>()]),
         Instr::SetField(f) => json!(["SetField", f]),
         Instr::TambahkanLokal(s) => json!(["TambahkanLokal", s]),
         Instr::TambahkanGlobal(s) => json!(["TambahkanGlobal", s]),
