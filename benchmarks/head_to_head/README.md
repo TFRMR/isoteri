@@ -194,20 +194,46 @@ dan GAGAL memperbaiki -- dicatat di sini supaya tidak diulang sia-sia:
   menyesatkan (tidak representatif), teori "2 alokasi jadi 1" TERBUKTI
   BUKAN penyebab utama di praktiknya.
 
-**Diagnosis yang diperbarui**: karena DUA pendekatan yang menyasar
-alokasi memori sama-sama gagal memberi perbaikan nyata, kemungkinan
-besar bottleneck SEBENARNYA ada di overhead dispatch instruksi VM itu
-sendiri (setiap operasi bahasa -- termasuk `coba/tangkap`, akses indeks
-Peta, pemanggilan fungsi -- adalah beberapa langkah `match` di dalam
-loop VM, dikali puluhan juta untuk 500.000 iterasi x puluhan instruksi),
-BUKAN alokasi seperti dugaan awal. Ini butuh **profiling sungguhan**
-(`perf record` + flamegraph, atau `cargo flamegraph`) buat tahu PERSIS
-instruksi/fungsi mana yang paling banyak makan waktu -- bukan lagi
-tebak-tebakan berdasarkan baca kode & teori, karena 2 teori masuk akal
-berturut-turut sudah terbukti salah. Ini PEKERJAAN JAUH LEBIH BESAR dari
-2 perbaikan sebelumnya (`gabung()` dan kunci `Peta`) -- di luar scope
-"quick fix" satu sesi, perlu direncanakan sebagai item roadmap tersendiri
-dengan profiling matang sebagai langkah PERTAMA, bukan coba-coba lagi.
+**Eksperimen ketiga (JUGA gagal, tapi mengarah ke akar masalah
+sebenarnya)**: profiling `perf record`/`perf report` dijalankan LANGSUNG
+di mesin lokal (bukan sandbox) atas `validasi_petani_aot` -- hasilnya
+**46% waktu CPU** dihabiskan di `eksekusi_satu` (loop dispatch bytecode
+VM), sementara `Value::clone`+`drop_glue::<Value>` gabungan cuma ~8%.
+Ini kelihatannya mengkonfirmasi dugaan "overhead dispatch VM" -- dicoba
+`#[inline(always)]` di `eksekusi_satu` (fungsi ini dipanggil TERPISAH
+untuk SETIAP SATU instruksi dari loop `while` di `eksekusi()`, bukan satu
+loop besar) supaya menyatu jadi satu unit yang bisa dioptimasi compiler.
+HASIL: **regresi lagi** (1031ms -> 1099ms). Direvert.
+
+**Akar masalah SEBENARNYA (ditemukan lewat pembacaan kode, bukan
+profiling)**: Isoteri punya fungsi `cek_jit_murni_nilai`/
+`cek_jit_murni_stmt` yang menentukan fungsi mana yang LAYAK dikompilasi
+Cranelift JIT ke kode native -- dan fungsi ini **secara eksplisit
+menolak** apa pun yang pakai `Teks`, `Daftar`, `Peta`, variabel global
+(`ingat` di top-level), atau `coba/tangkap` (lihat komentar di kode:
+*"Teks/Bool/Global/Daftar/Peta/Indeks/Field/BentukLiteral/Bagi/
+panggilan-lain -> bukan [murni]"*). `fib_rekursif` (murni angka +
+rekursi) LOLOS syarat ini -> dikompilasi ke kode native, makanya secepat
+V8. `buat_data()`/`validasi_petani()` (pakai `Peta` + `coba/tangkap` +
+variabel top-level) **GAGAL syarat ini -> TIDAK PERNAH di-JIT sama
+sekali** -- jalan lewat interpreter bytecode (`eksekusi`/`eksekusi_satu`)
+untuk SEMUA 500.000 pemanggilan, tanpa terkecuali.
+
+Ini menjelaskan KENAPA 3 eksperimen (mimalloc, `Rc<[T]>`, inline)
+semuanya gagal: ketiganya mengoptimasi INTERPRETER, padahal masalah
+sebenarnya adalah fungsi ini tidak pernah dapat jalur cepat (kode
+native) sama sekali -- gap "interpreted vs compiled" itu jauh lebih
+besar dari micro-optimisasi interpreter mana pun bisa tutup.
+
+**Implikasi buat roadmap**: perbaikan SEBENARNYA adalah PERLUAS
+kelayakan JIT Cranelift supaya mendukung `Peta`/struct/`coba-tangkap`
+(atau minimal akses field & perbandingan Teks sederhana) -- ini proyek
+compiler engineering SIGNIFIKAN (codegen native buat tipe dinamis,
+representasi dictionary-like, exception handling lewat Cranelift),
+skalanya MINGGUAN bukan harian, jauh di luar scope "quick fix" satu
+sesi. Ini item roadmap TERSENDIRI yang butuh desain matang dari awal --
+BUKAN arena allocator/small-map-inline seperti dugaan sebelumnya (yang
+sekarang terbukti salah lewat profiling+eksperimen).
 
 ### Kenapa `fib_rekursif` menang telak
 
