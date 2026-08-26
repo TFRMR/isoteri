@@ -172,15 +172,42 @@ Dicatat di sini demi transparansi -- bukan penyebab, sudah dikonfirmasi
 lewat pembacaan ulang kode sumber.
 
 **Implikasi buat roadmap**: sisa bottleneck ini levelnya lebih dalam
-dari "ganti tipe kunci" -- perlu salah satu dari: (a) arena/bump
-allocator khusus buat `Peta`/`Instans` kecil supaya alokasi jadi jauh
-lebih murah dari `malloc` umum, (b) representasi "small map inline"
-(mirip `SmallVec`) buat Peta dengan sedikit field supaya tidak perlu
-heap allocation sama sekali untuk kasus umum, atau (c) optimasi dispatch
-VM secara umum (bukan spesifik ke Peta). Ini PEKERJAAN JAUH LEBIH BESAR
-dari 2 perbaikan sebelumnya (`gabung()` dan kunci `Peta`) -- di luar
-scope "quick fix" satu sesi, perlu direncanakan sebagai item roadmap
-tersendiri dengan desain matang, bukan tempelan lagi.
+dari "ganti tipe kunci". Dua eksperimen SUDAH DICOBA di sesi lanjutan
+dan GAGAL memperbaiki -- dicatat di sini supaya tidak diulang sia-sia:
+
+- **(a) Ganti allocator global ke mimalloc** (feature flag `fast-alloc`,
+  satu baris `#[global_allocator]`, teori: mimalloc jauh lebih cepat dari
+  `malloc` sistem buat alokasi kecil & sering). HASIL: lebih LAMBAT
+  (1031ms -> 1152ms) di sandbox pengujian -- kemungkinan besar karena
+  sandbox itu cuma 1 CPU core (mimalloc didesain buat heap per-thread,
+  overhead inisialisasinya sendiri tidak amortisasi di proses pendek
+  single-core). Mungkin beda hasil di mesin production/lokal yang
+  multi-core -- BELUM diverifikasi di sana, jadi TIDAK di-enable secara
+  default sampai ada data dari mesin nyata.
+- **(b) `Rc<Vec<T>>` -> `Rc<[T]>`** buat Peta/Instans (teori: `.collect()`
+  langsung ke `Rc<[T]>` dari `ExactSizeIterator` cuma butuh SATU alokasi,
+  bukan dua). Eksperimen Rust isolated PERTAMA menunjukkan 34% lebih
+  cepat -- tapi setelah diterapkan ke kode sungguhan, hasilnya malah
+  REGRESI (1031ms -> 1152ms). Eksperimen isolated KEDUA yang meniru pola
+  akses sungguhan (kunci di-pinjam, bukan literal baru) cuma menunjukkan
+  ~9% beda -- dalam batas noise. KESIMPULAN: eksperimen isolated pertama
+  menyesatkan (tidak representatif), teori "2 alokasi jadi 1" TERBUKTI
+  BUKAN penyebab utama di praktiknya.
+
+**Diagnosis yang diperbarui**: karena DUA pendekatan yang menyasar
+alokasi memori sama-sama gagal memberi perbaikan nyata, kemungkinan
+besar bottleneck SEBENARNYA ada di overhead dispatch instruksi VM itu
+sendiri (setiap operasi bahasa -- termasuk `coba/tangkap`, akses indeks
+Peta, pemanggilan fungsi -- adalah beberapa langkah `match` di dalam
+loop VM, dikali puluhan juta untuk 500.000 iterasi x puluhan instruksi),
+BUKAN alokasi seperti dugaan awal. Ini butuh **profiling sungguhan**
+(`perf record` + flamegraph, atau `cargo flamegraph`) buat tahu PERSIS
+instruksi/fungsi mana yang paling banyak makan waktu -- bukan lagi
+tebak-tebakan berdasarkan baca kode & teori, karena 2 teori masuk akal
+berturut-turut sudah terbukti salah. Ini PEKERJAAN JAUH LEBIH BESAR dari
+2 perbaikan sebelumnya (`gabung()` dan kunci `Peta`) -- di luar scope
+"quick fix" satu sesi, perlu direncanakan sebagai item roadmap tersendiri
+dengan profiling matang sebagai langkah PERTAMA, bukan coba-coba lagi.
 
 ### Kenapa `fib_rekursif` menang telak
 
