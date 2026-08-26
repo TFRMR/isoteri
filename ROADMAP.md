@@ -135,19 +135,85 @@ menyatukannya jadi satu penulisan.
    diuji interaksi visual di browser sungguhan** (sandbox kerja tidak
    punya browser) -- perlu dicoba manual, lihat `contoh_satu_skema/README.md`
    buat cara menjalankan.
-4. **Benchmark backend Isoteri (AOT) vs Node.js/Python** untuk beban kerja
-   yang representatif -- supaya klaim "lebih cepat" punya angka publik,
-   bukan janji. **Prioritas berikutnya.**
-5. **Backend WASM asli** (compile IR Isoteri langsung ke instruksi WASM,
-   bukan bytecode JSON yang ditafsirkan `isoteri-vm.js`) -- baru ini yang
-   bisa membuka klaim "lebih cepat" DI DALAM browser juga, bukan cuma di
-   backend. Prioritas lebih rendah dari 4 poin di atas karena backend dulu
-   yang punya cerita jelas.
+4. **Benchmark backend Isoteri (AOT) vs Node.js/Python -- SELESAI &
+   TERVALIDASI, DENGAN TEMUAN PENTING.** Lihat `benchmarks/head_to_head/`
+   (3 workload: `fib_rekursif`, `daftar_operasi`, `validasi_petani`, logika
+   ditulis ulang identik di 3 bahasa, output diverifikasi sama sebelum
+   sampling waktu). **Hasil jujur, bukan cherry-pick:**
+
+   - `fib_rekursif` (CPU murni): Isoteri AOT **menang telak** (2.4x Node,
+     12x Python) -- jalur paling matang, lolos syarat JIT Cranelift.
+   - `daftar_operasi`: awalnya kalah 130-260x (bug `gabung()` O(n^2) --
+     immutable, clone seluruh list tiap panggilan). **DIPERBAIKI**: append
+     in-place via `Rc::make_mut` buat pola `x = gabung(x, item)` (lihat
+     `ekstrak_item_gabung_diri`/`tambahkan_elemen_inplace` di `src/lib.rs`)
+     -- hasil 4070ms->20ms (200x), sekarang **menang 1.6x** dari Node.js.
+   - `validasi_petani` (logika bisnis nyata dari `contoh_satu_skema/`):
+     **MASIH 29x lebih lambat** dari Node.js setelah perbaikan kunci
+     `Peta`/`Instans` (`String`->`Rc<str>`, ~16% speedup, tidak cukup).
+     **Akar masalah SEBENARNYA ditemukan** (bukan dugaan): fungsi
+     `cek_jit_murni_nilai`/`cek_jit_murni_stmt` (`src/lib.rs`) SECARA
+     EKSPLISIT menolak `Peta`/`Teks`/`Daftar`/variabel-global/
+     `coba-tangkap` dari kelayakan JIT Cranelift -- `validasi_petani()`
+     TIDAK PERNAH di-JIT sama sekali, selalu jalan lewat interpreter
+     bytecode. Tiga eksperimen yang menyasar interpreter (ganti allocator
+     ke mimalloc, `Rc<Vec<T>>`->`Rc<[T]>` buat Peta/Instans, paksa
+     `#[inline(always)]` di `eksekusi_satu`) SEMUA GAGAL/regresi --
+     membuktikan masalahnya BUKAN alokasi/dispatch interpreter, tapi
+     gap fundamental "interpreted vs compiled". Lihat item #6 di bawah
+     buat rencana perbaikan sebenarnya.
+
+   Metodologi, angka lengkap, dan kronologi 3 eksperimen gagal (dicatat
+   supaya tidak diulang) ada di `benchmarks/head_to_head/README.md`.
+5. **Backend WASM asli** (compile IR Isoteri langsung ke instruksi WASM
+   buat PROGRAM USER, bukan bytecode JSON yang ditafsirkan
+   `isoteri-vm.js`) -- **MASIH BELUM**, jangan disamakan dengan pencapaian
+   di section "WebAssembly" di bawah (itu compiler Isoteri SENDIRI yang
+   jalan sebagai WASM di browser buat compile source `.iso` tanpa CLI --
+   valuable, tapi program HASIL kompilasinya tetap dijalankan `isoteri-vm.js`
+   (interpreter JS biasa, TANPA JIT) -- dibuktikan sendiri di roadmap ini:
+   `fib(38)` <5 detik native vs >90 detik browser. Item #6 (perluasan JIT
+   Cranelift) di bawah TIDAK otomatis mempercepat jalur ini -- itu compiler
+   native x86/ARM, browser pakai mesin eksekusi yang sama sekali berbeda.
+   Prioritas lebih rendah dari item #6 karena ceritanya belum jelas
+   (belum ada rencana konkret "compile ke wasm instructions" itu sendiri).
+6. **Perluasan kelayakan JIT Cranelift** supaya `validasi_petani` (dan
+   program serupa yang pakai `Peta`/struct/`coba-tangkap`) bisa dapat
+   manfaat kode native, bukan cuma fungsi murni-angka seperti sekarang.
+   Urutan submodul (dari paling gampang ke paling sulit, BUKAN urutan
+   "logis" biasa -- lihat alasan di tiap poin):
+
+   1. **Struct dengan field numerik saja** (`Angka`/`Desimal`, tanpa
+      `Teks`/`Peta` bersarang) -- PALING GAMPANG. Layout field-nya TETAP
+      & diketahui saat kompilasi (mirip `struct` C), jadi bisa
+      direpresentasikan sebagai layout native tanpa perlu representasi
+      `Peta` dinamis sama sekali.
+   2. **`coba/tangkap`** (hybrid: bagian aritmatika tetap native, begitu
+      masuk blok `coba` JIT "loncat keluar" balik ke interpreter) --
+      SEDANG. Tidak perlu bikin native exception handling sungguhan lewat
+      Cranelift (jauh lebih rumit), cukup jadikan `coba/tangkap` sebagai
+      titik potong ke jalur lambat.
+   3. **`Peta` sederhana** (dict dinamis, key string) -- PALING SULIT,
+      beda kelas masalah dari 2 poin di atas. Ini bukan "tambah fitur",
+      tapi mendekati "bikin mini-V8" -- butuh sesuatu semacam *hidden
+      classes*/*inline caching* (teknik yang dipakai V8 buat bikin akses
+      properti JS cepat) supaya `data["nama"]` di native code secepat
+      akses field struct biasa. Mungkin perlu mulai dari jalur cepat
+      SEBAGIAN (construction saja, lookup tetap panggil balik ke
+      interpreter) sebelum full native.
+   4. **`validasi_petani` full** (gabungan semua di atas) -> jalankan
+      ulang `benchmarks/head_to_head/jalankan_benchmark.py` buat lihat
+      progress konkret, bandingkan ke baseline yang sudah tercatat di
+      `benchmarks/head_to_head/hasil/`.
+
+   **Skala proyek**: compiler engineering signifikan, MINGGUAN bukan
+   harian -- jauh di luar "quick fix" satu sesi kerja. Belum dimulai;
+   dicatat di sini dulu sebagai rencana sebelum eksekusi.
 
 Item-item lain di roadmap ini (namespace modul lengkap, LSP/tooling editor,
 semver registry v2, dst.) tetap berguna dan tetap dikerjakan, tapi arah di
 atas ini yang jadi KOMPAS -- kalau ada pilihan mengerjakan item mana
-duluan dan tidak jelas, dahulukan yang paling dekat mendukung 5 poin di
+duluan dan tidak jelas, dahulukan yang paling dekat mendukung 6 poin di
 atas.
 
 ### Fondasi jangka panjang: identity, effect, provenance (ditanam dini, bukan ditempel belakangan)
