@@ -31,3 +31,8 @@ runtime/web/pkg/
 # benchmarks/head_to_head/README.md, jangan commit binary besar ke git.
 benchmarks/head_to_head/isoteri/*_aot
 benchmarks/representasi/*_aot
+benchmarks/head_to_head/isoteri/perf.data
+
+# Profiling artifacts
+**/perf.data
+**/perf.data.old
