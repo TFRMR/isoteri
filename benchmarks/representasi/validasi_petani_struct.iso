@@ -1,0 +1,56 @@
+catatan: Variasi validasi_petani (lihat benchmarks/head_to_head/) TAPI pakai
+catatan: 'bentuk' (struct numerik) alih-alih 'Peta' -- buat ukur seberapa
+catatan: dekat ke target milestone "type info -> representation" (30x -> <=5x).
+catatan: Bandingkan dengan benchmarks/head_to_head/isoteri/validasi_petani.iso
+catatan: (versi Peta, masih 29x lebih lambat) di README utama.
+
+bentuk DataPetani {
+    nama_kosong: Angka,
+    lahan: Desimal,
+    hasil_panen: Desimal
+}
+
+fungsi validasi_petani_struct(data: DataPetani) {
+    kalau (data.nama_kosong == 1) {
+        kembalikan 1
+    }
+    kalau (data.lahan <= 0.0) {
+        kembalikan 1
+    }
+    kalau (data.lahan > 10000.0) {
+        kembalikan 1
+    }
+    kalau (data.hasil_panen < 0.0) {
+        kembalikan 1
+    }
+    kembalikan 0
+}
+
+fungsi validasi_satu(i) {
+    ingat sisa = i % 5
+    kalau (sisa == 0) {
+        kembalikan validasi_petani_struct(DataPetani { nama_kosong: 0, lahan: 2.5, hasil_panen: 12.0 })
+    }
+    kalau (sisa == 1) {
+        kembalikan validasi_petani_struct(DataPetani { nama_kosong: 1, lahan: 2.5, hasil_panen: 12.0 })
+    }
+    kalau (sisa == 2) {
+        kembalikan validasi_petani_struct(DataPetani { nama_kosong: 0, lahan: -1.0, hasil_panen: 12.0 })
+    }
+    kalau (sisa == 3) {
+        kembalikan validasi_petani_struct(DataPetani { nama_kosong: 0, lahan: 99999.0, hasil_panen: 12.0 })
+    }
+    kembalikan validasi_petani_struct(DataPetani { nama_kosong: 0, lahan: 2.5, hasil_panen: -1.0 })
+}
+
+ingat n = 500000
+ingat jumlah_valid = 0
+ingat i = 0
+ulang (i < n) {
+    ingat gagal = validasi_satu(i)
+    kalau (gagal == 0) {
+        jumlah_valid = jumlah_valid + 1
+    }
+    i = i + 1
+}
+tampilkan jumlah_valid

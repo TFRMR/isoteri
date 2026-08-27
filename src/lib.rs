@@ -1242,11 +1242,29 @@ impl Resolver {
                     for (i, a) in args.iter().enumerate() {
                         let flat = info.and_then(|v| v.get(i)).and_then(|o| o.as_ref());
                         match flat {
-                            Some((_, field_urut)) => {
+                            Some((struct_nama, field_urut)) => {
                                 if let Expr::Ident(var_nama) = a {
                                     for fnama in field_urut {
                                         let fe = Expr::Field(Box::new(Expr::Ident(var_nama.clone())), fnama.clone());
                                         cargs.push(self.resolve_expr_global(&fe)?);
+                                    }
+                                } else if let Expr::BentukLiteral(lit_nama, entries) = a {
+                                    // Fast-path: argumen literal Bentuk LANGSUNG di titik panggil
+                                    // (mis. 'f(Titik{x:3,y:4})') -- SKIP konstruksi Instans dinamis
+                                    // sepenuhnya, langsung pakai ekspresi field-nya sebagai argumen.
+                                    // Sebelum ada ini, 'Titik{x:3,y:4}' tetap dibangun jadi Instans
+                                    // (BuatInstans, alokasi heap) lalu LANGSUNG dibongkar lagi lewat
+                                    // SimpanLaluField -- kerja dua kali buat objek yang cuma hidup
+                                    // sepersekian detik. Field HARUS diurutkan sesuai skema Bentuk
+                                    // (bukan urutan penulisan user), makanya lewat
+                                    // urutkan_field_bentuk() -- lihat juga cek di bawah kalau nama
+                                    // bentuk yang dipanggil beda dari yang dideklarasikan.
+                                    if lit_nama != struct_nama {
+                                        return Err(format!("Argumen ke-{} fungsi \"{}\" butuh bentuk \"{}\", ditemukan \"{}\".", i + 1, nama, struct_nama, lit_nama));
+                                    }
+                                    let terurut = self.urutkan_field_bentuk(lit_nama, entries)?;
+                                    for fe in terurut {
+                                        cargs.push(self.resolve_expr_global(fe)?);
                                     }
                                 } else if field_urut.is_empty() {
                                     self.resolve_expr_global(a)?;
@@ -1608,11 +1626,22 @@ impl<'a> LocalResolver<'a> {
                     for (i, a) in args.iter().enumerate() {
                         let flat = info.and_then(|v| v.get(i)).and_then(|o| o.as_ref());
                         match flat {
-                            Some((_, field_urut)) => {
+                            Some((struct_nama, field_urut)) => {
                                 if let Expr::Ident(var_nama) = a {
                                     for fnama in field_urut {
                                         let fe = Expr::Field(Box::new(Expr::Ident(var_nama.clone())), fnama.clone());
                                         cargs.push(self.resolve_expr(&fe)?);
+                                    }
+                                } else if let Expr::BentukLiteral(lit_nama, entries) = a {
+                                    // Fast-path yang sama seperti versi global (lihat komentar
+                                    // panjang di resolve_expr_global) -- skip konstruksi Instans
+                                    // dinamis buat literal Bentuk langsung di titik panggil.
+                                    if lit_nama != struct_nama {
+                                        return Err(format!("Argumen ke-{} fungsi \"{}\" butuh bentuk \"{}\", ditemukan \"{}\".", i + 1, nama, struct_nama, lit_nama));
+                                    }
+                                    let terurut = self.urutkan_field_bentuk(lit_nama, entries)?;
+                                    for fe in terurut {
+                                        cargs.push(self.resolve_expr(fe)?);
                                     }
                                 } else if field_urut.is_empty() {
                                     self.resolve_expr(a)?;

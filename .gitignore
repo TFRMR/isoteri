@@ -30,3 +30,4 @@ runtime/web/pkg/
 # Binary hasil `isoteri bangun` (AOT) -- regenerate via perintah di
 # benchmarks/head_to_head/README.md, jangan commit binary besar ke git.
 benchmarks/head_to_head/isoteri/*_aot
+benchmarks/representasi/*_aot
