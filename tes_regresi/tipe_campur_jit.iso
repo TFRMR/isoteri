@@ -1,0 +1,47 @@
+catatan: Kunci perilaku mode TipeJit::Campur (JIT Cranelift buat fungsi dengan
+catatan: parameter/field bertipe CAMPURAN Angka+Desimal, lihat catatan panjang di
+catatan: enum TipeJit di src/lib.rs) -- langkah lanjutan item #6 ROADMAP setelah
+catatan: fast-path literal struct, dipicu temuan validasi_petani_struct masih 20x
+catatan: lebih lambat di benchmarks/representasi/README.md.
+
+bentuk DataCampur {
+    a: Angka,
+    b: Desimal,
+    c: Angka
+}
+
+fungsi cek_campur(d: DataCampur) {
+    kalau (d.a == 1) {
+        kembalikan 100
+    }
+    kalau (d.b <= 0.0) {
+        kembalikan 200
+    }
+    kalau (d.c > 50) {
+        kembalikan 300
+    }
+    kembalikan 0
+}
+
+catatan: Kasus 1-4: berbagai kombinasi field yang memicu tiap cabang kalau --
+catatan: memverifikasi field Angka DAN Desimal di struct yang sama berfungsi benar
+catatan: sekaligus (bukan cuma salah satu tipe).
+tampilkan cek_campur(DataCampur { a: 1, b: 5.0, c: 10 })
+tampilkan cek_campur(DataCampur { a: 0, b: -1.0, c: 10 })
+tampilkan cek_campur(DataCampur { a: 0, b: 5.0, c: 100 })
+tampilkan cek_campur(DataCampur { a: 0, b: 5.0, c: 10 })
+
+catatan: Kasus 5 -- PALING PENTING: operasi yang BENAR-BENAR mencampur tipe (Angka
+catatan: dibandingkan LANGSUNG dengan Desimal) HARUS tetap dapat hasil benar lewat
+catatan: fallback interpreter (bukan native JIT) -- mekanisme keamanan (tipe_cexpr di
+catatan: cek_jit_murni_kondisi) SENGAJA menolak native-compile kasus ini, bukan
+catatan: nyoba promosi tipe implisit yang lebih riskan salah.
+bentuk D3 { a: Angka, b: Desimal }
+fungsi cek_campur_langsung(d: D3) {
+    kalau (d.a == d.b) {
+        kembalikan 1
+    }
+    kembalikan 0
+}
+tampilkan cek_campur_langsung(D3 { a: 1, b: 1.0 })
+tampilkan cek_campur_langsung(D3 { a: 1, b: 2.0 })

@@ -99,3 +99,73 @@ Ini scope pekerjaan MINGGUAN (compiler engineering signifikan), sesuai
 catatan di ROADMAP.md item #6 -- perbaikan di putaran ini adalah
 langkah AWAL yang nyata & terverifikasi (2x di level interpreter),
 bukan solusi penuh.
+
+## Putaran Lanjutan: `TipeJit::Campur` -- Native JIT Sungguhan buat Struct Campuran
+
+Item #1 di "Langkah Selanjutnya" di atas SEKARANG SELESAI: `bentuk`
+dengan field campuran Angka+Desimal (bukan cuma Bentuk-seragam-tipe)
+sekarang BISA benar-benar dikompilasi native Cranelift, bukan cuma
+optimasi interpreter.
+
+### Pendekatan: aman lewat verifikasi per-operasi, bukan promosi tipe implisit
+
+Ditambah varian baru `TipeJit::Campur` (lihat catatan panjang di
+`src/lib.rs`) -- fungsi dengan slot BERBEDA tipe per field, TAPI setiap
+OPERASI individual (perbandingan `==`, `<=`, dst) diverifikasi
+same-type di kedua operand-nya (`tipe_cexpr()`) SEBELUM diizinkan JIT.
+Kalau ada SATU operasi saja yang benar-benar mencampur Angka+Desimal
+(mis. `d.a == d.b` langsung), seluruh fungsi GAGAL syarat murni --
+fallback ke interpreter (aman, hasil tetap benar), BUKAN nyoba promosi
+tipe implisit (int->float) yang lebih riskan salah kalau meleset.
+
+**Skop SENGAJA dipersempit buat keamanan**: mode Campur cuma didukung
+buat PERBANDINGAN, TIDAK BOLEH aritmatika (`+`/`-`/`*`) sama sekali --
+menghindari kebutuhan mekanisme overflow-flag/promosi-tipe yang jauh
+lebih riskan. Nilai kembalian (`kembalikan`) WAJIB Angka (signature
+Cranelift butuh SATU tipe kembalian pasti). Juga cuma didukung di jalur
+`kompilasi_dari_ir` (via-ir/AOT) -- jalur JIT legacy (`isoteri
+prog.iso` default) SENGAJA menolak Campur di awal (fallback interpreter
+otomatis, tetap benar, cuma tidak dapat manfaat native compile di jalur
+itu).
+
+### Verifikasi correctness
+
+15/15 test regresi lulus (`scripts/regresi.sh`), termasuk test case
+baru `tes_regresi/tipe_campur_jit.iso` yang mengunci:
+- Struct dengan field Angka DAN Desimal bekerja benar sekaligus (bukan
+  cuma salah satu tipe)
+- **Kasus paling penting**: operasi yang BENAR-BENAR mencampur tipe
+  (`d.a == d.b`, Angka dibanding LANGSUNG dengan Desimal) tetap dapat
+  hasil BENAR lewat fallback interpreter otomatis -- dibuktikan
+  `tipe_jit_final=None` buat fungsi itu spesifik (bukan `Some(Campur)`
+  seperti fungsi yang aman), verified via `ISOTERI_DEBUG_JIT=1`.
+- Konsisten di 3 jalur eksekusi (JIT default, bytecode murni, via-ir),
+  dengan 1 divergensi stderr yang diizinkan & didokumentasikan
+  (`tes_regresi/divergensi_diketahui.txt`) -- warning informational
+  "Campur belum didukung di jalur legacy" yang cuma tercetak di mode
+  JIT default (karena sempat coba dulu sebelum fallback), TIDAK ada di
+  bytecode murni (skip percobaan sama sekali) maupun via-ir (berhasil
+  native, tidak perlu fallback).
+
+### Hasil benchmark (angka jujur, bukan cherry-pick)
+
+`validasi_petani_struct` sekarang MENANG di level fungsi individual
+(`validasi_petani_struct()` sendiri dapat `tipe_jit_final=Some(Campur)`
+-- native compile berhasil), tapi fungsi PEMBUNGKUS (`validasi_satu`,
+dipanggil 500rb kali di top-level loop) MASIH interpreter penuh --
+parameternya (`i`) tidak dianotasi tipe DAN pakai operator `%` (modulo)
+yang belum didukung sama sekali di JIT manapun (bukan spesifik Campur --
+`Bagi`/`Modulo` keduanya masih `unreachable!()` di semua mode, perlu
+mekanisme pengecekan pembagi-nol di codegen yang belum dibangun).
+
+| | Sebelum (fast-path literal saja) | Sesudah (+ mode Campur) | Node.js |
+|---|---:|---:|---:|
+| `validasi_petani_struct` AOT | ~840ms | **~500ms** (~40% lebih cepat) | ~42ms |
+
+**Masih ~12x lebih lambat dari Node.js -- BELUM sampai target `<=5x`**,
+tapi progress nyata & terukur (840ms->500ms). Sisa jaraknya SEKARANG
+punya penyebab yang jelas & sempit: `validasi_satu` (fungsi
+pembungkus) perlu (a) anotasi tipe pada parameternya, DAN (b) dukungan
+`%` (modulo) di JIT -- keduanya independen dari pekerjaan mode Campur
+di atas, item terpisah buat putaran berikutnya.
+

@@ -819,8 +819,14 @@ pub enum CStmt {
     Lanjut,
 }
 
+// TipeJit::Campur (BARU) -- fungsi dengan slot BERBEDA tipe (mis. field struct campuran
+// Angka+Desimal), TAPI tiap OPERASI individual (BinOp/perbandingan) diverifikasi
+// same-type di kedua operand-nya (lewat tipe_cexpr() di bawah) SEBELUM diizinkan JIT --
+// kalau ada satu operasi saja yang benar-benar mencampur Angka+Desimal, seluruh fungsi
+// GAGAL syarat murni (fallback ke interpreter, aman) -- BUKAN nyoba implementasi promosi
+// tipe implisit (int->float) yang lebih riskan salah. Lihat benchmarks/representasi/README.md.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum TipeJit { Angka, Desimal }
+enum TipeJit { Angka, Desimal, Campur }
 
 fn tipe_jit_dari_nama(s: &str) -> Option<TipeJit> {
     match s { "Angka" => Some(TipeJit::Angka), "Desimal" => Some(TipeJit::Desimal), _ => None }
@@ -905,16 +911,48 @@ fn variabel_bebas_expr(e: &Expr, terikat: &mut std::collections::HashSet<String>
     }
 }
 
-fn cek_jit_murni_stmt(s: &CStmt, nama_sendiri: &str, arity: usize, mode: TipeJit) -> bool {
+fn cek_jit_murni_stmt(s: &CStmt, nama_sendiri: &str, arity: usize, mode: TipeJit, slot_tipe: &[Option<TipeJit>]) -> bool {
     match s {
         CStmt::IngatLocal(_, e) | CStmt::UbahLocal(_, e) => cek_jit_murni_nilai(e, nama_sendiri, arity, mode),
-        CStmt::Kalau(c, tb, eb) => cek_jit_murni_kondisi(c, nama_sendiri, arity, mode)
-            && tb.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_sendiri, arity, mode))
-            && eb.as_ref().map_or(true, |b| b.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_sendiri, arity, mode))),
-        CStmt::Ulang(c, b) => cek_jit_murni_kondisi(c, nama_sendiri, arity, mode) && b.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_sendiri, arity, mode)),
-        CStmt::Kembalikan(e) => cek_jit_murni_nilai(e, nama_sendiri, arity, mode),
+        CStmt::Kalau(c, tb, eb) => cek_jit_murni_kondisi(c, nama_sendiri, arity, mode, slot_tipe)
+            && tb.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_sendiri, arity, mode, slot_tipe))
+            && eb.as_ref().map_or(true, |b| b.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_sendiri, arity, mode, slot_tipe))),
+        CStmt::Ulang(c, b) => cek_jit_murni_kondisi(c, nama_sendiri, arity, mode, slot_tipe) && b.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_sendiri, arity, mode, slot_tipe)),
+        CStmt::Kembalikan(e) => cek_jit_murni_nilai(e, nama_sendiri, arity, mode)
+            // Mode Campur: nilai kembalian WAJIB Angka (atau ambigu, default Angka) -- signature
+            // Cranelift butuh SATU tipe kembalian pasti, dan validasi_petani-style (kembalikan
+            // kode error/status sbg Angka) itu pola yang paling umum. Kalau butuh kembalikan
+            // Desimal dari fungsi Campur, itu di luar cakupan slice aman ini (fallback interpreter).
+            && (mode != TipeJit::Campur || !matches!(tipe_cexpr(e, slot_tipe), Ok(Some(TipeJit::Desimal)) | Err(()))),
         CStmt::EkspresiStmt(e) => cek_jit_murni_nilai(e, nama_sendiri, arity, mode),
         _ => false, // IngatGlobal/UbahGlobal/UlangSetiap*/UlangSelaras/CobaGlobal/CobaLocal -> bukan fungsi murni
+    }
+}
+
+/// Tentukan tipe HASIL sebuah CExpr numerik dari sudut pandang tipe slot-nya (`slot_tipe`
+/// per-index) -- dipakai KHUSUS buat verifikasi mode TipeJit::Campur (lihat catatan panjang
+/// di enum TipeJit): pastikan operand kiri&kanan sebuah perbandingan BENAR-BENAR same-type
+/// sebelum diizinkan JIT. Ok(None) = ambigu (literal Angka polos, cocok tipe apa saja) atau
+/// di luar cakupan (bukan numerik) -- caller yang memutuskan gimana menyikapi. Err(()) =
+/// KONFLIK NYATA (satu sisi Angka, sisi lain Desimal) -- caller HARUS menolak (fallback
+/// interpreter, aman) -- SENGAJA tidak nyoba promosi tipe implisit (int->float), itu lebih
+/// riskan salah kalau meleset.
+fn tipe_cexpr(e: &CExpr, slot_tipe: &[Option<TipeJit>]) -> Result<Option<TipeJit>, ()> {
+    match e {
+        CExpr::Local(i) => Ok(slot_tipe.get(*i).copied().flatten()),
+        CExpr::Angka(_) => Ok(None),
+        CExpr::Desimal(_) => Ok(Some(TipeJit::Desimal)),
+        CExpr::Binary(l, _, r) => {
+            let tl = tipe_cexpr(l, slot_tipe)?;
+            let tr = tipe_cexpr(r, slot_tipe)?;
+            match (tl, tr) {
+                (Some(a), Some(b)) if a == b => Ok(Some(a)),
+                (Some(a), None) | (None, Some(a)) => Ok(Some(a)),
+                (None, None) => Ok(None),
+                (Some(_), Some(_)) => Err(()), // Angka vs Desimal, konflik nyata -- TOLAK
+            }
+        }
+        _ => Ok(None),
     }
 }
 
@@ -924,20 +962,30 @@ fn cek_jit_murni_nilai(e: &CExpr, nama_sendiri: &str, arity: usize, mode: TipeJi
         // Literal Angka boleh muncul di kedua mode (di mode Desimal ia otomatis dipromosikan
         // ke konstanta f64 saat codegen). Literal Desimal cuma sah kalau mode-nya Desimal.
         CExpr::Angka(_) => true,
-        CExpr::Desimal(_) => mode == TipeJit::Desimal,
-        CExpr::Binary(l, op, r) => matches!(op, BinOp::Tambah | BinOp::Kurang | BinOp::Kali)
+        // Literal Desimal valid di mode Desimal ATAU Campur (field bertipe Desimal boleh
+        // dibandingkan/diisi literal Desimal, lihat catatan panjang di enum TipeJit) -- cuma
+        // ditolak di mode Angka murni (di situ SEMUA slot i64, literal Desimal gak masuk akal).
+        CExpr::Desimal(_) => mode != TipeJit::Angka,
+        // Campur SENGAJA tidak boleh aritmatika sama sekali (lihat catatan panjang di enum
+        // TipeJit) -- cuma dipakai buat PERBANDINGAN (lihat cek_jit_murni_kondisi), yang tidak
+        // butuh mekanisme overflow-flag/promosi tipe implisit sama sekali, jauh lebih aman.
+        CExpr::Binary(l, op, r) => mode != TipeJit::Campur && matches!(op, BinOp::Tambah | BinOp::Kurang | BinOp::Kali)
             && cek_jit_murni_nilai(l, nama_sendiri, arity, mode) && cek_jit_murni_nilai(r, nama_sendiri, arity, mode),
         CExpr::Panggil(nama, args) => nama == nama_sendiri && args.len() == arity && args.iter().all(|a| cek_jit_murni_nilai(a, nama_sendiri, arity, mode)),
         _ => false, // Teks/Bool/Global/Daftar/Peta/Indeks/Field/BentukLiteral/Bagi/panggilan-lain -> bukan
     }
 }
 
-fn cek_jit_murni_kondisi(e: &CExpr, nama_sendiri: &str, arity: usize, mode: TipeJit) -> bool {
+fn cek_jit_murni_kondisi(e: &CExpr, nama_sendiri: &str, arity: usize, mode: TipeJit, slot_tipe: &[Option<TipeJit>]) -> bool {
     match e {
         CExpr::Binary(l, op, r) => match op {
             BinOp::SamaDengan | BinOp::TidakSama | BinOp::LebihBesar | BinOp::LebihBesarSama
-            | BinOp::LebihKecil | BinOp::LebihKecilSama => cek_jit_murni_nilai(l, nama_sendiri, arity, mode) && cek_jit_murni_nilai(r, nama_sendiri, arity, mode),
-            BinOp::Dan | BinOp::Atau => cek_jit_murni_kondisi(l, nama_sendiri, arity, mode) && cek_jit_murni_kondisi(r, nama_sendiri, arity, mode),
+            | BinOp::LebihKecil | BinOp::LebihKecilSama => cek_jit_murni_nilai(l, nama_sendiri, arity, mode) && cek_jit_murni_nilai(r, nama_sendiri, arity, mode)
+                // Mode Campur: WAJIB verifikasi operand kiri&kanan same-type (lihat tipe_cexpr()) --
+                // mode Angka/Desimal biasa tidak perlu (uniformitas sudah dijamin tipe_seragam
+                // di titik lain, lihat resolve_fungsi_umum).
+                && (mode != TipeJit::Campur || tipe_cexpr(e, slot_tipe).is_ok()),
+            BinOp::Dan | BinOp::Atau => cek_jit_murni_kondisi(l, nama_sendiri, arity, mode, slot_tipe) && cek_jit_murni_kondisi(r, nama_sendiri, arity, mode, slot_tipe),
             _ => false,
         },
         // Kondisi yang sudah terlipat penuh jadi literal Bool oleh optimizer IR (mis. dari
@@ -1417,11 +1465,20 @@ fn resolve_fungsi_umum(
         Some(TipeJit::Angka)
     } else if lr.slot_tipe.iter().all(|t| *t == Some(TipeJit::Desimal)) {
         Some(TipeJit::Desimal)
+    } else if lr.slot_tipe.iter().all(|t| t.is_some()) {
+        // Semua slot punya tipe (Angka/Desimal), TAPI tidak seragam -- mis. field struct
+        // campuran (bentuk DataPetani { nama_kosong: Angka, lahan: Desimal, ... }). Lihat
+        // catatan panjang di enum TipeJit::Campur & cek_jit_murni_kondisi/tipe_cexpr --
+        // verifikasi per-operasi (bukan cuma per-fungsi) menjamin ini tetap aman.
+        Some(TipeJit::Campur)
     } else {
         None
     };
-    let tipe_jit = tipe_seragam.filter(|t| cbody.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_fungsi, param_count, *t)));
+    let tipe_jit = tipe_seragam.filter(|t| cbody.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_fungsi, param_count, *t, &lr.slot_tipe)));
 
+    if std::env::var("ISOTERI_DEBUG_JIT").is_ok() {
+        eprintln!("DEBUG_JIT fungsi={} tipe_seragam={:?} tipe_jit_final={:?} slot_tipe={:?}", nama_fungsi, tipe_seragam, tipe_jit, lr.slot_tipe);
+    }
     Ok(CFungsi {
         param_count,
         local_slot_count: lr.local_count,
@@ -2300,6 +2357,13 @@ enum NativeFn {
     /// (checked_add dkk di eval BinOp) -- lihat catatan panjang di JitEngine::kompilasi.
     Angka(extern "C" fn(*const i64, *mut i64) -> i64),
     Desimal(extern "C" fn(*const f64) -> f64),
+    /// Mode Campur (lihat catatan panjang di enum TipeJit) -- larik argumen berisi CAMPURAN
+    /// i64 mentah & bit-pattern f64 (reinterpretasi lewat f64::to_bits(), tersimpan di slot
+    /// i64 yang sama, dibaca ulang sesuai tipe SLOT-nya masing-masing oleh kode native --
+    /// lihat tipe_reg() di JitEngine::kompilasi_dari_ir). TANPA ptr flag overflow -- mode
+    /// Campur SENGAJA tidak boleh aritmatika sama sekali (dicegah cek_jit_murni_nilai), jadi
+    /// tidak ada risiko overflow yang perlu dilacak.
+    Campur(extern "C" fn(*const i64) -> i64),
 }
 
 struct VMFungsi {
@@ -2318,6 +2382,12 @@ struct VMFungsi {
     /// jadi beberapa nilai field kalau parameter fungsi ini "flattened", supaya petakan()/
     /// saring()/urutkan() bisa manggil fungsi begini juga (bukan cuma pemanggilan nama statis).
     param_flat: Vec<Option<Vec<String>>>,
+    /// Salinan CFungsi::slot_tipe (cuma param_count elemen pertama yang relevan di sini) --
+    /// dipakai KHUSUS native==Some(NativeFn::Campur) buat tahu tiap argumen posisi ke-i itu
+    /// Angka atau Desimal saat membungkus larik argumen native (lihat
+    /// panggil_fungsi_dengan_argumen). Kosong (Vec baru) kalau fungsi ini bukan native Campur
+    /// (tidak dipakai, hemat memori -- HampirSemuaFungsi tidak butuh ini).
+    slot_tipe: Vec<Option<TipeJit>>,
 }
 
 /// Konteks satu loop yang lagi dikompilasi -- dipush saat masuk 'ulang'/'ulang setiap',
@@ -2372,7 +2442,7 @@ impl Compiler {
         let mut out = Vec::new();
         self.compile_blok(&f.body, &mut out);
         let param_flat = f.param_flat.iter().map(|p| p.as_ref().map(|(_, field_urut)| field_urut.clone())).collect();
-        VMFungsi { param_count: f.param_count, local_slot_count: f.local_slot_count, kode: out, native: None, param_flat }
+        VMFungsi { param_count: f.param_count, local_slot_count: f.local_slot_count, kode: out, native: None, param_flat, slot_tipe: Vec::new() }
     }
 
     fn compile_blok(&mut self, stmts: &[(usize, CStmt)], out: &mut Vec<Instr>) {
@@ -2697,7 +2767,7 @@ impl JitEngine {
         use cranelift::prelude::*;
         use cranelift_module::{Linkage, Module};
 
-        let tipe_cl = match mode { TipeJit::Angka => types::I64, TipeJit::Desimal => types::F64 };
+        let tipe_cl = match mode { TipeJit::Angka => types::I64, TipeJit::Desimal => types::F64, TipeJit::Campur => unreachable!("mode Campur dicegah masuk jalur legacy ini, lihat coba_kompilasi_jit") };
 
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I64)); // pointer ke larik argumen
@@ -2732,6 +2802,7 @@ impl JitEngine {
             let nol = match mode {
                 TipeJit::Angka => builder.ins().iconst(types::I64, 0),
                 TipeJit::Desimal => builder.ins().f64const(0.0),
+                TipeJit::Campur => unreachable!("mode Campur dicegah masuk jalur legacy ini, lihat coba_kompilasi_jit"),
             };
             builder.def_var(Variable::new(i), nol);
         }
@@ -2766,6 +2837,7 @@ impl JitEngine {
             let nol = match mode {
                 TipeJit::Angka => kompiler.builder.ins().iconst(types::I64, 0),
                 TipeJit::Desimal => kompiler.builder.ins().f64const(0.0),
+                TipeJit::Campur => unreachable!("mode Campur dicegah masuk jalur legacy ini, lihat coba_kompilasi_jit"),
             };
             kompiler.tulis_flag_keluaran();
             kompiler.builder.ins().return_(&[nol]);
@@ -2794,8 +2866,21 @@ impl JitEngine {
         use cranelift::prelude::*;
         use cranelift_module::{Linkage, Module};
 
-        let tipe_cl = match mode { TipeJit::Angka => types::I64, TipeJit::Desimal => types::F64 };
-        let tipe_reg = |r: usize| -> Type { if reg_types.get(r).copied() == Some(IrType::Bool) { types::I8 } else { tipe_cl } };
+        let tipe_cl = match mode { TipeJit::Angka => types::I64, TipeJit::Desimal => types::F64, TipeJit::Campur => types::I64 }; // Campur: return WAJIB Angka (lihat cek_jit_murni_stmt CStmt::Kembalikan), jadi I64 aman
+        // Baca tipe PER-REGISTER dari reg_types (Angka->I64, Desimal->F64, Bool->I8) -- BUKAN
+        // cuma "Bool vs tipe_cl seragam" seperti sebelumnya. reg_types SUDAH diisi benar
+        // per-slot sejak lower_fungsi_ke_ir() (lihat tipe_dari_jit()) -- fix ini murni di sisi
+        // KONSUMSI-nya. Aman buat fungsi mode Angka/Desimal lama (semua slot-nya memang SAMA
+        // tipe -> hasilnya identik dengan tipe_cl seperti sebelumnya), DAN sekarang mendukung
+        // mode Campur (field beda tipe) dengan benar. Lihat catatan panjang di enum TipeJit.
+        let tipe_reg = |r: usize| -> Type {
+            match reg_types.get(r).copied() {
+                Some(IrType::Bool) => types::I8,
+                Some(IrType::Desimal) => types::F64,
+                Some(IrType::Angka) => types::I64,
+                _ => tipe_cl, // Dinamis/Teks/di luar jangkauan -- tidak seharusnya kejadian di fungsi JIT-elig, tipe_cl sbg fallback aman
+            }
+        };
 
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I64));
@@ -2821,7 +2906,14 @@ impl JitEngine {
         for i in 0..ambang_temp.min(total_reg) { builder.declare_var(Variable::new(i), tipe_reg(i)); }
         let ptr_arg = builder.block_params(entry)[0];
         for i in 0..param_count {
-            let nilai = builder.ins().load(tipe_cl, MemFlags::new(), ptr_arg, (i * 8) as i32);
+            // tipe_reg(i) (BUKAN tipe_cl seragam) -- inilah titik INTI dukungan mode Campur:
+            // tiap parameter di-load sesuai TIPE SLOT-nya sendiri (I64 utk Angka, F64 utk
+            // Desimal), bukan asumsi semua parameter tipe yang sama. Aman buat mode Angka/
+            // Desimal murni juga (tipe_reg(i) == tipe_cl buat semua i di sana, sama seperti
+            // sebelumnya). Lihat catatan panjang di enum TipeJit & NativeFn::Campur (pemanggil
+            // Rust sudah membungkus larik argumen sesuai tipe ini, lihat
+            // panggil_fungsi_dengan_argumen & Instr::PanggilFungsi).
+            let nilai = builder.ins().load(tipe_reg(i), MemFlags::new(), ptr_arg, (i * 8) as i32);
             builder.def_var(Variable::new(i), nilai);
         }
         for i in param_count..ambang_temp.min(total_reg) {
@@ -2878,7 +2970,7 @@ impl JitEngine {
             terminated = kompiler.kompilasi_instr(instr, idx);
         }
         if !terminated {
-            let nol = match mode { TipeJit::Angka => kompiler.builder.ins().iconst(types::I64, 0), TipeJit::Desimal => kompiler.builder.ins().f64const(0.0) };
+            let nol = match mode { TipeJit::Angka => kompiler.builder.ins().iconst(types::I64, 0), TipeJit::Desimal => kompiler.builder.ins().f64const(0.0), TipeJit::Campur => kompiler.builder.ins().iconst(types::I64, 0) };
             kompiler.tulis_flag_keluaran();
             kompiler.builder.ins().return_(&[nol]);
         }
@@ -2963,9 +3055,14 @@ impl<'a, 'b> KompilerBadanIr<'a, 'b> {
             IrInstr::TandaiBaris(_) => false,
             IrInstr::Const(dst, c) => {
                 let v = match c {
-                    IrConst::Angka(n) => match self.mode {
-                        TipeJit::Angka => self.builder.ins().iconst(types::I64, *n),
-                        TipeJit::Desimal => self.builder.ins().f64const(*n as f64),
+                    // Pakai tipe REGISTER TUJUAN (dst), BUKAN self.mode -- di mode Campur,
+                    // literal Angka polos (mis. "kembalikan 1") bisa jadi perlu ditaruh di
+                    // register Angka ATAUPUN Desimal tergantung konteks pemakaiannya (lihat
+                    // catatan panjang di enum TipeJit & tipe_cexpr()). Aman buat mode Angka/
+                    // Desimal murni juga (tipe_reg_fn(dst) selalu sama dgn self.mode di sana).
+                    IrConst::Angka(n) => match (self.tipe_reg_fn)(*dst as usize) {
+                        t if t == types::F64 => self.builder.ins().f64const(*n as f64),
+                        _ => self.builder.ins().iconst(types::I64, *n),
                     },
                     IrConst::Desimal(f) => self.builder.ins().f64const(*f),
                     IrConst::Bool(b) => self.builder.ins().iconst(types::I8, if *b { 1 } else { 0 }),
@@ -2988,21 +3085,19 @@ impl<'a, 'b> KompilerBadanIr<'a, 'b> {
                         (TipeJit::Desimal, Tambah) => self.builder.ins().fadd(av, bv),
                         (TipeJit::Desimal, Kurang) => self.builder.ins().fsub(av, bv),
                         (TipeJit::Desimal, Kali) => self.builder.ins().fmul(av, bv),
+                        (TipeJit::Campur, _) => unreachable!("mode Campur tidak boleh aritmatika sama sekali, dicegah cek_jit_murni_nilai -- lihat catatan panjang di enum TipeJit"),
                         _ => unreachable!("Bagi seharusnya sudah disaring cek_jit_murni_nilai"),
                     },
                     Dan => self.builder.ins().band(av, bv),
                     Atau => self.builder.ins().bor(av, bv),
-                    SamaDengan | TidakSama | LebihBesar | LebihBesarSama | LebihKecil | LebihKecilSama => match self.mode {
-                        TipeJit::Angka => {
-                            let cc = match op {
-                                SamaDengan => IntCC::Equal, TidakSama => IntCC::NotEqual,
-                                LebihBesar => IntCC::SignedGreaterThan, LebihBesarSama => IntCC::SignedGreaterThanOrEqual,
-                                LebihKecil => IntCC::SignedLessThan, LebihKecilSama => IntCC::SignedLessThanOrEqual,
-                                _ => unreachable!(),
-                            };
-                            self.builder.ins().icmp(cc, av, bv)
-                        }
-                        TipeJit::Desimal => {
+                    // Tipe operand (BUKAN self.mode) yang menentukan icmp vs fcmp -- di mode
+                    // Campur, `a`/`b` bisa Angka ATAU Desimal tergantung field-nya (lihat
+                    // tipe_cexpr() & cek_jit_murni_kondisi yang SUDAH memverifikasi kedua
+                    // operand ini same-type sebelum sampai sini, jadi aman pakai tipe SALAH
+                    // SATU operand, tidak perlu cek keduanya lagi). Aman juga buat mode Angka/
+                    // Desimal murni (tipe_reg_fn(a) selalu sama dgn self.mode di sana).
+                    SamaDengan | TidakSama | LebihBesar | LebihBesarSama | LebihKecil | LebihKecilSama => match (self.tipe_reg_fn)(*a as usize) {
+                        t if t == types::F64 => {
                             let cc = match op {
                                 SamaDengan => FloatCC::Equal, TidakSama => FloatCC::NotEqual,
                                 LebihBesar => FloatCC::GreaterThan, LebihBesarSama => FloatCC::GreaterThanOrEqual,
@@ -3010,6 +3105,15 @@ impl<'a, 'b> KompilerBadanIr<'a, 'b> {
                                 _ => unreachable!(),
                             };
                             self.builder.ins().fcmp(cc, av, bv)
+                        }
+                        _ => {
+                            let cc = match op {
+                                SamaDengan => IntCC::Equal, TidakSama => IntCC::NotEqual,
+                                LebihBesar => IntCC::SignedGreaterThan, LebihBesarSama => IntCC::SignedGreaterThanOrEqual,
+                                LebihKecil => IntCC::SignedLessThan, LebihKecilSama => IntCC::SignedLessThanOrEqual,
+                                _ => unreachable!(),
+                            };
+                            self.builder.ins().icmp(cc, av, bv)
                         }
                     },
                     Bagi => unreachable!("Bagi seharusnya sudah disaring cek_jit_murni_nilai"),
@@ -3200,6 +3304,7 @@ impl<'a> KompilerBadan<'a> {
                 // (sudah divalidasi boleh oleh cek_jit_murni_nilai).
                 TipeJit::Angka => self.builder.ins().iconst(types::I64, *n),
                 TipeJit::Desimal => self.builder.ins().f64const(*n as f64),
+                TipeJit::Campur => unreachable!("mode Campur dicegah masuk jalur legacy ini, lihat coba_kompilasi_jit"),
             },
             CExpr::Desimal(f) => self.builder.ins().f64const(*f),
             CExpr::Local(slot) => self.builder.use_var(Variable::new(*slot)),
@@ -3295,6 +3400,7 @@ impl<'a> KompilerBadan<'a> {
                             };
                             self.builder.ins().fcmp(cc, lv, rv)
                         }
+                        TipeJit::Campur => unreachable!("mode Campur dicegah masuk jalur legacy ini, lihat coba_kompilasi_jit"),
                     };
                 }
             }
@@ -3698,6 +3804,24 @@ fn panggil_fungsi_dengan_argumen(pustaka: &Pustaka, state: &mut VMState, idx: us
                 }
                 Ok(Value::Desimal(native(larik.as_ptr())))
             }
+            NativeFn::Campur(native) => {
+                // Bungkus tiap argumen SESUAI TIPE SLOT-nya masing-masing (f.slot_tipe) --
+                // Angka jadi i64 mentah, Desimal jadi bit-pattern f64 (f64::to_bits(), disimpan
+                // di slot i64 yang sama -- kode native yang tahu cara baca ulang sesuai tipe
+                // ASLI-nya, lihat tipe_reg() di JitEngine::kompilasi_dari_ir). Lihat catatan
+                // panjang di enum TipeJit & NativeFn::Campur kenapa ini aman.
+                let mut larik: Vec<i64> = Vec::with_capacity(argumen.len());
+                for (i, v) in argumen.into_iter().enumerate() {
+                    let t = f.slot_tipe.get(i).copied().flatten();
+                    match (t, v) {
+                        (Some(TipeJit::Angka), Value::Angka(n)) => larik.push(n),
+                        (Some(TipeJit::Desimal), Value::Desimal(n)) => larik.push(n.to_bits() as i64),
+                        (Some(TipeJit::Desimal), Value::Angka(n)) => larik.push((n as f64).to_bits() as i64),
+                        (t, lain) => return Err(format!("Argumen ke-{} untuk fungsi native (JIT) harus {:?}, ditemukan {}", i + 1, t, lain)),
+                    }
+                }
+                Ok(Value::Angka(native(larik.as_ptr())))
+            }
         }
     } else {
         let base = state.locals_stack.len();
@@ -3937,6 +4061,23 @@ fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_
                                     }
                                 }
                                 Value::Desimal(native(larik.as_ptr()))
+                            }
+                            NativeFn::Campur(native) => {
+                                // Sama seperti NativeFn::Campur di panggil_fungsi_dengan_argumen
+                                // (lihat catatan panjang di sana) -- bungkus tiap argumen sesuai
+                                // tipe slot-nya (f.slot_tipe), Angka jadi i64 mentah, Desimal jadi
+                                // bit-pattern f64.
+                                let mut larik: Vec<i64> = Vec::with_capacity(*argc);
+                                for (i, v) in state.stack.drain(args_start..).enumerate() {
+                                    let t = f.slot_tipe.get(i).copied().flatten();
+                                    match (t, v) {
+                                        (Some(TipeJit::Angka), Value::Angka(n)) => larik.push(n),
+                                        (Some(TipeJit::Desimal), Value::Desimal(n)) => larik.push(n.to_bits() as i64),
+                                        (Some(TipeJit::Desimal), Value::Angka(n)) => larik.push((n as f64).to_bits() as i64),
+                                        (t, lain) => return Err(format!("Argumen ke-{} untuk fungsi native (JIT) harus {:?}, ditemukan {}", i + 1, t, lain)),
+                                    }
+                                }
+                                Value::Angka(native(larik.as_ptr()))
                             }
                         };
                         state.stack.push(hasil);
@@ -5621,10 +5762,19 @@ pub fn jalankan_berkas(path: &str) -> Result<(), String> {
 // apa-apa soal transmute pointer JIT sama sekali.
 #[cfg(feature = "jit")]
 fn coba_kompilasi_jit(jit: &mut JitEngine, cf: &CFungsi, mode: TipeJit) -> Result<NativeFn, String> {
+    // Mode Campur (field/param tipe campuran, lihat catatan panjang di enum TipeJit) SENGAJA
+    // cuma didukung di jalur kompilasi_dari_ir/via-ir/AOT (kompilasi_dari_ir), BUKAN di jalur
+    // legacy CExpr-langsung ini (dipakai runtime JIT default `isoteri prog.iso`) -- refuse di
+    // sini, fallback ke interpreter (aman, correctness tidak terpengaruh, cuma jalur ini yang
+    // tidak dapat manfaat native compile buat fungsi Campur; AOT tetap dapat).
+    if mode == TipeJit::Campur {
+        return Err("mode Campur belum didukung di jalur JIT legacy (dipakai jalur IR/AOT saja)".to_string());
+    }
     let ptr = jit.kompilasi(cf, mode)?;
     Ok(match mode {
         TipeJit::Angka => NativeFn::Angka(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64, *mut i64) -> i64>(ptr) }),
         TipeJit::Desimal => NativeFn::Desimal(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const f64) -> f64>(ptr) }),
+        TipeJit::Campur => unreachable!("dicegah di atas"),
     })
 }
 
@@ -5798,7 +5948,15 @@ impl<'a> IrLower<'a> {
     }
 
     fn tipe_dari_jit(t: Option<TipeJit>) -> IrType {
-        match t { Some(TipeJit::Angka) => IrType::Angka, Some(TipeJit::Desimal) => IrType::Desimal, None => IrType::Dinamis }
+        match t {
+            Some(TipeJit::Angka) => IrType::Angka,
+            Some(TipeJit::Desimal) => IrType::Desimal,
+            None => IrType::Dinamis,
+            // TipeJit::Campur itu status level FUNGSI (campuran antar-slot), bukan nilai yang
+            // pernah tersimpan di SATU slot_tipe[i] individual -- tiap slot tetap Angka/Desimal/
+            // None seperti biasa, cuma KOMBINASINYA yang bisa campur. Lihat enum TipeJit.
+            Some(TipeJit::Campur) => unreachable!("slot_tipe per-elemen tidak seharusnya pernah Campur"),
+        }
     }
 
     /// Lower satu ekspresi -> (register hasil, tipenya). Rekursif, bottom-up.
@@ -6383,6 +6541,11 @@ fn coba_kompilasi_jit_dari_ir(jit: &mut JitEngine, nama: &str, ir: &[IrInstr], r
     Ok(match mode {
         TipeJit::Angka => NativeFn::Angka(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64, *mut i64) -> i64>(ptr) }),
         TipeJit::Desimal => NativeFn::Desimal(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const f64) -> f64>(ptr) }),
+        // Signature: satu pointer larik argumen (i64 mentah/bit-pattern f64 campur, lihat
+        // catatan panjang di NativeFn::Campur), TANPA ptr flag overflow (Campur tidak pernah
+        // aritmatika), kembalikan i64 (verified Angka-only lewat CStmt::Kembalikan check di
+        // cek_jit_murni_stmt).
+        TipeJit::Campur => NativeFn::Campur(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64) -> i64>(ptr) }),
     })
 }
 
@@ -6447,6 +6610,7 @@ pub fn jalankan_stmt_list_via_ir(program: Vec<(usize, Stmt)>) -> Result<(), Stri
             kode,
             native,
             param_flat,
+            slot_tipe: cf.slot_tipe.clone(),
         };
         fungsi_vm.push(Rc::new(vmf));
     }

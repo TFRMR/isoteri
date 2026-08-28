@@ -1,0 +1,8 @@
+Peringatan: fungsi "cek_campur" gagal dikompilasi JIT (mode Campur belum didukung di jalur JIT legacy (dipakai jalur IR/AOT saja)), pakai bytecode biasa.
+100
+200
+300
+0
+1
+0
+EXIT:0
