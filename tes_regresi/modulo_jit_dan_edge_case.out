@@ -1,0 +1,11 @@
+1
+0
+1
+Baris 27: Tidak bisa modulo dengan nol.
+0
+-1
+1
+Baris 44: Angka meluap (overflow): -9223372036854775808 / -1 melebihi jangkauan Angka (-9223372036854775808..9223372036854775807). Pertimbangkan pakai Desimal kalau nilainya memang bisa sebesar ini.
+2
+3
+EXIT:0

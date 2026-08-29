@@ -1,0 +1,59 @@
+catatan: Kunci perilaku dukungan Modulo (%) di JIT Cranelift mode Angka murni
+catatan: (lihat catatan panjang di cek_jit_murni_nilai & IrInstr::BinOp Modulo di
+catatan: src/lib.rs) -- langkah lanjutan item #6 ROADMAP setelah TipeJit::Campur,
+catatan: dipicu kebutuhan validasi_satu (fungsi pembungkus validasi_petani_struct)
+catatan: di benchmarks/representasi/README.md supaya ikut ter-JIT.
+
+fungsi validasi_satu(i: Angka) {
+    ingat sisa: Angka = i % 5
+    kalau (sisa == 0) {
+        kembalikan 1
+    }
+    kembalikan 0
+}
+
+catatan: Kasus 1: modulo dasar dengan berbagai nilai (positif habis dibagi,
+catatan: positif sisa, nol).
+tampilkan validasi_satu(10)
+tampilkan validasi_satu(7)
+tampilkan validasi_satu(0)
+
+catatan: Kasus 2: modulo dengan nol -- HARUS jadi error tertangkap (bukan crash),
+catatan: pesan identik dengan interpreter biasa.
+fungsi mod_nol(a: Angka, b: Angka) {
+    kembalikan a % b
+}
+coba {
+    tampilkan mod_nol(10, 0)
+} tangkap e {
+    tampilkan e
+}
+
+catatan: Kasus 3 -- PALING PENTING: edge case i64::MIN % -1 dan i64::MIN / -1.
+catatan: Ini BUKAN kondisi pembagi-nol, tapi overflow matematis (hasil PEMBAGIAN di
+catatan: luar jangkauan i64) yang bisa bikin CPU trap/Rust panic kalau tidak
+catatan: ditangani eksplisit -- ditemukan sebagai bug PRE-EXISTING di interpreter
+catatan: (bukan yang dibuat sesi ini) saat menguji JIT Modulo, sekalian diperbaiki
+catatan: di SEMUA jalur (eval_binop, eksekusi_selaras, lipat_binop constant-folding).
+catatan: Modulo: jawaban matematis 0 (bukan error). Bagi: overflow sungguhan
+catatan: (di luar jangkauan Angka), sama seperti Tambah/Kurang/Kali yang overflow.
+fungsi mod_edge(a: Angka, b: Angka) {
+    kembalikan a % b
+}
+fungsi bagi_edge(a: Angka, b: Angka) {
+    kembalikan a / b
+}
+ingat min_i64: Angka = 0 - 9223372036854775807 - 1
+tampilkan mod_edge(min_i64, -1)
+tampilkan mod_edge(-7, 3)
+tampilkan mod_edge(7, -3)
+coba {
+    tampilkan bagi_edge(min_i64, -1)
+} tangkap e {
+    tampilkan e
+}
+
+catatan: Kasus 4: constant folding (lipat_binop) modulo/bagi konstan -- pastikan
+catatan: compiler sendiri tidak crash waktu compile-time folding ekspresi konstan.
+tampilkan 17 % 5
+tampilkan 17 / 5

@@ -169,3 +169,99 @@ pembungkus) perlu (a) anotasi tipe pada parameternya, DAN (b) dukungan
 `%` (modulo) di JIT -- keduanya independen dari pekerjaan mode Campur
 di atas, item terpisah buat putaran berikutnya.
 
+## Putaran Ketiga: Dukungan Modulo + 2 Bug Pre-Existing Ditemukan & Diperbaiki
+
+Item "(b) dukungan modulo" di atas SEKARANG SELESAI -- `%` didukung di
+JIT buat mode `Angka` murni (bukan `Desimal`/`Campur`, butuh mekanisme
+`flag_var`/`out_ptr` yang cuma ada di mode `Angka`). Item "(a) anotasi
+tipe" JUGA sudah dicoba (`validasi_satu(i: Angka)` +
+`ingat sisa: Angka = ...`) -- sintaksnya SUDAH ADA di compiler
+sebelumnya, cuma belum pernah dipakai di file benchmark ini.
+
+### Keamanan: 2 bahaya native `srem` (bukan cuma pembagi-nol)
+
+Modulo native (`srem` x86) punya DUA kondisi berbahaya, bukan cuma
+pembagi nol:
+1. Pembagi nol -- error biasa ("Tidak bisa modulo dengan nol."),
+   dilaporkan lewat BIT BARU di `flag_var` (bit 1, nilai 2 -- terpisah
+   dari bit 0 punya overflow aritmatika biasa).
+2. `i64::MIN % -1` -- overflow MATEMATIS (hasil pembagian di luar
+   jangkauan i64) yang bisa bikin CPU **trap** (SIGFPE) kalau
+   pembagi/dividen mentah langsung dikirim ke instruksi hardware.
+   Dijinakkan pakai `select` Cranelift (paksa pembagi jadi `1` sebelum
+   `srem` beneran dipanggil kalau kondisi ini kejadian) -- BUKAN
+   kondisi error (jawaban matematisnya well-defined: `0`), jadi
+   TIDAK men-set flag, cuma dihitung ulang jadi `0` secara diam-diam.
+
+### Temuan sampingan: 2 bug PRE-EXISTING di interpreter (bukan dibuat sesi ini)
+
+Saat menguji edge case #2 di atas terhadap jalur bytecode (buat
+verifikasi konsistensi), ditemukan **interpreter Isoteri sendiri
+CRASH TOTAL** (Rust panic, bukan `Result::Err` yang bisa ditangkap
+`coba/tangkap`) untuk `i64::MIN % -1` dan `i64::MIN / -1` -- operator
+`%`/`/` Rust polos dipakai langsung di `eval_binop` tanpa
+`checked_rem`/`checked_div`. Bug ini SUDAH ADA sebelum sesi ini (bukan
+regresi dari kerjaan Modulo-JIT), ditemukan sebagai efek samping.
+
+**Diperbaiki di SEMUA jalur** yang punya logika sama (bukan cuma yang
+ketahuan): `eval_binop` (interpreter utama), `eksekusi_selaras`
+(interpreter terpisah buat `ulang selaras`), dan `lipat_binop`
+(constant-folding compiler -- bug ini BAHKAN bisa crash COMPILER-nya
+sendiri kalau user menulis ekspresi konstan yang hasilnya kebetulan
+`i64::MIN`, mis. `(0 - 9223372036854775807 - 1) % -1`). Ketiganya
+sekarang pakai `checked_div`/`checked_rem`, konsisten dengan JIT: nol
+tetap error jelas, `MIN/-1` dapat jawaban matematis `0` tanpa crash.
+
+### Verifikasi correctness
+
+16/16 test regresi lulus, termasuk test case baru
+`tes_regresi/modulo_jit_dan_edge_case.iso` yang mengunci modulo dasar,
+modulo-nol (harus tertangkap `coba/tangkap`), DAN edge case
+`i64::MIN % -1`/`i64::MIN / -1` secara eksplisit di ketiga jalur
+eksekusi -- 1 divergensi baris pesan error (bukan beda hasil) antara
+JIT dan bytecode, didokumentasikan di `divergensi_diketahui.txt`
+dengan pola yang sama seperti divergensi overflow yang sudah ada.
+
+### Temuan BARU: batasan cross-function call (blocker berikutnya)
+
+Setelah `validasi_satu` dianotasi tipe lengkap + dukungan modulo aktif,
+ternyata **MASIH** `tipe_jit_final=None` -- diselidiki lebih lanjut,
+akar masalahnya BUKAN lagi soal tipe/modulo, tapi limitasi yang lebih
+umum: **JIT Cranelift Isoteri sekarang HANYA mendukung pemanggilan diri
+sendiri (rekursi) atau fungsi tanpa panggilan sama sekali** --
+memanggil fungsi LAIN (`validasi_satu` memanggil
+`validasi_petani_struct`), walau fungsi yang dipanggil itu SENDIRI
+sudah native-elig, TETAP mendiskualifikasi si pemanggil dari JIT
+sepenuhnya (`cek_jit_murni_nilai`'s `CExpr::Panggil` cuma izinkan
+`nama == nama_sendiri`). Dibuktikan lewat isolasi manual (2 fungsi
+sederhana, satu manggil yang lain -- yang manggil selalu gagal JIT
+walau keduanya sama-sama Angka murni tanpa fitur eksotis apa pun).
+
+**Ini scope pekerjaan TERPISAH & SIGNIFIKAN** (compiler perlu tahu
+calling convention fungsi lain saat codegen, bukan cuma rekursi diri
+sendiri) -- item roadmap baru buat putaran berikutnya, BUKAN
+diselesaikan di putaran ini.
+
+### Hasil benchmark final (angka jujur)
+
+| | Isoteri AOT | Node.js | Rasio |
+|---|---:|---:|---:|
+| Awal (versi Peta, sebelum semua optimasi) | 1226ms | 38-42ms | ~29-31x |
+| Setelah fast-path literal struct | 840ms | ~42ms | ~20x |
+| Setelah `TipeJit::Campur` | ~500-640ms* | ~40ms | ~12-16x |
+| Setelah Modulo + anotasi tipe `validasi_satu` | **638ms** | **38ms** | **~17x** |
+
+*Angka 500ms dari pengukuran sebelumnya kemungkinan variance
+lingkungan pengujian -- pengukuran ulang di sesi yang sama dengan
+binary identik (dengan/tanpa anotasi tipe `validasi_satu`, yang
+TERBUKTI tidak berpengaruh sama sekali karena fungsi itu tetap gagal
+JIT gara-gara cross-function call) menunjukkan angka konsisten
+~628-640ms.
+
+**BELUM sampai target `<=5x`**, tapi total dari titik AWAL sesi
+optimasi ini (1226ms) ke SEKARANG (638ms) adalah **~1.9x lebih cepat**
+-- progress nyata & terverifikasi lewat 16 test regresi, meski gap ke
+Node.js masih signifikan. Blocker berikutnya (cross-function call) SUDAH
+teridentifikasi presisi, siap jadi titik mulai putaran berikutnya.
+
+

@@ -969,7 +969,14 @@ fn cek_jit_murni_nilai(e: &CExpr, nama_sendiri: &str, arity: usize, mode: TipeJi
         // Campur SENGAJA tidak boleh aritmatika sama sekali (lihat catatan panjang di enum
         // TipeJit) -- cuma dipakai buat PERBANDINGAN (lihat cek_jit_murni_kondisi), yang tidak
         // butuh mekanisme overflow-flag/promosi tipe implisit sama sekali, jauh lebih aman.
-        CExpr::Binary(l, op, r) => mode != TipeJit::Campur && matches!(op, BinOp::Tambah | BinOp::Kurang | BinOp::Kali)
+        // Modulo KHUSUS diizinkan di mode Angka murni (BUKAN Desimal/Campur) -- butuh
+        // mekanisme flag_var/out_ptr buat lapor "modulo dengan nol" balik ke pemanggil (lihat
+        // catatan panjang di gabung_flag/tulis_flag_keluaran), yang CUMA ada di mode Angka.
+        // Bagi (division) TETAP tidak diizinkan sama sekali -- scope sengaja dipersempit ke
+        // Modulo doang (kebutuhan nyata: pola 'i % n' di fungsi pembungkus validasi-style,
+        // lihat benchmarks/representasi/README.md).
+        CExpr::Binary(l, op, r) => mode != TipeJit::Campur
+            && (matches!(op, BinOp::Tambah | BinOp::Kurang | BinOp::Kali) || (matches!(op, BinOp::Modulo) && mode == TipeJit::Angka))
             && cek_jit_murni_nilai(l, nama_sendiri, arity, mode) && cek_jit_murni_nilai(r, nama_sendiri, arity, mode),
         CExpr::Panggil(nama, args) => nama == nama_sendiri && args.len() == arity && args.iter().all(|a| cek_jit_murni_nilai(a, nama_sendiri, arity, mode)),
         _ => false, // Teks/Bool/Global/Daftar/Peta/Indeks/Field/BentukLiteral/Bagi/panggilan-lain -> bukan
@@ -1990,7 +1997,12 @@ fn eval_binop(l: Value, op: BinOp, r: Value) -> Result<Value, String> {
         },
         Bagi => match (&l, &r) {
             (Value::Angka(_), Value::Angka(0)) => Err("Tidak bisa membagi dengan nol.".to_string()),
-            (Value::Angka(a), Value::Angka(b)) => Ok(Value::Angka(a / b)),
+            // i64::MIN / -1 SECARA MATEMATIS overflow (hasilnya di luar jangkauan i64) --
+            // operator '/' Rust polos bisa PANIC (crash) di kasus ini kalau tidak dicek
+            // eksplisit (beda dari pembagi-nol biasa, ini murni soal jangkauan angka).
+            // Diperlakukan KONSISTEN dengan overflow aritmatika lain (Tambah/Kurang/Kali) --
+            // pesan error yang sama, BUKAN crash diam-diam.
+            (Value::Angka(a), Value::Angka(b)) => a.checked_div(*b).map(Value::Angka).ok_or_else(|| format!("Angka meluap (overflow): {} / {} melebihi jangkauan Angka (-9223372036854775808..9223372036854775807). Pertimbangkan pakai Desimal kalau nilainya memang bisa sebesar ini.", a, b)),
             _ => match (ke_desimal(&l), ke_desimal(&r)) {
                 (Some(_), Some(b)) if b == 0.0 => Err("Tidak bisa membagi dengan nol.".to_string()),
                 (Some(a), Some(b)) => Ok(Value::Desimal(a / b)),
@@ -1999,7 +2011,13 @@ fn eval_binop(l: Value, op: BinOp, r: Value) -> Result<Value, String> {
         },
         Modulo => match (&l, &r) {
             (Value::Angka(_), Value::Angka(0)) => Err("Tidak bisa modulo dengan nol.".to_string()),
-            (Value::Angka(a), Value::Angka(b)) => Ok(Value::Angka(a % b)),
+            // Sama seperti Bagi di atas -- i64::MIN % -1 juga overflow secara matematis
+            // (Rust '%' polos bisa panic), walau hasil sisa-baginya sendiri well-defined (0).
+            // checked_rem() balikin None utk KEDUA kasus (pembagi 0 ATAU overflow ini) --
+            // tapi baris di atas sudah nangkep pembagi-nol duluan, jadi None yang sampai sini
+            // PASTI kasus overflow MIN/-1 -- aman kembalikan 0 (jawaban matematis yang benar,
+          // BUKAN kondisi error, beda dari pembagi-nol).
+            (Value::Angka(a), Value::Angka(b)) => Ok(Value::Angka(a.checked_rem(*b).unwrap_or(0))),
             _ => match (ke_desimal(&l), ke_desimal(&r)) {
                 (Some(_), Some(b)) if b == 0.0 => Err("Tidak bisa modulo dengan nol.".to_string()),
                 (Some(a), Some(b)) => Ok(Value::Desimal(a % b)),
@@ -2219,8 +2237,17 @@ fn lipat_binop(l: &CExpr, op: BinOp, r: &CExpr) -> Option<CExpr> {
             Tambah => a.checked_add(*b).map(CExpr::Angka),
             Kurang => a.checked_sub(*b).map(CExpr::Angka),
             Kali => a.checked_mul(*b).map(CExpr::Angka),
-            Bagi => if *b != 0 { Some(CExpr::Angka(a / b)) } else { None }, // biarkan runtime yang lempar error div-nol, lengkap dgn baris
-            Modulo => if *b != 0 { Some(CExpr::Angka(a % b)) } else { None }, // sama, biarkan runtime lempar error modulo-nol
+            // checked_div/checked_rem (BUKAN cek "b != 0" doang + operator polos) -- i64::MIN /
+            // -1 (dan i64::MIN % -1) overflow secara matematis, operator Rust polos bisa PANIC
+            // (CRASH COMPILER-nya sendiri, bukan cuma runtime program user) kalau kebetulan
+            // muncul dari rangkaian ekspresi konstan yang di-lipat jadi i64::MIN. Utk Bagi:
+            // None (termasuk kasus overflow ini) -> JANGAN dilipat, biarkan runtime yang lempar
+            // error jelas (checked_div None juga mencakup b==0, jadi masih konsisten). Utk
+            // Modulo: b==0 tetap None (JANGAN dilipat, biarkan runtime lempar error) -- TAPI
+            // overflow MIN/-1 aman dilipat jadi 0 langsung (jawaban matematis valid, bukan
+            // kondisi error, lihat eval_binop).
+            Bagi => a.checked_div(*b).map(CExpr::Angka),
+            Modulo => if *b != 0 { Some(CExpr::Angka(a.checked_rem(*b).unwrap_or(0))) } else { None },
             SamaDengan => Some(CExpr::Bool(a == b)),
             TidakSama => Some(CExpr::Bool(a != b)),
             LebihBesar => Some(CExpr::Bool(a > b)),
@@ -3088,6 +3115,42 @@ impl<'a, 'b> KompilerBadanIr<'a, 'b> {
                         (TipeJit::Campur, _) => unreachable!("mode Campur tidak boleh aritmatika sama sekali, dicegah cek_jit_murni_nilai -- lihat catatan panjang di enum TipeJit"),
                         _ => unreachable!("Bagi seharusnya sudah disaring cek_jit_murni_nilai"),
                     },
+                    // Modulo: KHUSUS mode Angka (dicegah cek_jit_murni_nilai buat mode lain).
+                    // DUA bahaya native 'srem' x86 yang harus dijinakkan SEBELUM instruksi itu
+                    // benar-benar dieksekusi (Cranelift TIDAK short-circuit -- 'select' di
+                    // bawah tetap menghitung KEDUA cabangnya sbg nilai SSA, jadi operand srem
+                    // itu SENDIRI wajib sudah aman, bukan cuma hasil akhirnya yang diseleksi):
+                    // (1) pembagi nol -- error biasa, sama seperti interpreter ("Tidak bisa
+                    //     modulo dengan nol."), dilaporkan lewat flag BIT 1 (nilai 2, terpisah
+                    //     dari bit 0 punya overflow) -- lihat pembacaan flag di caller.
+                    // (2) i64::MIN % -1 -- overflow di hardware (trap SIGFPE), BUKAN kondisi
+                    //     yang Rust laporkan sbg error ('%' non-checked Rust malah bisa panic
+                    //     di sini, celah LAMA yang sudah ada duluan di interpreter, bukan yang
+                    //     kita buat) -- jawaban matematisnya well-defined (0), jadi native code
+                    //     di sini malah LEBIH AMAN dari interpreter: kembalikan 0 diam-diam,
+                    //     TANPA set flag error apa pun (bukan kasus yang salah, cuma edge case).
+                    Modulo => {
+                        let nol = self.builder.ins().iconst(types::I64, 0);
+                        let satu = self.builder.ins().iconst(types::I64, 1);
+                        let neg_satu = self.builder.ins().iconst(types::I64, -1);
+                        let min_i64 = self.builder.ins().iconst(types::I64, i64::MIN);
+                        let adalah_nol = self.builder.ins().icmp(IntCC::Equal, bv, nol);
+                        let adalah_neg_satu = self.builder.ins().icmp(IntCC::Equal, bv, neg_satu);
+                        let adalah_min = self.builder.ins().icmp(IntCC::Equal, av, min_i64);
+                        let adalah_edge = self.builder.ins().band(adalah_neg_satu, adalah_min);
+                        let harus_hindari = self.builder.ins().bor(adalah_nol, adalah_edge);
+                        // Paksa pembagi jadi 1 (aman mutlak, hasil 0) SEBELUM srem dipanggil --
+                        // bukan nyeleksi HASIL srem, tapi nyeleksi OPERAND-nya, supaya hardware
+                        // srem yang sesungguhnya TIDAK PERNAH menerima kombinasi berbahaya.
+                        let bv_aman = self.builder.ins().select(harus_hindari, satu, bv);
+                        let mentah = self.builder.ins().srem(av, bv_aman);
+                        let hasil_akhir = self.builder.ins().select(harus_hindari, nol, mentah);
+                        let dua = self.builder.ins().iconst(types::I8, 2);
+                        let nol8 = self.builder.ins().iconst(types::I8, 0);
+                        let flag_modulo = self.builder.ins().select(adalah_nol, dua, nol8);
+                        self.gabung_flag(flag_modulo);
+                        hasil_akhir
+                    }
                     Dan => self.builder.ins().band(av, bv),
                     Atau => self.builder.ins().bor(av, bv),
                     // Tipe operand (BUKAN self.mode) yang menentukan icmp vs fcmp -- di mode
@@ -3117,7 +3180,6 @@ impl<'a, 'b> KompilerBadanIr<'a, 'b> {
                         }
                     },
                     Bagi => unreachable!("Bagi seharusnya sudah disaring cek_jit_murni_nilai"),
-                    Modulo => unreachable!("Modulo seharusnya sudah disaring cek_jit_murni_nilai (butuh cek pembagi-nol saat runtime, sama seperti Bagi -- lihat cek_jit_murni_nilai)"),
                 };
                 self.set(*dst, hasil);
                 false
@@ -3318,6 +3380,27 @@ impl<'a> KompilerBadan<'a> {
                     (TipeJit::Desimal, BinOp::Tambah) => self.builder.ins().fadd(lv, rv),
                     (TipeJit::Desimal, BinOp::Kurang) => self.builder.ins().fsub(lv, rv),
                     (TipeJit::Desimal, BinOp::Kali) => self.builder.ins().fmul(lv, rv),
+                    // Sama persis logikanya dengan jalur IR (KompilerBadanIr, lihat catatan
+                    // panjang di sana soal 2 bahaya native srem yang dijinakkan pakai select).
+                    (TipeJit::Angka, BinOp::Modulo) => {
+                        let nol = self.builder.ins().iconst(types::I64, 0);
+                        let satu = self.builder.ins().iconst(types::I64, 1);
+                        let neg_satu = self.builder.ins().iconst(types::I64, -1);
+                        let min_i64 = self.builder.ins().iconst(types::I64, i64::MIN);
+                        let adalah_nol = self.builder.ins().icmp(IntCC::Equal, rv, nol);
+                        let adalah_neg_satu = self.builder.ins().icmp(IntCC::Equal, rv, neg_satu);
+                        let adalah_min = self.builder.ins().icmp(IntCC::Equal, lv, min_i64);
+                        let adalah_edge = self.builder.ins().band(adalah_neg_satu, adalah_min);
+                        let harus_hindari = self.builder.ins().bor(adalah_nol, adalah_edge);
+                        let rv_aman = self.builder.ins().select(harus_hindari, satu, rv);
+                        let mentah = self.builder.ins().srem(lv, rv_aman);
+                        let hasil_akhir = self.builder.ins().select(harus_hindari, nol, mentah);
+                        let dua = self.builder.ins().iconst(types::I8, 2);
+                        let nol8 = self.builder.ins().iconst(types::I8, 0);
+                        let flag_modulo = self.builder.ins().select(adalah_nol, dua, nol8);
+                        self.gabung_flag(flag_modulo);
+                        hasil_akhir
+                    }
                     _ => unreachable!("cek_jit_murni_nilai seharusnya sudah menyaring operator ini"),
                 }
             }
@@ -3505,7 +3588,9 @@ fn eval_binop_selaras(l: ValorSelaras, op: BinOp, r: ValorSelaras) -> Result<Val
         },
         Bagi => match (&l, &r) {
             (ValorSelaras::Angka(_), ValorSelaras::Angka(0)) => Err("Tidak bisa membagi dengan nol.".to_string()),
-            (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => Ok(ValorSelaras::Angka(a / b)),
+            // Sama seperti eval_binop biasa -- i64::MIN / -1 overflow secara matematis, checked_div
+            // menangkapnya (Rust '/' polos bisa panic kalau tidak dicek eksplisit).
+            (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => a.checked_div(*b).map(ValorSelaras::Angka).ok_or_else(|| format!("Angka meluap (overflow): {} / {} melebihi jangkauan Angka.", a, b)),
             _ => match (ke_desimal_selaras(&l), ke_desimal_selaras(&r)) {
                 (Some(_), Some(b)) if b == 0.0 => Err("Tidak bisa membagi dengan nol.".to_string()),
                 (Some(a), Some(b)) => Ok(ValorSelaras::Desimal(a / b)),
@@ -3514,7 +3599,10 @@ fn eval_binop_selaras(l: ValorSelaras, op: BinOp, r: ValorSelaras) -> Result<Val
         },
         Modulo => match (&l, &r) {
             (ValorSelaras::Angka(_), ValorSelaras::Angka(0)) => Err("Tidak bisa modulo dengan nol.".to_string()),
-            (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => Ok(ValorSelaras::Angka(a % b)),
+            // Sama seperti eval_binop biasa -- checked_rem balikin None utk i64::MIN % -1 juga
+            // (overflow matematis, bukan pembagi-nol) -- pembagi-nol sudah ditangkap baris di
+            // atas, jadi None yang sampai sini pasti kasus MIN/-1, aman kembalikan 0.
+            (ValorSelaras::Angka(a), ValorSelaras::Angka(b)) => Ok(ValorSelaras::Angka(a.checked_rem(*b).unwrap_or(0))),
             _ => match (ke_desimal_selaras(&l), ke_desimal_selaras(&r)) {
                 (Some(_), Some(b)) if b == 0.0 => Err("Tidak bisa modulo dengan nol.".to_string()),
                 (Some(a), Some(b)) => Ok(ValorSelaras::Desimal(a % b)),
@@ -3788,8 +3876,17 @@ fn panggil_fungsi_dengan_argumen(pustaka: &Pustaka, state: &mut VMState, idx: us
                 }
                 let mut flag: i64 = 0;
                 let hasil = native(larik.as_ptr(), &mut flag as *mut i64);
-                if flag != 0 {
+                // Flag encoding (lihat gabung_flag di KompilerBadan/KompilerBadanIr): bit 0
+                // (nilai 1) = overflow aritmatika, bit 1 (nilai 2) = modulo dengan nol. Dua-duanya
+                // di-OR-kan (bor) selama eksekusi, jadi bisa saja KEDUANYA kejadian sebelum
+                // fungsi return (mekanisme ini TIDAK short-circuit di titik kejadian, cuma
+                // dicek di akhir) -- prioritaskan overflow (konsisten dgn urutan cek interpreter
+                // biasa), tapi tetap tangani modulo-nol sendiri kalau overflow tidak kejadian.
+                if flag & 1 != 0 {
                     return Err(format!("Angka meluap (overflow) di dalam fungsi terkompilasi JIT: hasil melebihi jangkauan Angka (-9223372036854775808..9223372036854775807). Pertimbangkan pakai Desimal kalau nilainya memang bisa sebesar ini."));
+                }
+                if flag & 2 != 0 {
+                    return Err("Tidak bisa modulo dengan nol.".to_string());
                 }
                 Ok(Value::Angka(hasil))
             }
@@ -4046,8 +4143,14 @@ fn eksekusi_satu(pustaka: &Pustaka, state: &mut VMState, kode: &[Instr], locals_
                                 }
                                 let mut flag: i64 = 0;
                                 let hasil = native(larik.as_ptr(), &mut flag as *mut i64);
-                                if flag != 0 {
+                                // Sama seperti pembacaan flag di panggil_fungsi_dengan_argumen
+                                // (lihat catatan panjang di sana) -- bit 0 overflow, bit 1
+                                // modulo-dengan-nol.
+                                if flag & 1 != 0 {
                                     return Err(format!("Angka meluap (overflow) di dalam fungsi terkompilasi JIT: hasil melebihi jangkauan Angka (-9223372036854775808..9223372036854775807). Pertimbangkan pakai Desimal kalau nilainya memang bisa sebesar ini."));
+                                }
+                                if flag & 2 != 0 {
+                                    return Err("Tidak bisa modulo dengan nol.".to_string());
                                 }
                                 Value::Angka(hasil)
                             }

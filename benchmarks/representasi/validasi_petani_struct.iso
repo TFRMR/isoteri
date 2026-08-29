@@ -26,8 +26,8 @@ fungsi validasi_petani_struct(data: DataPetani) {
     kembalikan 0
 }
 
-fungsi validasi_satu(i) {
-    ingat sisa = i % 5
+fungsi validasi_satu(i: Angka) {
+    ingat sisa: Angka = i % 5
     kalau (sisa == 0) {
         kembalikan validasi_petani_struct(DataPetani { nama_kosong: 0, lahan: 2.5, hasil_panen: 12.0 })
     }
