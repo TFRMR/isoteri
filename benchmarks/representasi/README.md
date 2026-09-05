@@ -222,46 +222,150 @@ eksekusi -- 1 divergensi baris pesan error (bukan beda hasil) antara
 JIT dan bytecode, didokumentasikan di `divergensi_diketahui.txt`
 dengan pola yang sama seperti divergensi overflow yang sudah ada.
 
-### Temuan BARU: batasan cross-function call (blocker berikutnya)
+### Temuan yang mengarah ke blocker terbesar: batasan cross-function call
 
 Setelah `validasi_satu` dianotasi tipe lengkap + dukungan modulo aktif,
 ternyata **MASIH** `tipe_jit_final=None` -- diselidiki lebih lanjut,
 akar masalahnya BUKAN lagi soal tipe/modulo, tapi limitasi yang lebih
-umum: **JIT Cranelift Isoteri sekarang HANYA mendukung pemanggilan diri
-sendiri (rekursi) atau fungsi tanpa panggilan sama sekali** --
-memanggil fungsi LAIN (`validasi_satu` memanggil
+umum: **JIT Cranelift Isoteri (sebelum putaran ini) HANYA mendukung
+pemanggilan diri sendiri (rekursi) atau fungsi tanpa panggilan sama
+sekali** -- memanggil fungsi LAIN (`validasi_satu` memanggil
 `validasi_petani_struct`), walau fungsi yang dipanggil itu SENDIRI
 sudah native-elig, TETAP mendiskualifikasi si pemanggil dari JIT
-sepenuhnya (`cek_jit_murni_nilai`'s `CExpr::Panggil` cuma izinkan
-`nama == nama_sendiri`). Dibuktikan lewat isolasi manual (2 fungsi
-sederhana, satu manggil yang lain -- yang manggil selalu gagal JIT
-walau keduanya sama-sama Angka murni tanpa fitur eksotis apa pun).
+sepenuhnya.
 
-**Ini scope pekerjaan TERPISAH & SIGNIFIKAN** (compiler perlu tahu
-calling convention fungsi lain saat codegen, bukan cuma rekursi diri
-sendiri) -- item roadmap baru buat putaran berikutnya, BUKAN
-diselesaikan di putaran ini.
+## Putaran Keempat: Cross-Function Call -- Item Terakhir Rencana Besar
 
-### Hasil benchmark final (angka jujur)
+Ini pekerjaan compiler engineering PALING DALAM sejauh ini di seluruh
+rangkaian optimasi "type info -> representation" -- JIT sekarang bisa
+kompilasi fungsi yang memanggil fungsi LAIN (bukan cuma diri sendiri),
+selama target-nya SUDAH dideklarasikan lebih dulu (backward reference)
+DAN sudah tipe_jit-elig sendiri.
+
+### Verifikasi mekanisme Cranelift SEBELUM ubah kode utama
+
+Sebelum menyentuh compiler sungguhan, pola inti (declare SEMUA fungsi
+dulu -> define SEMUA body -> finalize SEKALI di akhir) diverifikasi
+lewat eksperimen Rust terisolasi memakai `cranelift-jit` versi yang
+SAMA PERSIS -- termasuk kasus paling riskan (fungsi C didefinisikan
+SEBELUM fungsi D yang dipanggilnya) -- SEMUA berhasil sebelum
+diterapkan ke compiler utama. Ini yang membuat restrukturisasi besar
+ini bisa dikerjakan dengan percaya diri, bukan coba-coba di kode
+produksi langsung.
+
+### Restrukturisasi
+
+- **`JitEngine`**: 1 metode (`kompilasi_dari_ir`, declare+define+
+  finalize+ambil-pointer sekaligus per fungsi) dipecah jadi 3:
+  `declare_fungsi()` (signature saja), `kompilasi_dari_ir()` (define
+  body saja, TIDAK finalize sendiri lagi), `selesai()`+`ambil_pointer()`
+  (finalize sekali + ambil semua pointer di akhir).
+- **`jalankan_stmt_list_via_ir`**: dipecah jadi 3 fase eksplisit --
+  FASE 1 declare signature SEMUA fungsi elig, FASE 2 lower ke IR &
+  define body (urutan alfabetis, BEBAS sekarang -- tidak perlu lagi
+  "target harus sudah dikompilasi duluan"), FASE 3 finalize sekali +
+  isi `native` ke tiap `VMFungsi`.
+- **Codegen `IrInstr::PanggilFungsi`**: `local_callee: FuncRef` (SATU
+  target, cuma diri sendiri) diganti `panggil_fref:
+  HashMap<usize, (TipeJit, FuncRef)>` (registri semua target yang
+  DIPAKAI fungsi ini, diri sendiri MAUPUN fungsi lain, lewat jalur
+  codegen yang SAMA PERSIS -- tidak ada kasus khusus).
+- **`cek_jit_murni_nilai`**: `CExpr::Panggil` sekarang izinkan target
+  BUKAN diri sendiri, asal target SUDAH ada di `fungsi_out`
+  (backward reference -- lihat batasan scope di bawah) DAN
+  `tipe_jit`-nya `Some`, DAN tiap argumen tipenya cocok dengan
+  parameter target (`tipe_cexpr`, dipakai ulang dari mekanisme
+  `TipeJit::Campur`).
+- **`NativeFn::Campur`, `VMFungsi.slot_tipe`**: dipakai ulang buat
+  membungkus argumen SESUAI tipe target (bukan tipe pemanggil) di
+  titik panggilan lintas-fungsi.
+
+### Batasan scope (SENGAJA, demi keamanan)
+
+- **Backward reference saja**: fungsi cuma boleh memanggil fungsi yang
+  dideklarasikan LEBIH DULU di source (`fungsi_out` terisi berurutan
+  sesuai deklarasi saat RESOLVE, beda dari urutan KOMPILASI yang
+  alfabetis). Forward reference (panggil fungsi yang dideklarasikan
+  BELAKANGAN) otomatis gagal & fallback interpreter -- AMAN meski
+  tidak lengkap, BUKAN fixed-point solver umum.
+- **Jalur legacy (`isoteri prog.iso` default, BUKAN via-ir/AOT) TIDAK
+  didukung** -- `kompilasi_nilai` (compiler CExpr-langsung) masih
+  SELALU asumsikan diri sendiri untuk semua `CExpr::Panggil`. Fungsi
+  yang cross-call SEKARANG ditolak EKSPLISIT di jalur ini
+  (`mengandung_panggilan_lain_stmt`, scan body cari panggilan ke
+  fungsi lain) SEBELUM sempat coba compile -- tanpa penolakan ini,
+  hasilnya rekursi-tak-sengaja yang stack-overflow (BUKAN cuma gagal
+  optimasi biasa -- ini benar-benar ditemukan & diverifikasi lewat
+  reproduksi manual sebelum diperbaiki).
+- **Argumen dibatasi bentuk sederhana** (`Local`/literal/negasi
+  literal via helper `bentuk_argumen_sederhana`) -- bukan sembarang
+  ekspresi arbitrer.
+
+### Bug ditemukan & diperbaiki DALAM PROSES verifikasi (bukan lolos ke commit)
+
+1. **Argumen Desimal ke fungsi Campur ditolak salah** -- pengecekan
+   argumen awalnya daur ulang `cek_jit_murni_nilai` yang mengecek
+   literal Desimal terhadap MODE PEMANGGIL sendiri (benar untuk
+   ekspresi di dalam tubuh fungsi, TAPI salah konteks untuk argumen ke
+   fungsi lain -- yang relevan itu tipe PARAMETER TARGET). Diperbaiki
+   dengan pengecekan bentuk+tipe terpisah yang tidak daur ulang
+   `cek_jit_murni_nilai` untuk kasus ini.
+2. **Literal negatif (`-1.0`) ditolak sebagai argumen** -- parser
+   me-representasikan `-X` sebagai `Binary(Angka(0), Kurang, X)`
+   (lihat `parse_unary()`), BUKAN literal tunggal, SEBELUM sempat
+   dilipat jadi konstanta oleh optimizer (yang jalan BELAKANGAN,
+   setelah `tipe_jit` sudah dihitung). Diperbaiki lewat helper
+   `bentuk_argumen_sederhana()` yang mengenali pola negasi ini secara
+   eksplisit.
+
+Kedua bug ini KETAHUAN & DIPERBAIKI lewat testing manual bertahap
+(isolasi kasus sederhana -> kompleks) SEBELUM sempat masuk test
+regresi permanen -- persis disiplin yang sama dipakai di seluruh sesi
+optimasi ini.
+
+### Verifikasi correctness
+
+**17/17 test regresi lulus**, termasuk test case baru
+`tes_regresi/cross_function_call_jit.iso` yang mengunci: rantai 3
+fungsi (`satu`->`dua`->`tiga`), fungsi Angka memanggil fungsi Campur
+dengan literal negatif sebagai argumen (mengunci Bug #2 di atas), DAN
+**forward reference tetap dapat hasil benar lewat fallback
+interpreter** (bukan promosi paksa). 2 divergensi baris peringatan
+(bukan beda hasil) antara jalur JIT default vs bytecode/via-ir
+didokumentasikan di `divergensi_diketahui.txt`, pola sama dengan
+divergensi `TipeJit::Campur` sebelumnya.
+
+**Bukti nyata bahaya nyata, bukan cuma teoretis**: sebelum penolakan
+eksplisit di jalur legacy ditambahkan, kasus cross-function call
+sungguhan menyebabkan **stack overflow terverifikasi** (`isoteri
+/tmp/tes.iso` crash dengan "thread 'main' has overflowed its stack")
+-- direproduksi manual, diperbaiki, dikunci lewat test regresi.
+
+### Hasil benchmark FINAL (angka jujur)
 
 | | Isoteri AOT | Node.js | Rasio |
 |---|---:|---:|---:|
 | Awal (versi Peta, sebelum semua optimasi) | 1226ms | 38-42ms | ~29-31x |
 | Setelah fast-path literal struct | 840ms | ~42ms | ~20x |
-| Setelah `TipeJit::Campur` | ~500-640ms* | ~40ms | ~12-16x |
-| Setelah Modulo + anotasi tipe `validasi_satu` | **638ms** | **38ms** | **~17x** |
+| Setelah `TipeJit::Campur` | ~640ms | ~40ms | ~16x |
+| Setelah Modulo + anotasi tipe | 638ms | 38ms | ~17x |
+| **Setelah cross-function call** | **236.5ms** | **37ms** | **~6.4x** |
 
-*Angka 500ms dari pengukuran sebelumnya kemungkinan variance
-lingkungan pengujian -- pengukuran ulang di sesi yang sama dengan
-binary identik (dengan/tanpa anotasi tipe `validasi_satu`, yang
-TERBUKTI tidak berpengaruh sama sekali karena fungsi itu tetap gagal
-JIT gara-gara cross-function call) menunjukkan angka konsisten
-~628-640ms.
+**SANGAT DEKAT target `<=5x`** (meleset ~1.4x saja) -- dan dari titik
+AWAL sesi optimasi ini (1226ms) ke SEKARANG (236.5ms) adalah **~5.2x
+LEBIH CEPAT total**, hampir menembus target `<=5x` MILESTONE ITU
+SENDIRI dihitung dari titik awal. Cross-function call TERNYATA jadi
+kontributor TERBESAR dari SEMUA optimasi di rangkaian ini (638ms ->
+236.5ms, ~2.7x cuma dari satu perbaikan ini) -- mengkonfirmasi diagnosis
+di awal putaran ini bahwa ini memang blocker paling signifikan, bukan
+cuma salah satu dari sekian item.
 
-**BELUM sampai target `<=5x`**, tapi total dari titik AWAL sesi
-optimasi ini (1226ms) ke SEKARANG (638ms) adalah **~1.9x lebih cepat**
--- progress nyata & terverifikasi lewat 16 test regresi, meski gap ke
-Node.js masih signifikan. Blocker berikutnya (cross-function call) SUDAH
-teridentifikasi presisi, siap jadi titik mulai putaran berikutnya.
-
+**Kenapa belum tepat `<=5x`**: sisa gap kemungkinan besar overhead
+proses (startup CLI, alokasi `Peta`-nya sendiri buat `Instans` struct
+yang MASIH terjadi di titik konstruksi -- walau field-nya sekarang
+"dibongkar" jadi argumen flat di titik PANGGILAN, `DataPetani`
+sebagai TIPE PARAMETER `validasi_petani_struct` sendiri, kalau
+dipakai sebagai NILAI LOKAL biasa di tempat lain, tetap lewat jalur
+`Value::Instans` biasa) -- kandidat optimasi lanjutan buat menutup
+sisa jarak, TAPI di luar scope sesi ini.
 

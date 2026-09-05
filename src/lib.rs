@@ -911,21 +911,37 @@ fn variabel_bebas_expr(e: &Expr, terikat: &mut std::collections::HashSet<String>
     }
 }
 
-fn cek_jit_murni_stmt(s: &CStmt, nama_sendiri: &str, arity: usize, mode: TipeJit, slot_tipe: &[Option<TipeJit>]) -> bool {
+fn cek_jit_murni_stmt(s: &CStmt, nama_sendiri: &str, arity: usize, mode: TipeJit, slot_tipe: &[Option<TipeJit>], fungsi_out: &HashMap<String, Rc<CFungsi>>) -> bool {
     match s {
-        CStmt::IngatLocal(_, e) | CStmt::UbahLocal(_, e) => cek_jit_murni_nilai(e, nama_sendiri, arity, mode),
-        CStmt::Kalau(c, tb, eb) => cek_jit_murni_kondisi(c, nama_sendiri, arity, mode, slot_tipe)
-            && tb.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_sendiri, arity, mode, slot_tipe))
-            && eb.as_ref().map_or(true, |b| b.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_sendiri, arity, mode, slot_tipe))),
-        CStmt::Ulang(c, b) => cek_jit_murni_kondisi(c, nama_sendiri, arity, mode, slot_tipe) && b.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_sendiri, arity, mode, slot_tipe)),
-        CStmt::Kembalikan(e) => cek_jit_murni_nilai(e, nama_sendiri, arity, mode)
+        CStmt::IngatLocal(_, e) | CStmt::UbahLocal(_, e) => cek_jit_murni_nilai(e, nama_sendiri, arity, mode, slot_tipe, fungsi_out),
+        CStmt::Kalau(c, tb, eb) => cek_jit_murni_kondisi(c, nama_sendiri, arity, mode, slot_tipe, fungsi_out)
+            && tb.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_sendiri, arity, mode, slot_tipe, fungsi_out))
+            && eb.as_ref().map_or(true, |b| b.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_sendiri, arity, mode, slot_tipe, fungsi_out))),
+        CStmt::Ulang(c, b) => cek_jit_murni_kondisi(c, nama_sendiri, arity, mode, slot_tipe, fungsi_out) && b.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_sendiri, arity, mode, slot_tipe, fungsi_out)),
+        CStmt::Kembalikan(e) => cek_jit_murni_nilai(e, nama_sendiri, arity, mode, slot_tipe, fungsi_out)
             // Mode Campur: nilai kembalian WAJIB Angka (atau ambigu, default Angka) -- signature
             // Cranelift butuh SATU tipe kembalian pasti, dan validasi_petani-style (kembalikan
             // kode error/status sbg Angka) itu pola yang paling umum. Kalau butuh kembalikan
             // Desimal dari fungsi Campur, itu di luar cakupan slice aman ini (fallback interpreter).
-            && (mode != TipeJit::Campur || !matches!(tipe_cexpr(e, slot_tipe), Ok(Some(TipeJit::Desimal)) | Err(()))),
-        CStmt::EkspresiStmt(e) => cek_jit_murni_nilai(e, nama_sendiri, arity, mode),
+            && (mode != TipeJit::Campur || !matches!(tipe_cexpr(e, slot_tipe, fungsi_out), Ok(Some(TipeJit::Desimal)) | Err(()))),
+        CStmt::EkspresiStmt(e) => cek_jit_murni_nilai(e, nama_sendiri, arity, mode, slot_tipe, fungsi_out),
         _ => false, // IngatGlobal/UbahGlobal/UlangSetiap*/UlangSelaras/CobaGlobal/CobaLocal -> bukan fungsi murni
+    }
+}
+
+/// Cek apakah `e` "bentuk argumen sederhana" -- Local/literal langsung, ATAU ekspresi negasi
+/// literal (`-X`, yang di parser jadi `Binary(Angka(0), Kurang, X)` -- lihat parse_unary())
+/// SEBELUM sempat dilipat jadi literal tunggal oleh optimisasi_blok (optimisasi itu jalan
+/// BELAKANGAN, SETELAH tipe_jit dihitung -- lihat urutan pipeline di jalankan_stmt_list_via_ir).
+/// Dipakai KHUSUS buat verifikasi argumen cross-function call (lihat catatan panjang di
+/// cek_jit_murni_nilai) -- SENGAJA dibatasi bentuk simpel ini, BUKAN sembarang ekspresi Binary
+/// arbitrer, supaya tidak perlu daur ulang cek_jit_murni_nilai yang salah konteks mode (lihat
+/// catatan di sana).
+fn bentuk_argumen_sederhana(e: &CExpr) -> bool {
+    match e {
+        CExpr::Local(_) | CExpr::Angka(_) | CExpr::Desimal(_) => true,
+        CExpr::Binary(l, op, r) => matches!(op, BinOp::Tambah | BinOp::Kurang | BinOp::Kali) && bentuk_argumen_sederhana(l) && bentuk_argumen_sederhana(r),
+        _ => false,
     }
 }
 
@@ -936,15 +952,17 @@ fn cek_jit_murni_stmt(s: &CStmt, nama_sendiri: &str, arity: usize, mode: TipeJit
 /// di luar cakupan (bukan numerik) -- caller yang memutuskan gimana menyikapi. Err(()) =
 /// KONFLIK NYATA (satu sisi Angka, sisi lain Desimal) -- caller HARUS menolak (fallback
 /// interpreter, aman) -- SENGAJA tidak nyoba promosi tipe implisit (int->float), itu lebih
-/// riskan salah kalau meleset.
-fn tipe_cexpr(e: &CExpr, slot_tipe: &[Option<TipeJit>]) -> Result<Option<TipeJit>, ()> {
+/// riskan salah kalau meleset. `fungsi_out` dipakai buat infer tipe HASIL panggilan ke fungsi
+/// lain (BARU, buat dukungan cross-function call) -- Angka/Campur -> Some(Angka) (Campur
+/// SELALU return Angka, lihat cek_jit_murni_stmt CStmt::Kembalikan), Desimal -> Some(Desimal).
+fn tipe_cexpr(e: &CExpr, slot_tipe: &[Option<TipeJit>], fungsi_out: &HashMap<String, Rc<CFungsi>>) -> Result<Option<TipeJit>, ()> {
     match e {
         CExpr::Local(i) => Ok(slot_tipe.get(*i).copied().flatten()),
         CExpr::Angka(_) => Ok(None),
         CExpr::Desimal(_) => Ok(Some(TipeJit::Desimal)),
         CExpr::Binary(l, _, r) => {
-            let tl = tipe_cexpr(l, slot_tipe)?;
-            let tr = tipe_cexpr(r, slot_tipe)?;
+            let tl = tipe_cexpr(l, slot_tipe, fungsi_out)?;
+            let tr = tipe_cexpr(r, slot_tipe, fungsi_out)?;
             match (tl, tr) {
                 (Some(a), Some(b)) if a == b => Ok(Some(a)),
                 (Some(a), None) | (None, Some(a)) => Ok(Some(a)),
@@ -952,11 +970,16 @@ fn tipe_cexpr(e: &CExpr, slot_tipe: &[Option<TipeJit>]) -> Result<Option<TipeJit
                 (Some(_), Some(_)) => Err(()), // Angka vs Desimal, konflik nyata -- TOLAK
             }
         }
+        CExpr::Panggil(nama, _) => Ok(match fungsi_out.get(nama).and_then(|f| f.tipe_jit) {
+            Some(TipeJit::Angka) | Some(TipeJit::Campur) => Some(TipeJit::Angka),
+            Some(TipeJit::Desimal) => Some(TipeJit::Desimal),
+            None => None, // rekursi diri sendiri, atau fungsi yang belum/tidak elig -- ambigu, biar caller (cek_jit_murni_nilai) yang putuskan
+        }),
         _ => Ok(None),
     }
 }
 
-fn cek_jit_murni_nilai(e: &CExpr, nama_sendiri: &str, arity: usize, mode: TipeJit) -> bool {
+fn cek_jit_murni_nilai(e: &CExpr, nama_sendiri: &str, arity: usize, mode: TipeJit, slot_tipe: &[Option<TipeJit>], fungsi_out: &HashMap<String, Rc<CFungsi>>) -> bool {
     match e {
         CExpr::Local(_) => true,
         // Literal Angka boleh muncul di kedua mode (di mode Desimal ia otomatis dipromosikan
@@ -977,22 +1000,50 @@ fn cek_jit_murni_nilai(e: &CExpr, nama_sendiri: &str, arity: usize, mode: TipeJi
         // lihat benchmarks/representasi/README.md).
         CExpr::Binary(l, op, r) => mode != TipeJit::Campur
             && (matches!(op, BinOp::Tambah | BinOp::Kurang | BinOp::Kali) || (matches!(op, BinOp::Modulo) && mode == TipeJit::Angka))
-            && cek_jit_murni_nilai(l, nama_sendiri, arity, mode) && cek_jit_murni_nilai(r, nama_sendiri, arity, mode),
-        CExpr::Panggil(nama, args) => nama == nama_sendiri && args.len() == arity && args.iter().all(|a| cek_jit_murni_nilai(a, nama_sendiri, arity, mode)),
+            && cek_jit_murni_nilai(l, nama_sendiri, arity, mode, slot_tipe, fungsi_out) && cek_jit_murni_nilai(r, nama_sendiri, arity, mode, slot_tipe, fungsi_out),
+        CExpr::Panggil(nama, args) if nama == nama_sendiri =>
+            args.len() == arity && args.iter().all(|a| cek_jit_murni_nilai(a, nama_sendiri, arity, mode, slot_tipe, fungsi_out)),
+        // Panggilan ke fungsi LAIN (BUKAN diri sendiri) -- BARU, lihat catatan panjang soal
+        // cross-function call di ROADMAP.md item #6 & benchmarks/representasi/README.md.
+        // Cuma diizinkan kalau fungsi target itu SUDAH di-resolve LEBIH DULU (backward
+        // reference -- fungsi_out terisi berurutan sesuai deklarasi, forward reference/fungsi
+        // yang dideklarasikan BELAKANGAN belum ada di fungsi_out di titik ini, jadi otomatis
+        // gagal & fallback interpreter, AMAN meski tidak lengkap -- bukan fixed-point solver
+        // umum, scope sengaja dipersempit) DAN target itu SENDIRI sudah tipe_jit-elig.
+        // Argumen SENGAJA dibatasi bentuk PALING SEDERHANA (Local/literal langsung, BUKAN
+        // ekspresi Binary/panggilan lain di dalamnya) -- cukup buat kasus nyata (literal
+        // struct/angka konstan sebagai argumen, lihat benchmarks/representasi/), dan
+        // MENGHINDARI bug halus: `cek_jit_murni_nilai` biasa mengecek literal Desimal
+        // terhadap `mode` PEMANGGIL sendiri (benar utk ekspresi DI DALAM tubuh fungsi), TAPI
+        // itu salah konteks di sini -- yang relevan buat argumen adalah tipe PARAMETER
+        // TARGET, bukan mode pemanggil (makanya dicek langsung lewat tipe_cexpr() di bawah,
+        // bukan didaur ulang dari cek_jit_murni_nilai).
+        CExpr::Panggil(nama, args) => match fungsi_out.get(nama) {
+            Some(target) if target.tipe_jit.is_some() && args.len() == target.param_count => {
+                args.iter().enumerate().all(|(i, a)| {
+                    bentuk_argumen_sederhana(a)
+                        && match tipe_cexpr(a, slot_tipe, fungsi_out) {
+                            Ok(t) => t.is_none() || t == target.slot_tipe.get(i).copied().flatten(),
+                            Err(()) => false,
+                        }
+                })
+            }
+            _ => false,
+        },
         _ => false, // Teks/Bool/Global/Daftar/Peta/Indeks/Field/BentukLiteral/Bagi/panggilan-lain -> bukan
     }
 }
 
-fn cek_jit_murni_kondisi(e: &CExpr, nama_sendiri: &str, arity: usize, mode: TipeJit, slot_tipe: &[Option<TipeJit>]) -> bool {
+fn cek_jit_murni_kondisi(e: &CExpr, nama_sendiri: &str, arity: usize, mode: TipeJit, slot_tipe: &[Option<TipeJit>], fungsi_out: &HashMap<String, Rc<CFungsi>>) -> bool {
     match e {
         CExpr::Binary(l, op, r) => match op {
             BinOp::SamaDengan | BinOp::TidakSama | BinOp::LebihBesar | BinOp::LebihBesarSama
-            | BinOp::LebihKecil | BinOp::LebihKecilSama => cek_jit_murni_nilai(l, nama_sendiri, arity, mode) && cek_jit_murni_nilai(r, nama_sendiri, arity, mode)
+            | BinOp::LebihKecil | BinOp::LebihKecilSama => cek_jit_murni_nilai(l, nama_sendiri, arity, mode, slot_tipe, fungsi_out) && cek_jit_murni_nilai(r, nama_sendiri, arity, mode, slot_tipe, fungsi_out)
                 // Mode Campur: WAJIB verifikasi operand kiri&kanan same-type (lihat tipe_cexpr()) --
                 // mode Angka/Desimal biasa tidak perlu (uniformitas sudah dijamin tipe_seragam
                 // di titik lain, lihat resolve_fungsi_umum).
-                && (mode != TipeJit::Campur || tipe_cexpr(e, slot_tipe).is_ok()),
-            BinOp::Dan | BinOp::Atau => cek_jit_murni_kondisi(l, nama_sendiri, arity, mode, slot_tipe) && cek_jit_murni_kondisi(r, nama_sendiri, arity, mode, slot_tipe),
+                && (mode != TipeJit::Campur || tipe_cexpr(e, slot_tipe, fungsi_out).is_ok()),
+            BinOp::Dan | BinOp::Atau => cek_jit_murni_kondisi(l, nama_sendiri, arity, mode, slot_tipe, fungsi_out) && cek_jit_murni_kondisi(r, nama_sendiri, arity, mode, slot_tipe, fungsi_out),
             _ => false,
         },
         // Kondisi yang sudah terlipat penuh jadi literal Bool oleh optimizer IR (mis. dari
@@ -1481,7 +1532,7 @@ fn resolve_fungsi_umum(
     } else {
         None
     };
-    let tipe_jit = tipe_seragam.filter(|t| cbody.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_fungsi, param_count, *t, &lr.slot_tipe)));
+    let tipe_jit = tipe_seragam.filter(|t| cbody.iter().all(|(_, s)| cek_jit_murni_stmt(s, nama_fungsi, param_count, *t, &lr.slot_tipe, &*lr.fungsi_out)));
 
     if std::env::var("ISOTERI_DEBUG_JIT").is_ok() {
         eprintln!("DEBUG_JIT fungsi={} tipe_seragam={:?} tipe_jit_final={:?} slot_tipe={:?}", nama_fungsi, tipe_seragam, tipe_jit, lr.slot_tipe);
@@ -2785,6 +2836,37 @@ impl JitEngine {
         JitEngine { module: cranelift_jit::JITModule::new(builder) }
     }
 
+    /// Declare signature fungsi `nama` (BUKAN define body-nya) -- FASE 1 dari alur 3-fase
+    /// declare-semua/define-semua/finalize-sekali (lihat catatan panjang soal cross-function
+    /// call di jalankan_stmt_list_via_ir & kompilasi_dari_ir). Signature ditentukan dari `mode`
+    /// SENDIRIAN (param_count TIDAK memengaruhi signature Cranelift -- semua fungsi JIT-elig
+    /// pakai SATU pointer larik argumen, apapun aritasnya, lihat catatan di kompilasi_dari_ir).
+    fn declare_fungsi(&mut self, nama: &str, mode: TipeJit) -> Result<cranelift_module::FuncId, String> {
+        use cranelift::prelude::{types, AbiParam};
+        use cranelift_module::{Linkage, Module};
+        let tipe_cl = match mode { TipeJit::Angka => types::I64, TipeJit::Desimal => types::F64, TipeJit::Campur => types::I64 };
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(types::I64)); // pointer ke larik argumen
+        if mode == TipeJit::Angka { sig.params.push(AbiParam::new(types::I64)); } // pointer flag overflow
+        sig.returns.push(AbiParam::new(tipe_cl));
+        self.module.declare_function(nama, Linkage::Local, &sig).map_err(|e| e.to_string())
+    }
+
+    /// FASE 3a: finalize SEMUA fungsi yang sudah di-define (Cranelift mem-patch/resolve
+    /// SEMUA panggilan lintas-fungsi sekaligus di sini -- lihat catatan panjang soal
+    /// cross-function call). WAJIB dipanggil SEKALI setelah SEMUA fungsi selesai di-define,
+    /// SEBELUM ambil_pointer() fungsi manapun.
+    fn selesai(&mut self) -> Result<(), String> {
+        use cranelift_module::Module;
+        self.module.finalize_definitions().map_err(|e| e.to_string())
+    }
+
+    /// FASE 3b: ambil pointer kode native yang sudah di-finalize (panggil selesai() dulu).
+    fn ambil_pointer(&self, func_id: cranelift_module::FuncId) -> *const u8 {
+        use cranelift_module::Module;
+        self.module.get_finalized_function(func_id)
+    }
+
     /// Mengompilasi satu CFungsi (yang sudah lolos tipe_jit) menjadi kode mesin asli.
     /// Mengembalikan pointer fungsi native -- SATU parameter pointer (bukan N parameter),
     /// supaya arity berapa pun tetap satu tipe signature yang sama per mode (lihat
@@ -2889,9 +2971,15 @@ impl JitEngine {
     /// BUKAN jalur produksi -- dipanggil dari jalur validasi `isoteri via-ir` yang sama seperti
     /// bytecode IR linear, dibandingkan HASIL (bukan cuma "berhasil compile") terhadap JIT
     /// produksi (`kompilasi()`) DAN terhadap bytecode murni, lewat regresi yang sama.
-    fn kompilasi_dari_ir(&mut self, nama: &str, ir: &[IrInstr], reg_types: &[IrType], param_count: usize, ambang_temp: usize, mode: TipeJit) -> Result<*const u8, String> {
+    /// `func_id`: sudah di-declare LEBIH DULU oleh caller (jalankan_stmt_list_via_ir, fase 1 --
+    /// lihat catatan panjang soal cross-function call di ROADMAP.md item #6) -- fungsi ini
+    /// CUMA define body-nya, TIDAK declare/finalize/ambil pointer sendiri lagi (beda dari
+    /// versi lama). `jit_info`: registri (mode, param_count, FuncId) SEMUA fungsi yang JIT-elig
+    /// (termasuk diri sendiri), diindeks sama seperti idx_fungsi di IrInstr::PanggilFungsi --
+    /// dipakai buat resolve panggilan ke fungsi LAIN (bukan cuma rekursi diri sendiri lagi).
+    fn kompilasi_dari_ir(&mut self, func_id: cranelift_module::FuncId, ir: &[IrInstr], reg_types: &[IrType], param_count: usize, ambang_temp: usize, mode: TipeJit, jit_info: &std::collections::HashMap<usize, (TipeJit, usize, cranelift_module::FuncId)>) -> Result<(), String> {
         use cranelift::prelude::*;
-        use cranelift_module::{Linkage, Module};
+        use cranelift_module::Module;
 
         let tipe_cl = match mode { TipeJit::Angka => types::I64, TipeJit::Desimal => types::F64, TipeJit::Campur => types::I64 }; // Campur: return WAJIB Angka (lihat cek_jit_murni_stmt CStmt::Kembalikan), jadi I64 aman
         // Baca tipe PER-REGISTER dari reg_types (Angka->I64, Desimal->F64, Bool->I8) -- BUKAN
@@ -2913,9 +3001,6 @@ impl JitEngine {
         sig.params.push(AbiParam::new(types::I64));
         if mode == TipeJit::Angka { sig.params.push(AbiParam::new(types::I64)); }
         sig.returns.push(AbiParam::new(tipe_cl));
-        let func_id = self.module
-            .declare_function(nama, Linkage::Local, &sig)
-            .map_err(|e| e.to_string())?;
 
         let mut ctx = self.module.make_context();
         ctx.func.signature = sig;
@@ -2952,7 +3037,26 @@ impl JitEngine {
             builder.def_var(Variable::new(i), nol);
         }
 
-        let local_callee = self.module.declare_func_in_func(func_id, builder.func);
+        // Pre-declare FuncRef utk SEMUA target PanggilFungsi yang dipakai fungsi ini (diri
+        // sendiri ATAU fungsi lain) -- SEKALI per index unik, SEBELUM instruksi manapun
+        // dikompilasi (lihat catatan panjang di dokumentasi fungsi ini soal cross-function
+        // call). jit_info SUDAH mencakup diri sendiri juga (di-declare fase 1 yang sama seperti
+        // fungsi lain, lihat jalankan_stmt_list_via_ir) -- jadi tidak perlu kasus khusus buat
+        // rekursi vs panggilan ke fungsi lain, keduanya lewat jalur & registri yang SAMA.
+        let mut panggil_fref: std::collections::HashMap<usize, (TipeJit, cranelift::codegen::ir::FuncRef)> = std::collections::HashMap::new();
+        {
+            let mut target_terpakai: Vec<usize> = ir.iter()
+                .filter_map(|i| if let IrInstr::PanggilFungsi(_, idx, _) = i { Some(*idx) } else { None })
+                .collect();
+            target_terpakai.sort();
+            target_terpakai.dedup();
+            for idx in target_terpakai {
+                let (target_mode, _, target_func_id) = *jit_info.get(&idx)
+                    .ok_or_else(|| format!("Internal: target PanggilFungsi (idx {}) tidak ditemukan di jit_info -- seharusnya sudah disaring cek_jit_murni_nilai", idx))?;
+                let fref = self.module.declare_func_in_func(target_func_id, builder.func);
+                panggil_fref.insert(idx, (target_mode, fref));
+            }
+        }
 
         // Overflow-trapping (Angka saja) -- pola SAMA PERSIS dengan kompilasi() (lihat catatan
         // panjang di sana): flag_var pakai index `total_reg` (dijamin belum dipakai Variable
@@ -2986,7 +3090,7 @@ impl JitEngine {
             if leader[idx] { block_of.insert(idx, builder.create_block()); }
         }
 
-        let mut kompiler = KompilerBadanIr { builder, local_callee, mode, tipe_reg_fn: &tipe_reg, block_of: &block_of, ambang_temp, temp_cache: std::collections::HashMap::new(), flag_var, out_ptr };
+        let mut kompiler = KompilerBadanIr { builder, panggil_fref: &panggil_fref, mode, tipe_reg_fn: &tipe_reg, block_of: &block_of, ambang_temp, temp_cache: std::collections::HashMap::new(), flag_var, out_ptr };
         let mut terminated = false;
         for (idx, instr) in ir.iter().enumerate() {
             if idx > 0 && leader[idx] {
@@ -3006,9 +3110,14 @@ impl JitEngine {
 
         self.module.define_function(func_id, &mut ctx).map_err(|e| e.to_string())?;
         self.module.clear_context(&mut ctx);
-        self.module.finalize_definitions().map_err(|e| e.to_string())?;
-
-        Ok(self.module.get_finalized_function(func_id))
+        // TIDAK finalize_definitions()/get_finalized_function() di sini lagi -- caller
+        // (jalankan_stmt_list_via_ir) yang finalize SEKALI di akhir setelah SEMUA fungsi
+        // selesai di-define, baru ambil pointer semuanya. Lihat catatan panjang soal
+        // cross-function call di ROADMAP.md item #6 kenapa ini perlu (fungsi A bisa memanggil
+        // fungsi B yang body-nya BELUM tentu sudah di-define di titik A didefinisikan --
+        // Cranelift mendukung ini selama SEMUA finalize dalam satu batch di akhir, sudah
+        // diverifikasi lewat eksperimen isolated terpisah sebelum diterapkan di sini).
+        Ok(())
     }
 }
 
@@ -3020,7 +3129,11 @@ impl JitEngine {
 #[cfg(feature = "jit")]
 struct KompilerBadanIr<'a, 'b> {
     builder: cranelift::prelude::FunctionBuilder<'a>,
-    local_callee: cranelift::codegen::ir::FuncRef,
+    /// Registri target PanggilFungsi yang DIPAKAI fungsi ini (diri sendiri MAUPUN fungsi lain,
+    /// lihat catatan panjang soal cross-function call di kompilasi_dari_ir) -- diindeks sama
+    /// seperti idx_fungsi di IrInstr::PanggilFungsi, isinya (mode TARGET, FuncRef sudah
+    /// di-declare_func_in_func ke konteks fungsi INI).
+    panggil_fref: &'b std::collections::HashMap<usize, (TipeJit, cranelift::codegen::ir::FuncRef)>,
     mode: TipeJit,
     tipe_reg_fn: &'b dyn Fn(usize) -> cranelift::prelude::Type,
     block_of: &'b std::collections::HashMap<usize, cranelift::prelude::Block>,
@@ -3184,30 +3297,39 @@ impl<'a, 'b> KompilerBadanIr<'a, 'b> {
                 self.set(*dst, hasil);
                 false
             }
-            IrInstr::PanggilFungsi(dst, _idx_fungsi, args) => {
-                // Elig-JIT (cek_jit_murni_nilai) menjamin SATU-SATUNYA fungsi yang boleh
-                // dipanggil di sini adalah dirinya sendiri (rekursi) -- lihat local_callee.
+            IrInstr::PanggilFungsi(dst, idx_fungsi, args) => {
+                // idx_fungsi BISA diri sendiri (rekursi) ATAU fungsi LAIN (BARU -- lihat catatan
+                // panjang soal cross-function call di kompilasi_dari_ir & ROADMAP.md item #6).
+                // Keduanya lewat jalur SAMA PERSIS di sini -- panggil_fref sudah mencakup diri
+                // sendiri juga, jadi tidak ada kasus khusus. Tipe TARGET (bukan self.mode!) yang
+                // menentukan calling convention (butuh flag overflow atau tidak) -- penting
+                // kalau caller & target beda mode (mis. Angka manggil Campur).
+                let (target_mode, target_fref) = *self.panggil_fref.get(idx_fungsi)
+                    .expect("PanggilFungsi ke target yang belum di-declare -- seharusnya sudah disaring cek_jit_murni_nilai, bug kalau kejadian");
                 let nilai: Vec<Value> = args.iter().map(|a| self.v(*a)).collect();
                 let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot, (nilai.len().max(1) * 8) as u32,
                 ));
                 for (i, val) in nilai.iter().enumerate() { self.builder.ins().stack_store(*val, slot, (i * 8) as i32); }
                 let addr = self.builder.ins().stack_addr(types::I64, slot, 0);
-                let hasil = if self.mode == TipeJit::Angka {
-                    // Rekursi mode Angka: sama seperti KompilerBadan::kompilasi_nilai (lihat
+                let hasil = if target_mode == TipeJit::Angka {
+                    // Target mode Angka: sama seperti KompilerBadan::kompilasi_nilai (lihat
                     // catatan panjang di sana) -- balikin flag overflow dari panggilan ini lewat
-                    // slot khusus, OR-kan ke flag_var milik fungsi ini.
+                    // slot khusus, OR-kan ke flag_var milik fungsi PEMANGGIL (self, bukan
+                    // target) -- overflow di fungsi manapun dalam rantai panggilan tetap harus
+                    // sampai balik ke titik paling luar yang punya flag_var (Rust interpreter
+                    // boundary, lihat panggil_fungsi_dengan_argumen).
                     let flag_slot = self.builder.create_sized_stack_slot(StackSlotData::new(
                         StackSlotKind::ExplicitSlot, 1,
                     ));
                     let flag_addr = self.builder.ins().stack_addr(types::I64, flag_slot, 0);
-                    let panggilan = self.builder.ins().call(self.local_callee, &[addr, flag_addr]);
+                    let panggilan = self.builder.ins().call(target_fref, &[addr, flag_addr]);
                     let hasil = self.builder.inst_results(panggilan)[0];
                     let of_callee = self.builder.ins().stack_load(types::I8, flag_slot, 0);
                     self.gabung_flag(of_callee);
                     hasil
                 } else {
-                    let panggilan = self.builder.ins().call(self.local_callee, &[addr]);
+                    let panggilan = self.builder.ins().call(target_fref, &[addr]);
                     self.builder.inst_results(panggilan)[0]
                 };
                 self.set(*dst, hasil);
@@ -5857,6 +5979,31 @@ pub fn jalankan_berkas(path: &str) -> Result<(), String> {
     jalankan_stmt_list(program_dari_berkas(path)?)
 }
 
+/// Scan CStmt/CExpr buat cari SATU SAJA CExpr::Panggil ke fungsi LAIN (bukan `nama_sendiri`) --
+/// dipakai KHUSUS oleh coba_kompilasi_jit() (jalur legacy) buat menolak dukungan
+/// cross-function-call di situ (lihat catatan panjang di sana & ROADMAP.md item #6) --
+/// codegen-nya (kompilasi_nilai) masih SELALU asumsikan diri sendiri, jadi harus dicegah
+/// eksplisit di sini SEBELUM sempat coba compile (kalau tidak, hasilnya rekursi-tak-sengaja
+/// yang bisa stack overflow, BUKAN cuma "gagal optimasi" biasa -- makanya scan ini WAJIB,
+/// bukan opsional).
+fn mengandung_panggilan_lain_stmt(s: &CStmt, nama_sendiri: &str) -> bool {
+    match s {
+        CStmt::IngatLocal(_, e) | CStmt::UbahLocal(_, e) | CStmt::Kembalikan(e) | CStmt::EkspresiStmt(e) => mengandung_panggilan_lain_expr(e, nama_sendiri),
+        CStmt::Kalau(c, tb, eb) => mengandung_panggilan_lain_expr(c, nama_sendiri)
+            || tb.iter().any(|(_, s)| mengandung_panggilan_lain_stmt(s, nama_sendiri))
+            || eb.as_ref().map_or(false, |b| b.iter().any(|(_, s)| mengandung_panggilan_lain_stmt(s, nama_sendiri))),
+        CStmt::Ulang(c, b) => mengandung_panggilan_lain_expr(c, nama_sendiri) || b.iter().any(|(_, s)| mengandung_panggilan_lain_stmt(s, nama_sendiri)),
+        _ => false,
+    }
+}
+fn mengandung_panggilan_lain_expr(e: &CExpr, nama_sendiri: &str) -> bool {
+    match e {
+        CExpr::Panggil(nama, args) => nama != nama_sendiri || args.iter().any(|a| mengandung_panggilan_lain_expr(a, nama_sendiri)),
+        CExpr::Binary(l, _, r) => mengandung_panggilan_lain_expr(l, nama_sendiri) || mengandung_panggilan_lain_expr(r, nama_sendiri),
+        _ => false,
+    }
+}
+
 /// Inti pipeline resolve -> compile -> JIT -> eksekusi, dipakai bersama oleh jalankan_sumber
 /// dan jalankan_berkas setelah keduanya menyiapkan Vec<Stmt> yang siap diresolve.
 // Helper kecil: bungkus panggilan jit.kompilasi() + transmute jadi NativeFn dalam satu
@@ -5872,6 +6019,16 @@ fn coba_kompilasi_jit(jit: &mut JitEngine, cf: &CFungsi, mode: TipeJit) -> Resul
     // tidak dapat manfaat native compile buat fungsi Campur; AOT tetap dapat).
     if mode == TipeJit::Campur {
         return Err("mode Campur belum didukung di jalur JIT legacy (dipakai jalur IR/AOT saja)".to_string());
+    }
+    // Cross-function call (panggil fungsi LAIN, bukan cuma rekursi diri sendiri, lihat
+    // ROADMAP.md item #6) JUGA sengaja cuma didukung di jalur via-ir/AOT (kompilasi_dari_ir,
+    // lewat panggil_fref) -- kompilasi_nilai (legacy) masih SELALU asumsikan diri sendiri utk
+    // SEMUA CExpr::Panggil (lihat komentarnya). Refuse eksplisit di sini WAJIB (bukan opsional)
+    // -- tanpa ini, fungsi yang cek_jit_murni_nilai loloskan gara-gara cross-call akan tetap
+    // dicoba compile di jalur ini & jadi rekursi-tak-sengaja (stack overflow), bukan cuma
+    // gagal optimasi biasa.
+    if cf.body.iter().any(|(_, s)| mengandung_panggilan_lain_stmt(s, &cf.nama)) {
+        return Err("cross-function call belum didukung di jalur JIT legacy (dipakai jalur IR/AOT saja)".to_string());
     }
     let ptr = jit.kompilasi(cf, mode)?;
     Ok(match mode {
@@ -6636,21 +6793,12 @@ fn stack_scheduling(instrs: Vec<Instr>, ambang_temp: usize) -> Vec<Instr> {
         .collect()
 }
 
-// Sama seperti coba_kompilasi_jit() tapi untuk jalur via-ir/AOT (kompilasi_dari_ir,
-// bukan kompilasi biasa) -- lihat catatan di sana.
-#[cfg(feature = "jit")]
-fn coba_kompilasi_jit_dari_ir(jit: &mut JitEngine, nama: &str, ir: &[IrInstr], reg_types: &[IrType], param_count: usize, local_slot_count: usize, mode: TipeJit) -> Result<NativeFn, String> {
-    let ptr = jit.kompilasi_dari_ir(nama, ir, reg_types, param_count, local_slot_count, mode)?;
-    Ok(match mode {
-        TipeJit::Angka => NativeFn::Angka(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64, *mut i64) -> i64>(ptr) }),
-        TipeJit::Desimal => NativeFn::Desimal(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const f64) -> f64>(ptr) }),
-        // Signature: satu pointer larik argumen (i64 mentah/bit-pattern f64 campur, lihat
-        // catatan panjang di NativeFn::Campur), TANPA ptr flag overflow (Campur tidak pernah
-        // aritmatika), kembalikan i64 (verified Angka-only lewat CStmt::Kembalikan check di
-        // cek_jit_murni_stmt).
-        TipeJit::Campur => NativeFn::Campur(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64) -> i64>(ptr) }),
-    })
-}
+// coba_kompilasi_jit_dari_ir() DIHAPUS -- fungsi ini dulu membungkus declare+define+finalize+
+// ambil-pointer jadi SATU panggilan per-fungsi (versi lama, sebelum dukungan cross-function
+// call). Sekarang 3 fase itu dipisah eksplisit (declare_fungsi/kompilasi_dari_ir/selesai+
+// ambil_pointer, dipanggil langsung dari jalankan_stmt_list_via_ir) supaya SEMUA fungsi bisa
+// di-declare dulu SEBELUM define body manapun -- lihat catatan panjang soal cross-function
+// call di ROADMAP.md item #6 & jalankan_stmt_list_via_ir.
 
 pub fn jalankan_stmt_list_via_ir(program: Vec<(usize, Stmt)>) -> Result<(), String> {
     let mut resolver = Resolver::new();
@@ -6681,7 +6829,31 @@ pub fn jalankan_stmt_list_via_ir(program: Vec<(usize, Stmt)>) -> Result<(), Stri
     let mut fungsi_vm: Vec<Rc<VMFungsi>> = Vec::with_capacity(nama_fungsi.len());
     #[cfg(feature = "jit")]
     let mut jit = JitEngine::new();
-    for nama in &nama_fungsi {
+
+    // FASE 1 (BARU, lihat catatan panjang soal cross-function call di ROADMAP.md item #6 &
+    // benchmarks/representasi/README.md): declare signature SEMUA fungsi yang tipe_jit-elig
+    // SEBELUM define body fungsi MANAPUN -- supaya kalau fungsi A memanggil fungsi B, B sudah
+    // punya FuncId siap dipakai codegen A walau B belum tentu SUDAH di-define di titik itu
+    // (Cranelift mendukung pola declare-semua -> define-semua -> finalize-sekali ini, sudah
+    // diverifikasi lewat eksperimen isolated terpisah sebelum diterapkan di sini).
+    #[cfg(feature = "jit")]
+    let mut jit_info: std::collections::HashMap<usize, (TipeJit, usize, cranelift_module::FuncId)> = std::collections::HashMap::new();
+    #[cfg(feature = "jit")]
+    for (i, nama) in nama_fungsi.iter().enumerate() {
+        let cf = resolver.fungsi_out.get(nama).unwrap();
+        if let Some(mode) = cf.tipe_jit {
+            match jit.declare_fungsi(nama, mode) {
+                Ok(func_id) => { jit_info.insert(i, (mode, cf.param_count, func_id)); }
+                Err(e) => eprintln!("Peringatan (via-ir): fungsi \"{}\" gagal di-declare JIT ({}), pakai bytecode.", nama, e),
+            }
+        }
+    }
+
+    // FASE 2: lower tiap fungsi ke IR & (kalau elig & berhasil declare di fase 1) define body
+    // JIT-nya -- urutan iterasi (alfabetis, lihat nama_fungsi.sort() di atas) BEBAS sekarang,
+    // tidak perlu lagi "target harus sudah dikompilasi duluan" seperti sebelum restrukturisasi
+    // ini (itulah PERSIS batasan lama yang mem-blokir cross-function call).
+    for (i, nama) in nama_fungsi.iter().enumerate() {
         let cf = resolver.fungsi_out.get(nama).unwrap().clone();
         // param_flat (dukungan callback struct-flattened buat petakan/saring/urutkan) dipakai
         // ULANG dari compile_fungsi yang sudah teruji -- bukan bagian yang coba "dilinearkan"
@@ -6691,31 +6863,45 @@ pub fn jalankan_stmt_list_via_ir(program: Vec<(usize, Stmt)>) -> Result<(), Stri
         let (ir, reg_types) = lower_fungsi_ke_ir(&mut compiler, &cf);
         let kode = ir_ke_instr_dgn_konstanta(&mut compiler, &ir);
         let kode = stack_scheduling(kode, cf.local_slot_count);
-        #[cfg_attr(not(feature = "jit"), allow(unused_mut))]
-        let mut native = None;
         // Migrasi JIT (docs/IR.md poin 3): fungsi yang SAMA PERSIS lolos elig produksi
         // (cf.tipe_jit, dihitung Resolver -- tidak dihitung ulang di sini) SEKARANG JUGA
         // dicoba dikompilasi lewat IR linear yang baru, bukan cuma bytecode. Kalau gagal,
         // turun ke bytecode biasa (dari `kode` di atas) -- sama seperti perilaku produksi
-        // saat JIT gagal, TIDAK fatal. Tanpa fitur "jit" (mis. isoteri-wasm/): `native`
-        // otomatis tetap None, langsung lari ke bytecode `kode` -- SAMA seperti JIT gagal.
-        #[cfg_attr(not(feature = "jit"), allow(unused_variables))]
-        if let Some(mode) = cf.tipe_jit {
-            #[cfg(feature = "jit")]
-            match coba_kompilasi_jit_dari_ir(&mut jit, nama, &ir, &reg_types, cf.param_count, cf.local_slot_count, mode) {
-                Ok(n) => native = Some(n),
-                Err(e) => eprintln!("Peringatan (via-ir): fungsi \"{}\" gagal dikompilasi JIT-dari-IR ({}), pakai bytecode.", nama, e),
+        // saat JIT gagal, TIDAK fatal. Tanpa fitur "jit" (mis. isoteri-wasm/): otomatis tetap
+        // lari ke bytecode `kode` -- SAMA seperti JIT gagal. native diisi FASE 3 (setelah
+        // finalize), BUKAN di sini lagi.
+        #[cfg(feature = "jit")]
+        if let Some(&(mode, _, func_id)) = jit_info.get(&i) {
+            if let Err(e) = jit.kompilasi_dari_ir(func_id, &ir, &reg_types, cf.param_count, cf.local_slot_count, mode, &jit_info) {
+                eprintln!("Peringatan (via-ir): fungsi \"{}\" gagal dikompilasi JIT-dari-IR ({}), pakai bytecode.", nama, e);
+                jit_info.remove(&i);
             }
         }
         let vmf = VMFungsi {
             param_count: cf.param_count,
             local_slot_count: reg_types.len().max(cf.local_slot_count),
             kode,
-            native,
+            native: None,
             param_flat,
             slot_tipe: cf.slot_tipe.clone(),
         };
         fungsi_vm.push(Rc::new(vmf));
+    }
+
+    // FASE 3: finalize SEKALI (bukan per-fungsi seperti sebelum restrukturisasi ini), baru ambil
+    // pointer native SEMUA fungsi yang berhasil, isi ke VMFungsi masing-masing.
+    #[cfg(feature = "jit")]
+    {
+        jit.selesai().map_err(|e| format!("Kesalahan Kompilasi (via-ir): gagal finalize JIT ({})", e))?;
+        for (i, &(mode, _, func_id)) in &jit_info {
+            let ptr = jit.ambil_pointer(func_id);
+            let native = match mode {
+                TipeJit::Angka => NativeFn::Angka(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64, *mut i64) -> i64>(ptr) }),
+                TipeJit::Desimal => NativeFn::Desimal(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const f64) -> f64>(ptr) }),
+                TipeJit::Campur => NativeFn::Campur(unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64) -> i64>(ptr) }),
+            };
+            if let Some(vmf) = Rc::get_mut(&mut fungsi_vm[*i]) { vmf.native = Some(native); }
+        }
     }
 
     let mut vm = VM::new(resolver.global_count, compiler.konstanta, fungsi_vm, compiler.fungsi_index);

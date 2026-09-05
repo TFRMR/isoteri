@@ -1,0 +1,53 @@
+catatan: Kunci perilaku dukungan cross-function call di JIT (lihat catatan panjang
+catatan: soal ini di ROADMAP.md item #6, kompilasi_dari_ir, & cek_jit_murni_nilai di
+catatan: src/lib.rs) -- item terakhir dari rencana besar type-info->representation,
+catatan: dipicu temuan validasi_satu (benchmarks/representasi/) tidak bisa ter-JIT
+catatan: gara-gara memanggil fungsi LAIN, bukan cuma rekursi diri sendiri.
+
+catatan: Kasus 1: rantai 3 fungsi Angka murni (satu -> dua -> tiga).
+fungsi tiga(x: Angka) {
+    kembalikan x + 3
+}
+fungsi dua(x: Angka) {
+    kembalikan tiga(x) + 2
+}
+fungsi satu(x: Angka) {
+    kembalikan dua(x) + 1
+}
+tampilkan satu(10)
+
+catatan: Kasus 2: fungsi Angka memanggil fungsi bertipe Campur (struct field campuran)
+catatan: dengan literal struct sebagai argumen, TERMASUK literal negatif (-1.0, yang di
+catatan: parser jadi Binary(0, Kurang, 1.0) SEBELUM sempat dilipat jadi literal tunggal --
+catatan: ini penyebab bug yang sempat ditemukan & diperbaiki di sesi ini, dikunci di sini).
+bentuk DataCek { a: Angka, b: Desimal }
+fungsi cek_data(d: DataCek) {
+    kalau (d.a == 1) { kembalikan 100 }
+    kalau (d.b <= 0.0) { kembalikan 200 }
+    kembalikan 0
+}
+fungsi pembungkus(i: Angka) {
+    ingat sisa: Angka = i % 3
+    kalau (sisa == 0) {
+        kembalikan cek_data(DataCek { a: 1, b: 5.0 })
+    }
+    kalau (sisa == 1) {
+        kembalikan cek_data(DataCek { a: 0, b: -1.0 })
+    }
+    kembalikan cek_data(DataCek { a: 0, b: 5.0 })
+}
+tampilkan pembungkus(0)
+tampilkan pembungkus(1)
+tampilkan pembungkus(2)
+
+catatan: Kasus 3 -- PENTING: forward reference (panggil fungsi yang dideklarasikan
+catatan: BELAKANGAN) HARUS tetap dapat hasil BENAR lewat fallback interpreter (scope
+catatan: cross-function call SENGAJA dipersempit ke backward-reference saja, lihat
+catatan: catatan panjang di cek_jit_murni_nilai) -- bukan promosi paksa yang riskan.
+fungsi pemanggil_maju(x) {
+    kembalikan dipanggil_belakangan(x)
+}
+fungsi dipanggil_belakangan(y) {
+    kembalikan y + 1
+}
+tampilkan pemanggil_maju(5)

@@ -1,0 +1,10 @@
+Peringatan: fungsi "cek_data" gagal dikompilasi JIT (mode Campur belum didukung di jalur JIT legacy (dipakai jalur IR/AOT saja)), pakai bytecode biasa.
+Peringatan: fungsi "dua" gagal dikompilasi JIT (cross-function call belum didukung di jalur JIT legacy (dipakai jalur IR/AOT saja)), pakai bytecode biasa.
+Peringatan: fungsi "pembungkus" gagal dikompilasi JIT (cross-function call belum didukung di jalur JIT legacy (dipakai jalur IR/AOT saja)), pakai bytecode biasa.
+Peringatan: fungsi "satu" gagal dikompilasi JIT (cross-function call belum didukung di jalur JIT legacy (dipakai jalur IR/AOT saja)), pakai bytecode biasa.
+16
+100
+200
+0
+6
+EXIT:0
